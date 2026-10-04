@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { submitIntent } from "../api/client";
 import type { IntentResponse } from "../api/types";
 
@@ -60,11 +60,15 @@ const STATUS_STYLES: Record<string, string> = {
   verification_failed: "bg-red-500/15 text-red-400 border-red-500/30",
 };
 
-export default function IntentCommandBar() {
+export default function IntentCommandBar({ prefillText }: { prefillText?: string }) {
   const [text, setText] = useState("");
   const [loading, setLoading] = useState(false);
   const [response, setResponse] = useState<IntentResponse | null>(null);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (prefillText) setText(prefillText);
+  }, [prefillText]);
 
   async function handleSubmit() {
     if (!text.trim()) return;

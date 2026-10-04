@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
-from app.experience import routes_catalog, routes_intent
+from app.experience import routes_catalog, routes_crm, routes_intent
 
 # Schema is Alembic-driven (migrations/) - run `alembic upgrade head` before
 # starting the app, in both dev and production. Nothing here creates tables.
@@ -19,6 +19,7 @@ app.add_middleware(
 
 app.include_router(routes_intent.router)
 app.include_router(routes_catalog.router)
+app.include_router(routes_crm.router)
 
 
 @app.get("/api/health")
