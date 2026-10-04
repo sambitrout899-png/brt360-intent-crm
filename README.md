@@ -13,6 +13,7 @@ python -m venv .venv
 .venv\Scripts\activate          # Windows; use `source .venv/bin/activate` on Linux/Mac
 pip install -r requirements.txt
 copy .env.example .env          # optionally set OPENAI_API_KEY - omitted, uses the rule-based fallback classifier
+alembic upgrade head             # creates the schema (SQLite file by default; point DATABASE_URL at Postgres for prod)
 python -m app.seed              # seeds atomic products + bundle compatibility rules
 python -m uvicorn app.main:app --reload --port 8000
 ```

@@ -7,7 +7,7 @@ reference data." Run with: python -m app.seed
 
 from __future__ import annotations
 
-from app.db import Base, SessionLocal, engine
+from app.db import SessionLocal
 from app.models.catalog import BundleCompatibilityRule, ProductSpecification
 
 ATOMIC_PRODUCTS = [
@@ -30,7 +30,6 @@ COMPATIBILITY_RULES = [
 
 
 def seed() -> None:
-    Base.metadata.create_all(bind=engine)
     db = SessionLocal()
     try:
         existing = {p.name for p in db.query(ProductSpecification).all()}
