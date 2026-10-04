@@ -6,8 +6,10 @@ from sqlalchemy.pool import StaticPool
 
 from app.db import Base, get_db
 from app.main import app
+from app.models.assurance import Technician
 from app.models.catalog import BundleCompatibilityRule, ProductSpecification
-from app.seed import ATOMIC_PRODUCTS, COMPATIBILITY_RULES
+from app.models.crm import TerritoryRule
+from app.seed import ATOMIC_PRODUCTS, COMPATIBILITY_RULES, TECHNICIANS, TERRITORY_RULES
 
 
 @pytest.fixture()
@@ -29,6 +31,10 @@ def client():
         db.add(ProductSpecification(name=name, product_line=line, is_atomic=True))
     for primary, addon, max_addons in COMPATIBILITY_RULES:
         db.add(BundleCompatibilityRule(primary_product_line=primary, addon_product_line=addon, max_addons=max_addons))
+    for region, owner_name in TERRITORY_RULES:
+        db.add(TerritoryRule(region=region, owner_name=owner_name))
+    for name, skills, region in TECHNICIANS:
+        db.add(Technician(name=name, skills=skills, region=region, status="available"))
     db.commit()
     db.close()
 

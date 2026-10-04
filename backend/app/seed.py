@@ -1,4 +1,5 @@
-"""Seed reference data: atomic products + bundle compatibility rules.
+"""Seed reference data: atomic products, bundle compatibility rules,
+territory ownership, and field technician skill matrix.
 
 HLD INT-01 precondition: "Underlying atomic products already exist in the
 catalog; pricing guardrails and segment eligibility rules are defined as
@@ -8,7 +9,9 @@ reference data." Run with: python -m app.seed
 from __future__ import annotations
 
 from app.db import SessionLocal
+from app.models.assurance import Technician
 from app.models.catalog import BundleCompatibilityRule, ProductSpecification
+from app.models.crm import TerritoryRule
 
 ATOMIC_PRODUCTS = [
     ("Fiber100", "connectivity"),
@@ -28,6 +31,20 @@ COMPATIBILITY_RULES = [
     ("connectivity", "addon", 5),
 ]
 
+TERRITORY_RULES = [
+    # region, owner_name
+    ("North", "Asha Mehta"),
+    ("South", "Ravi Kumar"),
+    ("ALL", "Unassigned Pool"),
+]
+
+TECHNICIANS = [
+    # name, skills (comma-separated), region
+    ("Dev Prakash", "fiber_install,network", "North"),
+    ("Simran Kaur", "fiber_install,network,mobile", "South"),
+    ("general", "general", "ALL"),
+]
+
 
 def seed() -> None:
     db = SessionLocal()
@@ -45,8 +62,19 @@ def seed() -> None:
                     )
                 )
 
+        if db.query(TerritoryRule).count() == 0:
+            for region, owner_name in TERRITORY_RULES:
+                db.add(TerritoryRule(region=region, owner_name=owner_name))
+
+        if db.query(Technician).count() == 0:
+            for name, skills, region in TECHNICIANS:
+                db.add(Technician(name=name, skills=skills, region=region, status="available"))
+
         db.commit()
-        print(f"Seeded {len(ATOMIC_PRODUCTS)} product specifications and {len(COMPATIBILITY_RULES)} compatibility rules.")
+        print(
+            f"Seeded {len(ATOMIC_PRODUCTS)} product specifications, {len(COMPATIBILITY_RULES)} compatibility rules, "
+            f"{len(TERRITORY_RULES)} territory rules, {len(TECHNICIANS)} technicians."
+        )
     finally:
         db.close()
 

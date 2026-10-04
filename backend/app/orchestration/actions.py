@@ -172,6 +172,10 @@ def build_int03_steps(db: Session, execution_id: int, entities: dict[str, Any]) 
             raise catalog_service.MigrationPathRequiredError(
                 "No retirement is permitted without a migration path (HLD INT-03 business rule)"
             )
+        if replacement_name.strip().lower() == offering_name.strip().lower():
+            raise catalog_service.MigrationPathRequiredError(
+                "The replacement offering cannot be the same bundle being retired"
+            )
         current = tmf620_adapter.get_active_offering_by_name(db, offering_name)
         if current is None:
             raise ValueError(f"No active offering named '{offering_name}' found")

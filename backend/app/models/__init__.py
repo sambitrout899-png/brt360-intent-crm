@@ -1,3 +1,12 @@
+from app.models.assurance import (
+    CompletionEvidence,
+    IncidentCorrelation,
+    RootCauseAnalysis,
+    Technician,
+    TechnicianAssignment,
+    TroubleTicket,
+    WorkOrder,
+)
 from app.models.catalog import (
     BundleCompatibilityRule,
     BundleEligibilityRule,
@@ -5,7 +14,26 @@ from app.models.catalog import (
     ProductOffering,
     ProductSpecification,
 )
+from app.models.crm import (
+    ApprovalDecision,
+    ApprovalRequest,
+    FeasibilityResult,
+    Lead,
+    Opportunity,
+    Party,
+    Quote,
+    QuoteItem,
+    TerritoryRule,
+)
 from app.models.intent_log import DomainEvent, IntentExecutionLog
+from app.models.orders import (
+    BillingAccount,
+    BillingAdjustment,
+    Order,
+    OrderItem,
+    Resource,
+    ServiceOrder,
+)
 
 __all__ = [
     "ProductSpecification",
@@ -15,4 +43,26 @@ __all__ = [
     "BundleCompatibilityRule",
     "IntentExecutionLog",
     "DomainEvent",
+    "Party",
+    "TerritoryRule",
+    "Lead",
+    "Opportunity",
+    "Quote",
+    "QuoteItem",
+    "ApprovalRequest",
+    "ApprovalDecision",
+    "FeasibilityResult",
+    "Order",
+    "OrderItem",
+    "ServiceOrder",
+    "Resource",
+    "BillingAccount",
+    "BillingAdjustment",
+    "Technician",
+    "TroubleTicket",
+    "IncidentCorrelation",
+    "RootCauseAnalysis",
+    "WorkOrder",
+    "TechnicianAssignment",
+    "CompletionEvidence",
 ]

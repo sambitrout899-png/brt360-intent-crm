@@ -33,6 +33,14 @@ _REQUIRED_FIELDS: dict[str, list[str]] = {
     "INT-01": ["name", "composition", "list_price"],
     "INT-02": ["offering_name"],
     "INT-03": ["offering_name", "replacement_offering_name"],
+    "INT-04": ["company_name", "source"],
+    "INT-05": ["opportunity_id", "offering_name"],
+    "INT-06": ["quote_id", "decision"],
+    "INT-07": ["quote_id"],
+    "INT-08": ["order_id"],
+    "INT-09": ["order_id", "action"],
+    "INT-10": ["description"],
+    "INT-11": ["ticket_id"],
 }
 
 
@@ -43,6 +51,8 @@ def _missing_fields(intent_type: str, entities: dict[str, Any]) -> list[str]:
         value = entities.get(field_name)
         if value is None or value == "" or value == []:
             missing.append(field_name)
+    if intent_type == "INT-12" and not (entities.get("ticket_id") or entities.get("order_id") or entities.get("work_order_id")):
+        missing.append("ticket_id or order_id or work_order_id")
     return missing
 
 
@@ -52,6 +62,25 @@ def _context_missing(intent_type: str, context: dict[str, Any]) -> list[str]:
         missing.append("current_offering (not found or not active)")
     if intent_type == "INT-03" and context.get("replacement_offering") is None:
         missing.append("replacement_offering (not found or not active)")
+    if intent_type == "INT-05":
+        if context.get("opportunity") is None:
+            missing.append("opportunity (not found)")
+        if context.get("offering") is None:
+            missing.append("offering (not found or not active)")
+    if intent_type in ("INT-06", "INT-07") and context.get("quote") is None:
+        missing.append("quote (not found)")
+    if intent_type == "INT-07" and context.get("quote") is not None and context["quote"]["status"] != "approved":
+        missing.append(f"quote is not approved (status={context['quote']['status']})")
+    if intent_type in ("INT-08", "INT-09"):
+        if context.get("order") is None:
+            missing.append("order (not found)")
+        elif context["order"]["status"] in ("cancelled", "terminated"):
+            missing.append(f"order already {context['order']['status']}")
+    if intent_type == "INT-11" and context.get("ticket") is None:
+        missing.append("ticket (not found)")
+    if intent_type == "INT-12":
+        if context.get("work_order") is None and context.get("ticket") is None and context.get("order") is None:
+            missing.append("none of ticket/order/work_order resolved")
     return missing
 
 

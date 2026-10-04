@@ -15,6 +15,42 @@ const EXAMPLES = [
     label: "INT-03 · Retire",
     text: "Retire this bundle. offering_name: Fiber 500 Bundle, replacement_offering_name: Fiber 1000 Elite",
   },
+  {
+    label: "INT-04 · Qualify lead",
+    text: "Qualify this lead. company_name: Acme Telecom, source: referral, region: North",
+  },
+  {
+    label: "INT-05 · Configure & quote",
+    text: "Configure and quote this bundle. opportunity_id: 1, offering_name: Fiber 500 Bundle, quantity: 1, discount: 5",
+  },
+  {
+    label: "INT-06 · Approve",
+    text: "Approve this quote. quote_id: 1, reasoning: strategic account",
+  },
+  {
+    label: "INT-07 · Activate order",
+    text: "Activate this order end-to-end. quote_id: 1",
+  },
+  {
+    label: "INT-08 · Change service",
+    text: "Upgrade this service. order_id: 1, new_price: 1200",
+  },
+  {
+    label: "INT-09 · Cancel",
+    text: "Cancel this service. order_id: 1",
+  },
+  {
+    label: "INT-10 · Log complaint",
+    text: "Log this complaint. description: Fiber internet is completely down since this morning, company_name: Acme Telecom, sla_class: premium",
+  },
+  {
+    label: "INT-11 · Diagnose",
+    text: "Diagnose the root cause. ticket_id: 1",
+  },
+  {
+    label: "INT-12 · Dispatch tech",
+    text: "Dispatch a technician. ticket_id: 1, required_skill: fiber_install, region: North",
+  },
 ];
 
 const STATUS_STYLES: Record<string, string> = {

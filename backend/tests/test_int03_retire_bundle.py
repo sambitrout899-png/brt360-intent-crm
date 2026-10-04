@@ -46,3 +46,21 @@ def test_retire_with_replacement_succeeds_and_retains_history(client):
     assert retired["status"] == "retired"
     assert retired["replacement_offering_id"] == catalog["Fiber 500 Bundle"]["id"]
     assert retired["end_date"] is not None
+
+
+def test_retire_cannot_replace_itself(client):
+    _launch(client, "Fiber 100 Bundle")
+
+    resp = client.post(
+        "/api/intents",
+        json={
+            "text": "Retire this bundle. offering_name: Fiber 100 Bundle, "
+            "replacement_offering_name: Fiber 100 Bundle"
+        },
+    )
+    body = resp.json()
+    assert body["status"] == "failed"
+    assert "same bundle" in body["rationale"]
+
+    catalog = client.get("/api/catalog").json()
+    assert next(o for o in catalog if o["name"] == "Fiber 100 Bundle")["status"] == "active"

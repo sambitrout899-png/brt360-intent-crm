@@ -6,16 +6,10 @@ parser - fully functional for dev/test with zero external calls or cost, and
 exercised directly by the pytest suite so CI never needs a real API key.
 
 Fallback phrasing convention (documented here, not a general NLP system):
-free text may contain `field: value` pairs (comma- or newline-separated),
-read in addition to a keyword that selects the intent type:
-
-  "Launch a new bundle. name: Fiber 500 Bundle, composition: Fiber500, VOIP,
-   segment: B2C, channel: B2C, price: 999, discount: 10"
-
-  "Modify this bundle. offering_name: Fiber 500 Bundle, new_price: 899"
-
-  "Retire this bundle. offering_name: Fiber 100 Bundle,
-   replacement_offering_name: Fiber 500 Bundle"
+free text may contain `field: value` pairs (comma- or newline-separated,
+list-valued fields use `+` between items since `,` is the field separator),
+read in addition to a keyword that selects the intent type. See each
+INT-xx block in _classify_with_rules for its keyword + expected fields.
 """
 
 from __future__ import annotations
@@ -27,26 +21,59 @@ from typing import Any
 
 from app.config import get_settings
 
-SUPPORTED_INTENTS = ("INT-01", "INT-02", "INT-03")
+SUPPORTED_INTENTS = (
+    "INT-01", "INT-02", "INT-03",
+    "INT-04", "INT-05", "INT-06",
+    "INT-07", "INT-08", "INT-09",
+    "INT-10", "INT-11", "INT-12",
+)
 
 _SYSTEM_PROMPT = """You are the NLU classifier for BRT 360, a telecom Intent CRM.
-Classify the user's free text into exactly one of these intent types, or UNKNOWN:
+Classify the user's free text into exactly one of these 12 intent types, or UNKNOWN:
 
 INT-01 "Launch a new bundle" - entities: name (str), composition (list[str] of
   product names, first is the primary connectivity line), segment (str, e.g.
   B2C/B2B-SMB), channel (str, B2C/B2B), region (str, default ALL),
   list_price (number), requested_discount_pct (number, default 0).
 
-INT-02 "Modify a live bundle" - entities: offering_name (str, the existing
-  bundle's name), new_list_price (number, optional), new_segment (str,
-  optional), new_channel (str, optional).
+INT-02 "Modify a live bundle" - entities: offering_name (str), new_list_price
+  (number, optional), new_segment (str, optional), new_channel (str, optional).
 
 INT-03 "Retire a bundle" - entities: offering_name (str), replacement_offering_name
-  (str - required per policy; if the user gives no replacement, still extract
-  offering_name and omit replacement_offering_name).
+  (str - required per policy).
+
+INT-04 "Qualify this lead" - entities: company_name (str), source (str),
+  region (str, default ALL).
+
+INT-05 "Configure & quote this bundle" - entities: opportunity_id (int),
+  offering_name (str, an existing active bundle), quantity (int, default 1),
+  requested_discount_pct (number, default 0), discount_justification (str,
+  optional - required if discount exceeds 10%).
+
+INT-06 "Check feasibility & approve" - entities: quote_id (int), decision
+  ("approve"|"reject"|"conditional"), reasoning (str, optional).
+
+INT-07 "Activate this order end-to-end" - entities: quote_id (int).
+
+INT-08 "Change this live service" - entities: order_id (int), new_monthly_price
+  (number).
+
+INT-09 "Suspend, cancel or terminate" - entities: order_id (int), action
+  ("suspend"|"cancel"|"terminate").
+
+INT-10 "Log & classify this complaint" - entities: description (str),
+  company_name (str, optional), sla_class (str, default "standard").
+
+INT-11 "Diagnose the root cause" - entities: ticket_id (int).
+
+INT-12 "Assign & track the field team" - entities: ticket_id (int, optional),
+  order_id (int, optional - at least one required), required_skill (str,
+  default "general"), region (str, default ALL), scheduled_window (str,
+  optional), work_order_id (int, optional - if set with action "complete",
+  this call records completion instead of dispatching), action (str, optional).
 
 Respond with strict JSON only:
-{"intent_type": "INT-01"|"INT-02"|"INT-03"|"UNKNOWN", "entities": {...},
+{"intent_type": "INT-01".."INT-12"|"UNKNOWN", "entities": {...},
  "confidence": 0.0-1.0, "rationale": "one sentence explaining the classification"}
 """
 
@@ -107,6 +134,21 @@ def _extract_fields(text: str) -> dict[str, str]:
     return fields
 
 
+def _as_int(fields: dict[str, str], key: str) -> int | None:
+    value = fields.get(key)
+    try:
+        return int(value) if value is not None else None
+    except ValueError:
+        return None
+
+
+def _as_float(fields: dict[str, str], key: str, default: float = 0.0) -> float:
+    try:
+        return float(fields[key]) if key in fields else default
+    except ValueError:
+        return default
+
+
 def _classify_with_rules(text: str) -> ClassificationResult:
     lowered = text.lower()
     fields = _extract_fields(text)
@@ -120,18 +162,16 @@ def _classify_with_rules(text: str) -> ClassificationResult:
             "segment": fields.get("segment", "B2C"),
             "channel": fields.get("channel", fields.get("segment", "B2C")),
             "region": fields.get("region", "ALL"),
-            "list_price": float(fields["price"]) if "price" in fields else 0.0,
-            "requested_discount_pct": float(fields.get("discount", 0)),
+            "list_price": _as_float(fields, "price"),
+            "requested_discount_pct": _as_float(fields, "discount"),
         }
         confidence = 0.9 if entities["name"] and composition and entities["list_price"] else 0.4
         return ClassificationResult("INT-01", entities, confidence, "Matched keyword 'launch' + parsed fields")
 
     if "modify" in lowered or "update" in lowered:
-        entities = {
-            "offering_name": fields.get("offering_name", fields.get("name", "")).strip(),
-        }
+        entities = {"offering_name": fields.get("offering_name", fields.get("name", "")).strip()}
         if "new_price" in fields:
-            entities["new_list_price"] = float(fields["new_price"])
+            entities["new_list_price"] = _as_float(fields, "new_price")
         if "new_segment" in fields:
             entities["new_segment"] = fields["new_segment"]
         if "new_channel" in fields:
@@ -147,5 +187,83 @@ def _classify_with_rules(text: str) -> ClassificationResult:
         }
         confidence = 0.85 if entities["offering_name"] else 0.4
         return ClassificationResult("INT-03", entities, confidence, "Matched keyword 'retire' + parsed fields")
+
+    if "qualify" in lowered:
+        entities = {
+            "company_name": fields.get("company_name", fields.get("name", "")).strip(),
+            "source": fields.get("source", "unknown"),
+            "region": fields.get("region", "ALL"),
+        }
+        confidence = 0.9 if entities["company_name"] else 0.4
+        return ClassificationResult("INT-04", entities, confidence, "Matched keyword 'qualify' + parsed fields")
+
+    if "configure" in lowered:
+        entities = {
+            "opportunity_id": _as_int(fields, "opportunity_id"),
+            "offering_name": fields.get("offering_name", "").strip(),
+            "quantity": _as_int(fields, "quantity") or 1,
+            "requested_discount_pct": _as_float(fields, "discount"),
+            "discount_justification": fields.get("justification"),
+        }
+        confidence = 0.9 if entities["opportunity_id"] and entities["offering_name"] else 0.4
+        return ClassificationResult("INT-05", entities, confidence, "Matched keyword 'configure' + parsed fields")
+
+    if "approve" in lowered or "reject" in lowered:
+        decision = "approve" if "approve" in lowered and "reject" not in lowered else (
+            "reject" if "reject" in lowered else fields.get("decision", "approve")
+        )
+        entities = {
+            "quote_id": _as_int(fields, "quote_id"),
+            "decision": fields.get("decision", decision),
+            "reasoning": fields.get("reasoning"),
+        }
+        confidence = 0.9 if entities["quote_id"] else 0.4
+        return ClassificationResult("INT-06", entities, confidence, "Matched keyword 'approve'/'reject' + parsed fields")
+
+    if "activate" in lowered:
+        entities = {"quote_id": _as_int(fields, "quote_id")}
+        confidence = 0.9 if entities["quote_id"] else 0.4
+        return ClassificationResult("INT-07", entities, confidence, "Matched keyword 'activate' + parsed fields")
+
+    if "upgrade" in lowered or "relocate" in lowered or "change this service" in lowered:
+        entities = {
+            "order_id": _as_int(fields, "order_id"),
+            "new_monthly_price": _as_float(fields, "new_price"),
+        }
+        confidence = 0.85 if entities["order_id"] else 0.4
+        return ClassificationResult("INT-08", entities, confidence, "Matched keyword 'upgrade'/'relocate' + parsed fields")
+
+    if "suspend" in lowered or "cancel" in lowered or "terminate" in lowered:
+        action = "suspend" if "suspend" in lowered else ("terminate" if "terminate" in lowered else "cancel")
+        entities = {"order_id": _as_int(fields, "order_id"), "action": fields.get("action", action)}
+        confidence = 0.85 if entities["order_id"] else 0.4
+        return ClassificationResult("INT-09", entities, confidence, "Matched keyword 'suspend'/'cancel'/'terminate' + parsed fields")
+
+    if "complaint" in lowered:
+        entities = {
+            "description": fields.get("description", text).strip(),
+            "company_name": fields.get("company_name"),
+            "sla_class": fields.get("sla_class", "standard"),
+        }
+        confidence = 0.9 if entities["description"] else 0.4
+        return ClassificationResult("INT-10", entities, confidence, "Matched keyword 'complaint' + parsed fields")
+
+    if "diagnose" in lowered:
+        entities = {"ticket_id": _as_int(fields, "ticket_id")}
+        confidence = 0.9 if entities["ticket_id"] else 0.4
+        return ClassificationResult("INT-11", entities, confidence, "Matched keyword 'diagnose' + parsed fields")
+
+    if "dispatch" in lowered or ("complete" in lowered and "work_order_id" in fields):
+        entities = {
+            "ticket_id": _as_int(fields, "ticket_id"),
+            "order_id": _as_int(fields, "order_id"),
+            "required_skill": fields.get("required_skill", "general"),
+            "region": fields.get("region", "ALL"),
+            "scheduled_window": fields.get("scheduled_window", "next business day"),
+            "work_order_id": _as_int(fields, "work_order_id"),
+            "action": "complete" if "complete" in lowered else "dispatch",
+        }
+        confidence = 0.85 if (entities["ticket_id"] or entities["order_id"] or entities["work_order_id"]) else 0.4
+        return ClassificationResult("INT-12", entities, confidence, "Matched keyword 'dispatch'/'complete' + parsed fields")
 
     return ClassificationResult(None, {}, 0.0, "No known intent keyword found")

@@ -17,7 +17,10 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.integration import tmf620_adapter
+from app.models.assurance import TroubleTicket, WorkOrder
 from app.models.catalog import BundleCompatibilityRule, ProductOffering
+from app.models.crm import Opportunity, Quote, TerritoryRule
+from app.models.orders import Order
 
 _TTL_SECONDS = 90
 _cache: dict[str, tuple[float, Any]] = {}
@@ -67,5 +70,48 @@ def assemble_context(db: Session, intent_type: str, entities: dict[str, Any]) ->
             replacement_name = entities.get("replacement_offering_name")
             replacement = tmf620_adapter.get_active_offering_by_name(db, replacement_name) if replacement_name else None
             context["replacement_offering"] = {"id": replacement.id, "name": replacement.name} if replacement else None
+
+    elif intent_type == "INT-04":
+        region = entities.get("region", "ALL")
+        rule = db.query(TerritoryRule).filter(TerritoryRule.region == region).first()
+        context["territory_owner"] = rule.owner_name if rule else None
+
+    elif intent_type == "INT-05":
+        opportunity = db.get(Opportunity, entities.get("opportunity_id")) if entities.get("opportunity_id") else None
+        context["opportunity"] = {"id": opportunity.id, "stage": opportunity.stage.value} if opportunity else None
+        offering = tmf620_adapter.get_active_offering_by_name(db, entities.get("offering_name", ""))
+        context["offering"] = (
+            {"id": offering.id, "price": offering.price, "price_floor": offering.price_floor} if offering else None
+        )
+
+    elif intent_type in ("INT-06", "INT-07"):
+        quote = db.get(Quote, entities.get("quote_id")) if entities.get("quote_id") else None
+        context["quote"] = (
+            {"id": quote.id, "status": quote.status.value, "total_price": quote.total_price, "discount_pct": quote.requested_discount_pct}
+            if quote
+            else None
+        )
+
+    elif intent_type in ("INT-08", "INT-09"):
+        order = db.get(Order, entities.get("order_id")) if entities.get("order_id") else None
+        context["order"] = (
+            {"id": order.id, "status": order.status.value, "monthly_price": order.monthly_price, "contract_months": order.contract_months}
+            if order
+            else None
+        )
+
+    elif intent_type == "INT-11":
+        ticket = db.get(TroubleTicket, entities.get("ticket_id")) if entities.get("ticket_id") else None
+        context["ticket"] = {"id": ticket.id, "status": ticket.status, "severity": ticket.severity} if ticket else None
+
+    elif intent_type == "INT-12":
+        if entities.get("work_order_id"):
+            wo = db.get(WorkOrder, entities.get("work_order_id"))
+            context["work_order"] = {"id": wo.id, "status": wo.status} if wo else None
+        else:
+            ticket = db.get(TroubleTicket, entities.get("ticket_id")) if entities.get("ticket_id") else None
+            order = db.get(Order, entities.get("order_id")) if entities.get("order_id") else None
+            context["ticket"] = {"id": ticket.id, "product_line": ticket.product_line} if ticket else None
+            context["order"] = {"id": order.id} if order else None
 
     return context
