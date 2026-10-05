@@ -7,19 +7,27 @@ from app.db import get_db
 from app.models.catalog import ProductOffering
 from app.models.intent_log import IntentExecutionLog
 from app.schemas.catalog import AuditLogDetailOut, AuditLogOut, OfferingOut
+from app.tenancy import get_current_tenant_id
 
 router = APIRouter(prefix="/api", tags=["catalog", "audit"])
 
 
 @router.get("/catalog", response_model=list[OfferingOut])
-def list_catalog(db: Session = Depends(get_db)) -> list[ProductOffering]:
-    return db.query(ProductOffering).order_by(ProductOffering.name, ProductOffering.version.desc()).all()
+def list_catalog(db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> list[ProductOffering]:
+    return (
+        db.query(ProductOffering)
+        .filter(ProductOffering.tenant_id == tenant_id)
+        .order_by(ProductOffering.name, ProductOffering.version.desc())
+        .all()
+    )
 
 
 @router.get("/catalog/{offering_id}/versions", response_model=list[OfferingOut])
-def offering_versions(offering_id: int, db: Session = Depends(get_db)) -> list[ProductOffering]:
+def offering_versions(
+    offering_id: int, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)
+) -> list[ProductOffering]:
     offering = db.get(ProductOffering, offering_id)
-    if offering is None:
+    if offering is None or offering.tenant_id != tenant_id:
         raise HTTPException(404, "Offering not found")
     # Walk both directions of the version chain.
     chain = [offering]
@@ -37,13 +45,21 @@ def offering_versions(offering_id: int, db: Session = Depends(get_db)) -> list[P
 
 
 @router.get("/audit", response_model=list[AuditLogOut])
-def list_audit(db: Session = Depends(get_db)) -> list[IntentExecutionLog]:
-    return db.query(IntentExecutionLog).order_by(IntentExecutionLog.created_at.desc()).limit(200).all()
+def list_audit(db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> list[IntentExecutionLog]:
+    return (
+        db.query(IntentExecutionLog)
+        .filter(IntentExecutionLog.tenant_id == tenant_id)
+        .order_by(IntentExecutionLog.created_at.desc())
+        .limit(200)
+        .all()
+    )
 
 
 @router.get("/audit/{execution_id}", response_model=AuditLogDetailOut)
-def audit_detail(execution_id: int, db: Session = Depends(get_db)) -> IntentExecutionLog:
+def audit_detail(
+    execution_id: int, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)
+) -> IntentExecutionLog:
     log = db.get(IntentExecutionLog, execution_id)
-    if log is None:
+    if log is None or log.tenant_id != tenant_id:
         raise HTTPException(404, "Execution log not found")
     return log

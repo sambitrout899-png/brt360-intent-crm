@@ -7,9 +7,10 @@ from sqlalchemy.orm import Session
 from app.models.assurance import Technician
 
 
-def match_technician(db: Session, required_skill: str, region: str) -> Technician | None:
+def match_technician(db: Session, tenant_id: int, required_skill: str, region: str) -> Technician | None:
     candidates = (
         db.query(Technician)
+        .filter(Technician.tenant_id == tenant_id)
         .filter(Technician.status == "available")
         .filter(Technician.skills.ilike(f"%{required_skill}%"))
         .all()

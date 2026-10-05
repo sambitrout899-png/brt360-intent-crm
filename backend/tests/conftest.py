@@ -6,10 +6,8 @@ from sqlalchemy.pool import StaticPool
 
 from app.db import Base, get_db
 from app.main import app
-from app.models.assurance import Technician
-from app.models.catalog import BundleCompatibilityRule, ProductSpecification
-from app.models.crm import TerritoryRule
-from app.seed import ATOMIC_PRODUCTS, COMPATIBILITY_RULES, TECHNICIANS, TERRITORY_RULES
+from app.seed import get_or_create_tenant, seed_reference_data
+from app.tenancy import DEFAULT_TENANT_SLUG
 
 
 @pytest.fixture()
@@ -27,14 +25,12 @@ def client():
     Base.metadata.create_all(bind=engine)
 
     db = TestSession()
-    for name, line in ATOMIC_PRODUCTS:
-        db.add(ProductSpecification(name=name, product_line=line, is_atomic=True))
-    for primary, addon, max_addons in COMPATIBILITY_RULES:
-        db.add(BundleCompatibilityRule(primary_product_line=primary, addon_product_line=addon, max_addons=max_addons))
-    for region, owner_name in TERRITORY_RULES:
-        db.add(TerritoryRule(region=region, owner_name=owner_name))
-    for name, skills, region in TECHNICIANS:
-        db.add(Technician(name=name, skills=skills, region=region, status="available"))
+    # Seeded under the default tenant slug, so requests that send no
+    # X-Tenant-Slug header (i.e. every existing test) resolve to it via
+    # app.tenancy's fallback - exercising the exact same path production
+    # takes for a not-yet-multi-tenant-aware caller.
+    tenant = get_or_create_tenant(db, DEFAULT_TENANT_SLUG, "Default Tenant")
+    seed_reference_data(db, tenant.id)
     db.commit()
     db.close()
 

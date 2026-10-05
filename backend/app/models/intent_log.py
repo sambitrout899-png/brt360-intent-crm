@@ -18,6 +18,11 @@ class IntentExecutionLog(Base):
     __tablename__ = "intent_execution_log"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id"))
+    # Digital self-service vs. agent-assisted vs. partner/dealer - same intent,
+    # different governance (e.g. digital may skip steps a human agent wouldn't,
+    # or need a stricter auto-execute confidence threshold). See reasoning.py.
+    channel: Mapped[str] = mapped_column(String(30), default="agent")
     intent_type: Mapped[str] = mapped_column(String(20))  # "INT-01", "INT-02", "INT-03"
     raw_text: Mapped[str] = mapped_column(Text)
     entities_json: Mapped[str] = mapped_column(Text)  # JSON-encoded extracted entities

@@ -41,6 +41,7 @@ class Party(Base):
     __tablename__ = "parties"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id"))
     name: Mapped[str] = mapped_column(String(200))
     party_type: Mapped[str] = mapped_column(String(20), default="organization")  # organization/individual
     email: Mapped[str | None] = mapped_column(String(200), nullable=True)
@@ -56,7 +57,8 @@ class TerritoryRule(Base):
     __tablename__ = "territory_rules"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    region: Mapped[str] = mapped_column(String(100), unique=True)
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id"))
+    region: Mapped[str] = mapped_column(String(100))
     owner_name: Mapped[str] = mapped_column(String(200))
 
 
@@ -64,6 +66,7 @@ class Lead(Base):
     __tablename__ = "leads"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id"))
     party_id: Mapped[int] = mapped_column(ForeignKey("parties.id"))
     source: Mapped[str] = mapped_column(String(100))
     region: Mapped[str] = mapped_column(String(100), default="ALL")
@@ -79,6 +82,7 @@ class Opportunity(Base):
     __tablename__ = "opportunities"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id"))
     lead_id: Mapped[int] = mapped_column(ForeignKey("leads.id"))
     name: Mapped[str] = mapped_column(String(200))
     stage: Mapped[OpportunityStage] = mapped_column(Enum(OpportunityStage), default=OpportunityStage.draft)
@@ -93,6 +97,7 @@ class Quote(Base):
     __tablename__ = "quotes"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id"))
     opportunity_id: Mapped[int] = mapped_column(ForeignKey("opportunities.id"))
     status: Mapped[QuoteStatus] = mapped_column(Enum(QuoteStatus), default=QuoteStatus.draft)
     total_price: Mapped[float] = mapped_column(Float)

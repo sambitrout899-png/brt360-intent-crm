@@ -26,9 +26,17 @@ from app.models.orders import (
 
 
 def create_order(
-    db: Session, *, party_id: int, quote_id: int | None, order_type: OrderType, monthly_price: float, contract_months: int = 12
+    db: Session,
+    *,
+    tenant_id: int,
+    party_id: int,
+    quote_id: int | None,
+    order_type: OrderType,
+    monthly_price: float,
+    contract_months: int = 12,
 ) -> Order:
     order = Order(
+        tenant_id=tenant_id,
         party_id=party_id,
         quote_id=quote_id,
         order_type=order_type,
@@ -98,10 +106,10 @@ def set_order_status(db: Session, order_id: int, status: OrderStatus) -> Order:
     return order
 
 
-def get_or_create_billing_account(db: Session, party_id: int) -> BillingAccount:
+def get_or_create_billing_account(db: Session, tenant_id: int, party_id: int) -> BillingAccount:
     account = db.query(BillingAccount).filter(BillingAccount.party_id == party_id).first()
     if account is None:
-        account = BillingAccount(party_id=party_id, status="active")
+        account = BillingAccount(tenant_id=tenant_id, party_id=party_id, status="active")
         db.add(account)
         db.flush()
     return account

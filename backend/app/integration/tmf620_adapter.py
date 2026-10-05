@@ -19,6 +19,7 @@ from app.models.catalog import OfferingStatus, PricePlan, ProductOffering
 def create_offering_version(
     db: Session,
     *,
+    tenant_id: int,
     name: str,
     segment: str,
     composition: str,
@@ -34,6 +35,7 @@ def create_offering_version(
             version = parent.version + 1
 
     offering = ProductOffering(
+        tenant_id=tenant_id,
         name=name,
         segment=segment,
         composition=composition,
@@ -86,10 +88,14 @@ def retire_offering(db: Session, offering_id: int, *, replacement_offering_id: i
     return offering
 
 
-def get_active_offering_by_name(db: Session, name: str) -> ProductOffering | None:
+def get_active_offering_by_name(db: Session, tenant_id: int, name: str) -> ProductOffering | None:
     return (
         db.query(ProductOffering)
-        .filter(ProductOffering.name == name, ProductOffering.status == OfferingStatus.active)
+        .filter(
+            ProductOffering.tenant_id == tenant_id,
+            ProductOffering.name == name,
+            ProductOffering.status == OfferingStatus.active,
+        )
         .order_by(ProductOffering.version.desc())
         .first()
     )

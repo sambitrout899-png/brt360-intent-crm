@@ -15,7 +15,7 @@ from app.models.crm import ApprovalDecision, ApprovalRequest, ApprovalStatus, Fe
 from app.orchestration.orchestrator import SagaStep
 
 
-def build_int04_steps(db: Session, execution_id: int, entities: dict[str, Any]) -> list[SagaStep]:
+def build_int04_steps(db: Session, tenant_id: int, execution_id: int, entities: dict[str, Any]) -> list[SagaStep]:
     """INT-04 - Qualify this lead."""
 
     company_name = entities["company_name"]
@@ -35,18 +35,27 @@ def build_int04_steps(db: Session, execution_id: int, entities: dict[str, Any]) 
         return {"propensity_score": score}
 
     def step3() -> dict[str, Any]:
-        owner = lead_service.assign_territory_owner(db, region)
+        owner = lead_service.assign_territory_owner(db, tenant_id, region)
         state["owner"] = owner
         return {"owner_name": owner}
 
     def step4() -> dict[str, Any]:
-        party = party_adapter.get_or_create_party(db, company_name)
+        party = party_adapter.get_or_create_party(db, tenant_id, company_name)
         from app.models.crm import Lead
 
-        lead = Lead(party_id=party.id, source=source, region=region, owner_name=state["owner"], propensity_score=state["score"])
+        lead = Lead(
+            tenant_id=tenant_id,
+            party_id=party.id,
+            source=source,
+            region=region,
+            owner_name=state["owner"],
+            propensity_score=state["score"],
+        )
         db.add(lead)
         db.flush()
-        opportunity = Opportunity(lead_id=lead.id, name=f"{company_name} - initial opportunity", stage=OpportunityStage.draft)
+        opportunity = Opportunity(
+            tenant_id=tenant_id, lead_id=lead.id, name=f"{company_name} - initial opportunity", stage=OpportunityStage.draft
+        )
         db.add(opportunity)
         db.flush()
         event_bus.publish(db, execution_id, "lead.qualified", {"lead_id": lead.id, "opportunity_id": opportunity.id})
@@ -60,7 +69,7 @@ def build_int04_steps(db: Session, execution_id: int, entities: dict[str, Any]) 
     ]
 
 
-def build_int05_steps(db: Session, execution_id: int, entities: dict[str, Any]) -> list[SagaStep]:
+def build_int05_steps(db: Session, tenant_id: int, execution_id: int, entities: dict[str, Any]) -> list[SagaStep]:
     """INT-05 - Configure & quote this bundle."""
 
     opportunity_id = entities["opportunity_id"]
@@ -72,7 +81,7 @@ def build_int05_steps(db: Session, execution_id: int, entities: dict[str, Any]) 
     state: dict[str, Any] = {}
 
     def step1() -> dict[str, Any]:
-        offering = tmf620_adapter.get_active_offering_by_name(db, offering_name)
+        offering = tmf620_adapter.get_active_offering_by_name(db, tenant_id, offering_name)
         if offering is None:
             raise ValueError(f"No active offering named '{offering_name}' found")
         state["offering"] = offering
@@ -96,6 +105,7 @@ def build_int05_steps(db: Session, execution_id: int, entities: dict[str, Any]) 
     def step4() -> dict[str, Any]:
         total_price = state["unit_price"] * quantity
         quote = Quote(
+            tenant_id=tenant_id,
             opportunity_id=opportunity_id,
             status=QuoteStatus.draft,
             total_price=total_price,
@@ -118,7 +128,7 @@ def build_int05_steps(db: Session, execution_id: int, entities: dict[str, Any]) 
     ]
 
 
-def build_int06_steps(db: Session, execution_id: int, entities: dict[str, Any]) -> list[SagaStep]:
+def build_int06_steps(db: Session, tenant_id: int, execution_id: int, entities: dict[str, Any]) -> list[SagaStep]:
     """INT-06 - Check feasibility & approve."""
 
     quote_id = entities["quote_id"]

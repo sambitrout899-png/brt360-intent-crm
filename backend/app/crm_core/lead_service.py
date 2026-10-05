@@ -31,8 +31,8 @@ def score_lead(enrichment: dict) -> float:
     return round(max(0.0, min(1.0, base - penalty)), 2)
 
 
-def assign_territory_owner(db: Session, region: str) -> str:
-    rule = db.query(TerritoryRule).filter(TerritoryRule.region == region).first()
+def assign_territory_owner(db: Session, tenant_id: int, region: str) -> str:
+    rule = db.query(TerritoryRule).filter(TerritoryRule.tenant_id == tenant_id, TerritoryRule.region == region).first()
     if rule is None:
-        rule = db.query(TerritoryRule).filter(TerritoryRule.region == "ALL").first()
+        rule = db.query(TerritoryRule).filter(TerritoryRule.tenant_id == tenant_id, TerritoryRule.region == "ALL").first()
     return rule.owner_name if rule else "Unassigned"

@@ -48,6 +48,7 @@ class Order(Base):
     __tablename__ = "orders"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id"))
     quote_id: Mapped[int | None] = mapped_column(ForeignKey("quotes.id"), nullable=True)
     party_id: Mapped[int] = mapped_column(ForeignKey("parties.id"))
     order_type: Mapped[OrderType] = mapped_column(Enum(OrderType), default=OrderType.new)
@@ -108,6 +109,7 @@ class BillingAccount(Base):
     __tablename__ = "billing_accounts"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id"))
     party_id: Mapped[int] = mapped_column(ForeignKey("parties.id"), unique=True)
     status: Mapped[str] = mapped_column(String(20), default="active")  # active/suspended/closed
     rate_plan: Mapped[str] = mapped_column(String(200), default="")

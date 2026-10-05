@@ -17,7 +17,7 @@ from app.orchestration.orchestrator import SagaStep
 _ROOT_CAUSE_CONFIDENCE_THRESHOLD = 0.7
 
 
-def build_int10_steps(db: Session, execution_id: int, entities: dict[str, Any]) -> list[SagaStep]:
+def build_int10_steps(db: Session, tenant_id: int, execution_id: int, entities: dict[str, Any]) -> list[SagaStep]:
     """INT-10 - Log & classify this complaint."""
 
     description = entities["description"]
@@ -39,9 +39,10 @@ def build_int10_steps(db: Session, execution_id: int, entities: dict[str, Any]) 
         return {"correlated_incident_ref": incident_ref}
 
     def step3() -> dict[str, Any]:
-        party = party_adapter.get_or_create_party(db, company_name) if company_name else None
+        party = party_adapter.get_or_create_party(db, tenant_id, company_name) if company_name else None
         ticket = ticket_adapter.create_ticket(
             db,
+            tenant_id=tenant_id,
             party_id=party.id if party else None,
             category=state["classification"]["category"],
             severity=state["classification"]["severity"],
@@ -74,7 +75,7 @@ def build_int10_steps(db: Session, execution_id: int, entities: dict[str, Any]) 
     ]
 
 
-def build_int11_steps(db: Session, execution_id: int, entities: dict[str, Any]) -> list[SagaStep]:
+def build_int11_steps(db: Session, tenant_id: int, execution_id: int, entities: dict[str, Any]) -> list[SagaStep]:
     """INT-11 - Diagnose the root cause."""
 
     ticket_id = entities["ticket_id"]
@@ -136,7 +137,7 @@ def build_int11_steps(db: Session, execution_id: int, entities: dict[str, Any]) 
     ]
 
 
-def build_int12_steps(db: Session, execution_id: int, entities: dict[str, Any]) -> list[SagaStep]:
+def build_int12_steps(db: Session, tenant_id: int, execution_id: int, entities: dict[str, Any]) -> list[SagaStep]:
     """INT-12 - Assign & track the field team.
 
     Two modes based on entities: dispatch a new work order (default), or
@@ -145,10 +146,10 @@ def build_int12_steps(db: Session, execution_id: int, entities: dict[str, Any]) 
 
     if entities.get("work_order_id") and entities.get("action") == "complete":
         return _build_int12_completion_steps(db, execution_id, entities)
-    return _build_int12_dispatch_steps(db, execution_id, entities)
+    return _build_int12_dispatch_steps(db, tenant_id, execution_id, entities)
 
 
-def _build_int12_dispatch_steps(db: Session, execution_id: int, entities: dict[str, Any]) -> list[SagaStep]:
+def _build_int12_dispatch_steps(db: Session, tenant_id: int, execution_id: int, entities: dict[str, Any]) -> list[SagaStep]:
     ticket_id = entities.get("ticket_id")
     order_id = entities.get("order_id")
     required_skill = entities.get("required_skill", "general")
@@ -157,14 +158,16 @@ def _build_int12_dispatch_steps(db: Session, execution_id: int, entities: dict[s
     state: dict[str, Any] = {}
 
     def step1() -> dict[str, Any]:
-        technician = field_service.match_technician(db, required_skill, region)
+        technician = field_service.match_technician(db, tenant_id, required_skill, region)
         if technician is None:
             raise ValueError(f"No available technician with skill '{required_skill}' in region '{region}'")
         state["technician"] = technician
         return {"technician_id": technician.id, "technician_name": technician.name}
 
     def step2() -> dict[str, Any]:
-        wo = ticket_adapter.create_work_order(db, ticket_id=ticket_id, order_id=order_id, scheduled_window=scheduled_window)
+        wo = ticket_adapter.create_work_order(
+            db, tenant_id=tenant_id, ticket_id=ticket_id, order_id=order_id, scheduled_window=scheduled_window
+        )
         ticket_adapter.assign_technician(db, wo.id, state["technician"].id)
         state["work_order_id"] = wo.id
         return {"work_order_id": wo.id, "scheduled_window": scheduled_window}

@@ -18,7 +18,7 @@ from app.orchestration.orchestrator import SagaStep
 from app.timeutils import utcnow
 
 
-def build_int07_steps(db: Session, execution_id: int, entities: dict[str, Any]) -> list[SagaStep]:
+def build_int07_steps(db: Session, tenant_id: int, execution_id: int, entities: dict[str, Any]) -> list[SagaStep]:
     """INT-07 - Activate this order end-to-end."""
 
     quote_id = entities["quote_id"]
@@ -32,7 +32,12 @@ def build_int07_steps(db: Session, execution_id: int, entities: dict[str, Any]) 
         offering = db.get(ProductOffering, item.product_offering_id)
 
         order = order_adapter.create_order(
-            db, party_id=lead.party_id, quote_id=quote.id, order_type=OrderType.new, monthly_price=quote.total_price
+            db,
+            tenant_id=tenant_id,
+            party_id=lead.party_id,
+            quote_id=quote.id,
+            order_type=OrderType.new,
+            monthly_price=quote.total_price,
         )
         order_adapter.add_order_item(db, order.id, offering.id, item.quantity)
         state["order"] = order
@@ -61,7 +66,7 @@ def build_int07_steps(db: Session, execution_id: int, entities: dict[str, Any]) 
         return {"provisioned": True}
 
     def step5() -> dict[str, Any]:
-        account = order_adapter.get_or_create_billing_account(db, state["party_id"])
+        account = order_adapter.get_or_create_billing_account(db, tenant_id, state["party_id"])
         order_adapter.set_billing_account_status(db, account.id, "active", rate_plan=state["offering"].name)
         state["billing_account_id"] = account.id
         return {"billing_account_id": account.id}
@@ -70,7 +75,9 @@ def build_int07_steps(db: Session, execution_id: int, entities: dict[str, Any]) 
         from app.integration import ticket_adapter
 
         if "field_service" in state["tasks"]:
-            ticket_adapter.create_work_order(db, ticket_id=None, order_id=state["order"].id, scheduled_window="next business day")
+            ticket_adapter.create_work_order(
+                db, tenant_id=tenant_id, ticket_id=None, order_id=state["order"].id, scheduled_window="next business day"
+            )
         order_adapter.set_order_status(db, state["order"].id, OrderStatus.active)
         event_bus.publish(db, execution_id, "order.activated", {"order_id": state["order"].id})
         return {"order_id": state["order"].id, "status": OrderStatus.active.value}
@@ -85,7 +92,7 @@ def build_int07_steps(db: Session, execution_id: int, entities: dict[str, Any]) 
     ]
 
 
-def build_int08_steps(db: Session, execution_id: int, entities: dict[str, Any]) -> list[SagaStep]:
+def build_int08_steps(db: Session, tenant_id: int, execution_id: int, entities: dict[str, Any]) -> list[SagaStep]:
     """INT-08 - Change this live service."""
 
     order_id = entities["order_id"]
@@ -123,7 +130,7 @@ def build_int08_steps(db: Session, execution_id: int, entities: dict[str, Any]) 
         return {"provisioning_delta_applied": True}
 
     def step5() -> dict[str, Any]:
-        account = order_adapter.get_or_create_billing_account(db, state["order"].party_id)
+        account = order_adapter.get_or_create_billing_account(db, tenant_id, state["order"].party_id)
         order_adapter.apply_billing_adjustment(db, account.id, order_id, state["delta"], "Service change proration")
         event_bus.publish(db, execution_id, "order.change_requested", {"order_id": order_id, "delta": state["delta"]})
         return {"order_id": order_id, "new_monthly_price": new_monthly_price, "status": OrderStatus.changed.value}
@@ -137,7 +144,7 @@ def build_int08_steps(db: Session, execution_id: int, entities: dict[str, Any]) 
     ]
 
 
-def build_int09_steps(db: Session, execution_id: int, entities: dict[str, Any]) -> list[SagaStep]:
+def build_int09_steps(db: Session, tenant_id: int, execution_id: int, entities: dict[str, Any]) -> list[SagaStep]:
     """INT-09 - Suspend, cancel or terminate."""
 
     order_id = entities["order_id"]
@@ -170,7 +177,7 @@ def build_int09_steps(db: Session, execution_id: int, entities: dict[str, Any]) 
 
     def step4() -> dict[str, Any]:
         order = state["order"]
-        account = order_adapter.get_or_create_billing_account(db, order.party_id)
+        account = order_adapter.get_or_create_billing_account(db, tenant_id, order.party_id)
         if state["fee"] > 0:
             order_adapter.apply_billing_adjustment(db, account.id, order_id, state["fee"], f"Early termination fee ({action})")
         new_status = {"suspend": OrderStatus.suspended, "cancel": OrderStatus.cancelled, "terminate": OrderStatus.terminated}[action]

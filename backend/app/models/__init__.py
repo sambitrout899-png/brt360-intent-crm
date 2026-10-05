@@ -34,8 +34,11 @@ from app.models.orders import (
     Resource,
     ServiceOrder,
 )
+from app.models.tenant import Tenant, TenantVertical
 
 __all__ = [
+    "Tenant",
+    "TenantVertical",
     "ProductSpecification",
     "ProductOffering",
     "PricePlan",

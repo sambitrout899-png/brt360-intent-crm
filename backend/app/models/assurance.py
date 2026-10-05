@@ -17,6 +17,7 @@ class Technician(Base):
     __tablename__ = "technicians"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id"))
     name: Mapped[str] = mapped_column(String(200))
     skills: Mapped[str] = mapped_column(String(300))  # comma-separated skill tags
     region: Mapped[str] = mapped_column(String(100), default="ALL")
@@ -27,6 +28,7 @@ class TroubleTicket(Base):
     __tablename__ = "trouble_tickets"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id"))
     party_id: Mapped[int | None] = mapped_column(ForeignKey("parties.id"), nullable=True)
     service_order_id: Mapped[int | None] = mapped_column(ForeignKey("service_orders.id"), nullable=True)
     category: Mapped[str] = mapped_column(String(100))
@@ -75,6 +77,7 @@ class WorkOrder(Base):
     __tablename__ = "work_orders"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id"))
     ticket_id: Mapped[int | None] = mapped_column(ForeignKey("trouble_tickets.id"), nullable=True)
     order_id: Mapped[int | None] = mapped_column(ForeignKey("orders.id"), nullable=True)
     scheduled_window: Mapped[str] = mapped_column(String(100), default="")

@@ -35,19 +35,24 @@ class CompositionCheckResult:
     reason: str = ""
 
 
-def validate_composition(db: Session, product_names: list[str]) -> CompositionCheckResult:
+def validate_composition(db: Session, tenant_id: int, product_names: list[str]) -> CompositionCheckResult:
     """Step: validate proposed bundle composition against compatibility rules.
 
     First product in the list is treated as the primary connectivity line;
     the rest are add-ons, per HLD INT-01 business rule ("one primary
-    connectivity line + N add-ons").
+    connectivity line + N add-ons"). Both ProductSpecification and
+    BundleCompatibilityRule are tenant-configurable reference data - a
+    telecom's product lines and bundling rules are its own, not shared
+    across tenants.
     """
     if not product_names:
         return CompositionCheckResult("", [], False, "No products specified")
 
     specs = {
         s.name: s
-        for s in db.query(ProductSpecification).filter(ProductSpecification.name.in_(product_names)).all()
+        for s in db.query(ProductSpecification)
+        .filter(ProductSpecification.tenant_id == tenant_id, ProductSpecification.name.in_(product_names))
+        .all()
     }
     missing = [n for n in product_names if n not in specs]
     if missing:
@@ -60,7 +65,7 @@ def validate_composition(db: Session, product_names: list[str]) -> CompositionCh
     if len(addon_names) > 0:
         rules = (
             db.query(BundleCompatibilityRule)
-            .filter(BundleCompatibilityRule.primary_product_line == primary_line)
+            .filter(BundleCompatibilityRule.tenant_id == tenant_id, BundleCompatibilityRule.primary_product_line == primary_line)
             .all()
         )
         allowed_addon_lines = {r.addon_product_line for r in rules}

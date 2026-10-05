@@ -20,6 +20,7 @@ from app.models.assurance import (
 def create_ticket(
     db: Session,
     *,
+    tenant_id: int,
     party_id: int | None,
     category: str,
     severity: str,
@@ -29,6 +30,7 @@ def create_ticket(
     description: str,
 ) -> TroubleTicket:
     ticket = TroubleTicket(
+        tenant_id=tenant_id,
         party_id=party_id,
         category=category,
         severity=severity,
@@ -79,8 +81,12 @@ def record_diagnosis(
     return analysis
 
 
-def create_work_order(db: Session, *, ticket_id: int | None, order_id: int | None, scheduled_window: str) -> WorkOrder:
-    wo = WorkOrder(ticket_id=ticket_id, order_id=order_id, scheduled_window=scheduled_window, status="scheduled")
+def create_work_order(
+    db: Session, *, tenant_id: int, ticket_id: int | None, order_id: int | None, scheduled_window: str
+) -> WorkOrder:
+    wo = WorkOrder(
+        tenant_id=tenant_id, ticket_id=ticket_id, order_id=order_id, scheduled_window=scheduled_window, status="scheduled"
+    )
     db.add(wo)
     db.flush()
     return wo

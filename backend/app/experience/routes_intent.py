@@ -18,6 +18,7 @@ from app.intent_engine import classifier, context_assembly, reasoning, verificat
 from app.orchestration import actions, actions_l2q, actions_o2a, actions_t2r
 from app.orchestration.orchestrator import run_saga
 from app.schemas.intent import IntentRequest, IntentResponse, PlanStep
+from app.tenancy import get_current_tenant_id
 
 router = APIRouter(prefix="/api/intents", tags=["intents"])
 
@@ -38,15 +39,19 @@ _STEP_BUILDERS = {
 
 
 @router.post("", response_model=IntentResponse)
-def submit_intent(request: IntentRequest, db: Session = Depends(get_db)) -> IntentResponse:
-    log = audit.start_execution(db, request.text)
+def submit_intent(
+    request: IntentRequest,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_current_tenant_id),
+) -> IntentResponse:
+    log = audit.start_execution(db, tenant_id, request.text, channel=request.channel)
 
     # 1. Intent Capture (classification)
     classification = classifier.classify(request.text)
 
     # 2. Context Assembly
     context = (
-        context_assembly.assemble_context(db, classification.intent_type, classification.entities)
+        context_assembly.assemble_context(db, tenant_id, classification.intent_type, classification.entities)
         if classification.intent_type
         else {}
     )
@@ -85,7 +90,7 @@ def submit_intent(request: IntentRequest, db: Session = Depends(get_db)) -> Inte
 
     # 4. Action Orchestrator
     step_builder = _STEP_BUILDERS[classification.intent_type]
-    saga_steps = step_builder(db, log.id, classification.entities)
+    saga_steps = step_builder(db, tenant_id, log.id, classification.entities)
     saga_result = run_saga(db, saga_steps)
     plan_steps = [PlanStep(**s) for s in saga_result.steps]
     audit.record_plan(log, saga_result.steps)

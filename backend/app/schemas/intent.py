@@ -7,6 +7,8 @@ from pydantic import BaseModel
 
 class IntentRequest(BaseModel):
     text: str
+    # digital (self-service) | agent (assisted) | partner - see models/intent_log.py
+    channel: str = "agent"
 
 
 class PlanStep(BaseModel):

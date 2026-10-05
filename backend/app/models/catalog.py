@@ -27,7 +27,8 @@ class ProductSpecification(Base):
     __tablename__ = "product_specifications"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    name: Mapped[str] = mapped_column(String(200), unique=True)
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id"))
+    name: Mapped[str] = mapped_column(String(200))
     product_line: Mapped[str] = mapped_column(String(100))  # e.g. "connectivity", "voip", "mobile", "addon"
     is_atomic: Mapped[bool] = mapped_column(default=True)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=utcnow)
@@ -42,6 +43,7 @@ class ProductOffering(Base):
     __tablename__ = "product_offerings"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id"))
     name: Mapped[str] = mapped_column(String(200))
     segment: Mapped[str] = mapped_column(String(100))  # e.g. "B2C", "B2B-SMB"
     status: Mapped[OfferingStatus] = mapped_column(Enum(OfferingStatus), default=OfferingStatus.draft)
@@ -103,6 +105,7 @@ class BundleCompatibilityRule(Base):
     __tablename__ = "bundle_compatibility_rules"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id"))
     primary_product_line: Mapped[str] = mapped_column(String(100))
     addon_product_line: Mapped[str] = mapped_column(String(100))
     max_addons: Mapped[int] = mapped_column(Integer, default=5)

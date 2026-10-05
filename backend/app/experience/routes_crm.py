@@ -35,6 +35,7 @@ from app.schemas.crm import (
     TroubleTicketOut,
     WorkOrderOut,
 )
+from app.tenancy import get_current_tenant_id
 
 router = APIRouter(prefix="/api", tags=["crm"])
 
@@ -158,36 +159,38 @@ def _work_order_out(wo: WorkOrder) -> WorkOrderOut:
     )
 
 
-def _offering_names(db: Session) -> dict[int, str]:
-    return dict(db.query(ProductOffering.id, ProductOffering.name).all())
+def _offering_names(db: Session, tenant_id: int) -> dict[int, str]:
+    return dict(db.query(ProductOffering.id, ProductOffering.name).filter(ProductOffering.tenant_id == tenant_id).all())
 
 
 # ---------- Parties / Customer 360 ----------
 
 
 @router.get("/parties", response_model=list[PartyOut])
-def list_parties(q: str | None = None, db: Session = Depends(get_db)) -> list[Party]:
-    query = db.query(Party)
+def list_parties(
+    q: str | None = None, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)
+) -> list[Party]:
+    query = db.query(Party).filter(Party.tenant_id == tenant_id)
     if q:
         query = query.filter(Party.name.ilike(f"%{q}%"))
     return query.order_by(Party.name).all()
 
 
 @router.get("/parties/{party_id}/360", response_model=Party360Out)
-def party_360(party_id: int, db: Session = Depends(get_db)) -> Party360Out:
+def party_360(party_id: int, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> Party360Out:
     party = db.get(Party, party_id)
-    if party is None:
+    if party is None or party.tenant_id != tenant_id:
         raise HTTPException(404, "Party not found")
-    offering_names = _offering_names(db)
+    offering_names = _offering_names(db, tenant_id)
 
-    leads = db.query(Lead).filter(Lead.party_id == party_id).all()
+    leads = db.query(Lead).filter(Lead.tenant_id == tenant_id, Lead.party_id == party_id).all()
     lead_ids = [l.id for l in leads]
-    opportunities = db.query(Opportunity).filter(Opportunity.lead_id.in_(lead_ids)).all() if lead_ids else []
+    opportunities = db.query(Opportunity).filter(Opportunity.tenant_id == tenant_id, Opportunity.lead_id.in_(lead_ids)).all() if lead_ids else []
     opp_ids = [o.id for o in opportunities]
-    quotes = db.query(Quote).filter(Quote.opportunity_id.in_(opp_ids)).all() if opp_ids else []
-    orders = db.query(Order).filter(Order.party_id == party_id).all()
-    billing_account = db.query(BillingAccount).filter(BillingAccount.party_id == party_id).first()
-    tickets = db.query(TroubleTicket).filter(TroubleTicket.party_id == party_id).all()
+    quotes = db.query(Quote).filter(Quote.tenant_id == tenant_id, Quote.opportunity_id.in_(opp_ids)).all() if opp_ids else []
+    orders = db.query(Order).filter(Order.tenant_id == tenant_id, Order.party_id == party_id).all()
+    billing_account = db.query(BillingAccount).filter(BillingAccount.tenant_id == tenant_id, BillingAccount.party_id == party_id).first()
+    tickets = db.query(TroubleTicket).filter(TroubleTicket.tenant_id == tenant_id, TroubleTicket.party_id == party_id).all()
 
     return Party360Out(
         party=PartyOut.model_validate(party),
@@ -204,13 +207,15 @@ def party_360(party_id: int, db: Session = Depends(get_db)) -> Party360Out:
 
 
 @router.get("/leads", response_model=list[LeadOut])
-def list_leads(db: Session = Depends(get_db)) -> list[Lead]:
-    return db.query(Lead).order_by(Lead.created_at.desc()).all()
+def list_leads(db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> list[Lead]:
+    return db.query(Lead).filter(Lead.tenant_id == tenant_id).order_by(Lead.created_at.desc()).all()
 
 
 @router.get("/opportunities", response_model=list[OpportunityOut])
-def list_opportunities(stage: str | None = None, db: Session = Depends(get_db)):
-    query = db.query(Opportunity)
+def list_opportunities(
+    stage: str | None = None, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)
+):
+    query = db.query(Opportunity).filter(Opportunity.tenant_id == tenant_id)
     if stage:
         query = query.filter(Opportunity.stage == stage)
     opportunities = query.order_by(Opportunity.updated_at.desc()).all()
@@ -221,19 +226,19 @@ def list_opportunities(stage: str | None = None, db: Session = Depends(get_db)):
 
 
 @router.get("/quotes", response_model=list[QuoteOut])
-def list_quotes(status: str | None = None, db: Session = Depends(get_db)):
-    offering_names = _offering_names(db)
-    query = db.query(Quote)
+def list_quotes(status: str | None = None, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)):
+    offering_names = _offering_names(db, tenant_id)
+    query = db.query(Quote).filter(Quote.tenant_id == tenant_id)
     if status:
         query = query.filter(Quote.status == status)
     return [_quote_out(q, offering_names) for q in query.order_by(Quote.created_at.desc()).all()]
 
 
 @router.get("/quotes/{quote_id}", response_model=QuoteOut)
-def quote_detail(quote_id: int, db: Session = Depends(get_db)) -> QuoteOut:
-    offering_names = _offering_names(db)
+def quote_detail(quote_id: int, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> QuoteOut:
+    offering_names = _offering_names(db, tenant_id)
     quote = db.get(Quote, quote_id)
-    if quote is None:
+    if quote is None or quote.tenant_id != tenant_id:
         raise HTTPException(404, "Quote not found")
     return _quote_out(quote, offering_names)
 
@@ -242,28 +247,28 @@ def quote_detail(quote_id: int, db: Session = Depends(get_db)) -> QuoteOut:
 
 
 @router.get("/orders", response_model=list[OrderOut])
-def list_orders(status: str | None = None, db: Session = Depends(get_db)):
-    query = db.query(Order)
+def list_orders(status: str | None = None, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)):
+    query = db.query(Order).filter(Order.tenant_id == tenant_id)
     if status:
         query = query.filter(Order.status == status)
     orders = query.order_by(Order.created_at.desc()).all()
-    party_names = {p.id: p.name for p in db.query(Party.id, Party.name).all()}
+    party_names = {p.id: p.name for p in db.query(Party.id, Party.name).filter(Party.tenant_id == tenant_id).all()}
     return [_order_out(o, party_names.get(o.party_id, "?")) for o in orders]
 
 
 @router.get("/orders/{order_id}", response_model=OrderOut)
-def order_detail(order_id: int, db: Session = Depends(get_db)) -> OrderOut:
+def order_detail(order_id: int, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> OrderOut:
     order = db.get(Order, order_id)
-    if order is None:
+    if order is None or order.tenant_id != tenant_id:
         raise HTTPException(404, "Order not found")
     party = db.get(Party, order.party_id)
     return _order_out(order, party.name if party else "?")
 
 
 @router.get("/billing-accounts", response_model=list[BillingAccountOut])
-def list_billing_accounts(db: Session = Depends(get_db)):
-    accounts = db.query(BillingAccount).all()
-    party_names = {p.id: p.name for p in db.query(Party.id, Party.name).all()}
+def list_billing_accounts(db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)):
+    accounts = db.query(BillingAccount).filter(BillingAccount.tenant_id == tenant_id).all()
+    party_names = {p.id: p.name for p in db.query(Party.id, Party.name).filter(Party.tenant_id == tenant_id).all()}
     return [_billing_account_out(a, party_names.get(a.party_id, "?")) for a in accounts]
 
 
@@ -271,8 +276,13 @@ def list_billing_accounts(db: Session = Depends(get_db)):
 
 
 @router.get("/tickets", response_model=list[TroubleTicketOut])
-def list_tickets(status: str | None = None, severity: str | None = None, db: Session = Depends(get_db)):
-    query = db.query(TroubleTicket)
+def list_tickets(
+    status: str | None = None,
+    severity: str | None = None,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_current_tenant_id),
+):
+    query = db.query(TroubleTicket).filter(TroubleTicket.tenant_id == tenant_id)
     if status:
         query = query.filter(TroubleTicket.status == status)
     if severity:
@@ -281,51 +291,62 @@ def list_tickets(status: str | None = None, severity: str | None = None, db: Ses
 
 
 @router.get("/tickets/{ticket_id}", response_model=TroubleTicketOut)
-def ticket_detail(ticket_id: int, db: Session = Depends(get_db)) -> TroubleTicketOut:
+def ticket_detail(
+    ticket_id: int, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)
+) -> TroubleTicketOut:
     ticket = db.get(TroubleTicket, ticket_id)
-    if ticket is None:
+    if ticket is None or ticket.tenant_id != tenant_id:
         raise HTTPException(404, "Ticket not found")
     return _ticket_out(ticket)
 
 
 @router.get("/work-orders", response_model=list[WorkOrderOut])
-def list_work_orders(status: str | None = None, db: Session = Depends(get_db)):
-    query = db.query(WorkOrder)
+def list_work_orders(
+    status: str | None = None, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)
+):
+    query = db.query(WorkOrder).filter(WorkOrder.tenant_id == tenant_id)
     if status:
         query = query.filter(WorkOrder.status == status)
     return [_work_order_out(w) for w in query.order_by(WorkOrder.created_at.desc()).all()]
 
 
 @router.get("/technicians", response_model=list[TechnicianOut])
-def list_technicians(db: Session = Depends(get_db)) -> list[Technician]:
-    return db.query(Technician).all()
+def list_technicians(db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> list[Technician]:
+    return db.query(Technician).filter(Technician.tenant_id == tenant_id).all()
 
 
 # ---------- Dashboard ----------
 
 
 @router.get("/dashboard/summary", response_model=DashboardSummaryOut)
-def dashboard_summary(db: Session = Depends(get_db)) -> DashboardSummaryOut:
+def dashboard_summary(db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> DashboardSummaryOut:
     from app.models.crm import OpportunityStage, QuoteStatus
     from app.models.orders import OrderStatus
 
-    total_parties = db.query(Party).count()
+    total_parties = db.query(Party).filter(Party.tenant_id == tenant_id).count()
     open_opportunities = db.query(Opportunity).filter(
-        Opportunity.stage.in_([OpportunityStage.draft, OpportunityStage.qualified, OpportunityStage.quoted])
+        Opportunity.tenant_id == tenant_id,
+        Opportunity.stage.in_([OpportunityStage.draft, OpportunityStage.qualified, OpportunityStage.quoted]),
     ).count()
-    pipeline_quotes = db.query(Quote).filter(Quote.status.in_([QuoteStatus.draft, QuoteStatus.pending_approval])).all()
+    pipeline_quotes = db.query(Quote).filter(
+        Quote.tenant_id == tenant_id, Quote.status.in_([QuoteStatus.draft, QuoteStatus.pending_approval])
+    ).all()
     pipeline_value = sum(q.total_price for q in pipeline_quotes)
-    pending_approvals = db.query(Quote).filter(Quote.status == QuoteStatus.pending_approval).count()
-    active_orders_list = db.query(Order).filter(Order.status.in_([OrderStatus.active, OrderStatus.changed])).all()
+    pending_approvals = db.query(Quote).filter(Quote.tenant_id == tenant_id, Quote.status == QuoteStatus.pending_approval).count()
+    active_orders_list = db.query(Order).filter(
+        Order.tenant_id == tenant_id, Order.status.in_([OrderStatus.active, OrderStatus.changed])
+    ).all()
     active_orders = len(active_orders_list)
     mrr = sum(o.monthly_price for o in active_orders_list)
 
     severities = ["critical", "high", "medium", "low"]
     open_tickets_by_severity = {
-        sev: db.query(TroubleTicket).filter(TroubleTicket.severity == sev, TroubleTicket.status != "resolved").count()
+        sev: db.query(TroubleTicket)
+        .filter(TroubleTicket.tenant_id == tenant_id, TroubleTicket.severity == sev, TroubleTicket.status != "resolved")
+        .count()
         for sev in severities
     }
-    open_work_orders = db.query(WorkOrder).filter(WorkOrder.status != "complete").count()
+    open_work_orders = db.query(WorkOrder).filter(WorkOrder.tenant_id == tenant_id, WorkOrder.status != "complete").count()
 
     return DashboardSummaryOut(
         total_parties=total_parties,

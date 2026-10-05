@@ -16,7 +16,7 @@ from app.orchestration.orchestrator import SagaStep
 from app.timeutils import utcnow
 
 
-def build_int01_steps(db: Session, execution_id: int, entities: dict[str, Any]) -> list[SagaStep]:
+def build_int01_steps(db: Session, tenant_id: int, execution_id: int, entities: dict[str, Any]) -> list[SagaStep]:
     """INT-01 - Launch a new bundle."""
 
     name = entities["name"]
@@ -32,7 +32,7 @@ def build_int01_steps(db: Session, execution_id: int, entities: dict[str, Any]) 
     state: dict[str, Any] = {}
 
     def step1() -> dict[str, Any]:
-        check = catalog_service.validate_composition(db, composition)
+        check = catalog_service.validate_composition(db, tenant_id, composition)
         if not check.ok:
             raise catalog_service.CompositionError(check.reason)
         state["primary_line"] = check.primary_line
@@ -51,6 +51,7 @@ def build_int01_steps(db: Session, execution_id: int, entities: dict[str, Any]) 
     def step4() -> dict[str, Any]:
         offering = tmf620_adapter.create_offering_version(
             db,
+            tenant_id=tenant_id,
             name=name,
             segment=segment,
             composition=",".join(composition),
@@ -91,7 +92,7 @@ def build_int01_steps(db: Session, execution_id: int, entities: dict[str, Any]) 
     ]
 
 
-def build_int02_steps(db: Session, execution_id: int, entities: dict[str, Any]) -> list[SagaStep]:
+def build_int02_steps(db: Session, tenant_id: int, execution_id: int, entities: dict[str, Any]) -> list[SagaStep]:
     """INT-02 - Modify a live bundle."""
 
     offering_name = entities["offering_name"]
@@ -103,7 +104,7 @@ def build_int02_steps(db: Session, execution_id: int, entities: dict[str, Any]) 
     state: dict[str, Any] = {}
 
     def step1() -> dict[str, Any]:
-        current = tmf620_adapter.get_active_offering_by_name(db, offering_name)
+        current = tmf620_adapter.get_active_offering_by_name(db, tenant_id, offering_name)
         if current is None:
             raise ValueError(f"No active offering named '{offering_name}' found")
         state["current"] = current
@@ -119,6 +120,7 @@ def build_int02_steps(db: Session, execution_id: int, entities: dict[str, Any]) 
         current = state["current"]
         new_offering = tmf620_adapter.create_offering_version(
             db,
+            tenant_id=tenant_id,
             name=current.name,
             segment=new_segment or current.segment,
             composition=current.composition,
@@ -159,7 +161,7 @@ def build_int02_steps(db: Session, execution_id: int, entities: dict[str, Any]) 
     ]
 
 
-def build_int03_steps(db: Session, execution_id: int, entities: dict[str, Any]) -> list[SagaStep]:
+def build_int03_steps(db: Session, tenant_id: int, execution_id: int, entities: dict[str, Any]) -> list[SagaStep]:
     """INT-03 - Retire a bundle."""
 
     offering_name = entities["offering_name"]
@@ -176,10 +178,10 @@ def build_int03_steps(db: Session, execution_id: int, entities: dict[str, Any]) 
             raise catalog_service.MigrationPathRequiredError(
                 "The replacement offering cannot be the same bundle being retired"
             )
-        current = tmf620_adapter.get_active_offering_by_name(db, offering_name)
+        current = tmf620_adapter.get_active_offering_by_name(db, tenant_id, offering_name)
         if current is None:
             raise ValueError(f"No active offering named '{offering_name}' found")
-        replacement = tmf620_adapter.get_active_offering_by_name(db, replacement_name)
+        replacement = tmf620_adapter.get_active_offering_by_name(db, tenant_id, replacement_name)
         if replacement is None:
             raise ValueError(f"Replacement offering '{replacement_name}' not found or not active")
         state["current"] = current

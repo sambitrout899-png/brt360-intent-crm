@@ -11,8 +11,10 @@ from app.models.intent_log import IntentExecutionLog
 from app.timeutils import utcnow
 
 
-def start_execution(db: Session, raw_text: str) -> IntentExecutionLog:
+def start_execution(db: Session, tenant_id: int, raw_text: str, channel: str = "agent") -> IntentExecutionLog:
     log = IntentExecutionLog(
+        tenant_id=tenant_id,
+        channel=channel,
         intent_type="",
         raw_text=raw_text,
         entities_json="{}",
