@@ -5,6 +5,22 @@ import datetime as dt
 from pydantic import BaseModel, Field
 
 
+class TenantCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    slug: str = Field(min_length=1, max_length=100, pattern=r"^[a-z0-9][a-z0-9-]*$")
+    vertical: str = Field(default="both")
+
+
+class TenantOut(BaseModel):
+    id: int
+    name: str
+    slug: str
+    vertical: str
+    created_at: dt.datetime
+
+    model_config = {"from_attributes": True}
+
+
 class ApprovalChainTierIn(BaseModel):
     approver_tier: str = Field(min_length=1, max_length=100)
 
@@ -153,3 +169,21 @@ class IdentityProviderOut(BaseModel):
     created_at: dt.datetime
 
     model_config = {"from_attributes": True}
+
+
+class TestRunSummaryOut(BaseModel):
+    id: int
+    status: str
+    total: int
+    passed: int
+    failed: int
+    errors: int
+    duration_seconds: float
+    started_at: dt.datetime
+    completed_at: dt.datetime | None
+
+    model_config = {"from_attributes": True}
+
+
+class TestRunOut(TestRunSummaryOut):
+    output: str

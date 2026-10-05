@@ -47,6 +47,7 @@ from app.models.orders import (
 )
 from app.models.sla import SlaClock, SlaClockStatus, SlaPolicy
 from app.models.tenant import Tenant, TenantVertical
+from app.models.testing import TestRun, TestRunStatus
 
 __all__ = [
     "Tenant",
@@ -92,4 +93,6 @@ __all__ = [
     "IdentityVerificationProvider",
     "IdentityVerification",
     "VerificationStatus",
+    "TestRun",
+    "TestRunStatus",
 ]

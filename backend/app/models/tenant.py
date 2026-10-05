@@ -21,10 +21,12 @@ class Tenant(Base):
     record carries a tenant_id (directly, or via its parent FK for
     child/leaf tables - see models/__init__.py for which is which).
 
-    `vertical` is a display/default hint only - it does NOT gate which
-    intents or UI a tenant can use (both B2C and B2B flows work for any
-    tenant); it just picks sensible defaults when an admin sets up a new
-    tenant's approval chains/SLA policies/product attributes.
+    `vertical` is a default hint for most of the platform (approval
+    chains/SLA policies/product attributes work for any tenant regardless
+    of vertical) - but Phase 3's process-pack intents are actually gated
+    by it: INT-13 (identity verification) requires b2c/both, INT-14
+    (multi-site provisioning) requires b2b/both. See
+    app/intent_engine/context_assembly.py's "vertical_blocked" checks.
     """
 
     __tablename__ = "tenants"

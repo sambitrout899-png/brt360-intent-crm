@@ -9,13 +9,14 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app.crm_core import attribute_service, sla_service
+from app.crm_core import attribute_service, sla_service, test_runner_service
 from app.db import get_db
 from app.models.approval import ApprovalChainTemplate, ApprovalChainTier
 from app.models.attributes import AttributeConstraintRule, ProductAttributeDefinition, ProductAttributeValue
 from app.models.catalog import ProductSpecification
 from app.models.identity import IdentityVerificationProvider
 from app.models.sla import SlaClock, SlaPolicy
+from app.models.testing import TestRun
 from app.schemas.admin import (
     ApprovalChainTemplateCreate,
     ApprovalChainTemplateOut,
@@ -32,6 +33,8 @@ from app.schemas.admin import (
     SlaPolicyCreate,
     SlaPolicyOut,
     SlaSweepResultOut,
+    TestRunOut,
+    TestRunSummaryOut,
 )
 from app.tenancy import get_current_tenant_id
 
@@ -419,3 +422,28 @@ def delete_identity_provider(
         raise HTTPException(404, "Identity provider not found")
     db.delete(provider)
     db.commit()
+
+
+@router.post("/test-runs", response_model=TestRunOut, status_code=201)
+def trigger_test_run(db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> TestRun:
+    """Runs the real backend pytest suite as a subprocess and blocks
+    until it finishes (typically ~10s). Rejected with 409 if another run
+    is already in progress.
+    """
+    try:
+        return test_runner_service.run_suite(db, tenant_id)
+    except RuntimeError as e:
+        raise HTTPException(409, str(e))
+
+
+@router.get("/test-runs", response_model=list[TestRunSummaryOut])
+def list_test_runs(db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> list[TestRun]:
+    return db.query(TestRun).filter(TestRun.tenant_id == tenant_id).order_by(TestRun.started_at.desc()).limit(20).all()
+
+
+@router.get("/test-runs/{run_id}", response_model=TestRunOut)
+def get_test_run(run_id: int, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> TestRun:
+    run = db.get(TestRun, run_id)
+    if run is None or run.tenant_id != tenant_id:
+        raise HTTPException(404, "Test run not found")
+    return run

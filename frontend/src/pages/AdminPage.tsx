@@ -5,6 +5,7 @@ import {
   createAttributeDefinition,
   createIdentityProvider,
   createSlaPolicy,
+  createTenant,
   deactivateApprovalChain,
   deactivateAttributeConstraintRule,
   deactivateIdentityProvider,
@@ -14,6 +15,7 @@ import {
   deleteAttributeDefinition,
   deleteIdentityProvider,
   deleteSlaPolicy,
+  getTestRun,
   listApprovalChains,
   listAttributeConstraintRules,
   listAttributeDefinitions,
@@ -22,10 +24,13 @@ import {
   listProductSpecifications,
   listSlaClocks,
   listSlaPolicies,
+  listTenants,
+  listTestRuns,
   processDueSlaClocks,
   setAttributeValue,
+  triggerTestRun,
 } from "../api/client";
-import { ATTRIBUTE_DATA_TYPES, CONSTRAINT_OPERATORS, CONSTRAINT_RULE_TYPES, SLA_BREACH_ACTIONS } from "../api/types";
+import { ATTRIBUTE_DATA_TYPES, CONSTRAINT_OPERATORS, CONSTRAINT_RULE_TYPES, SLA_BREACH_ACTIONS, TENANT_VERTICALS } from "../api/types";
 import type {
   ApprovalChainTemplate,
   AttributeConstraintRule,
@@ -35,9 +40,12 @@ import type {
   ProductSpecification,
   SlaClock,
   SlaPolicy,
+  Tenant,
+  TestRun,
+  TestRunSummary,
 } from "../api/types";
 
-type Section = "approvals" | "sla" | "attributes" | "identity";
+type Section = "approvals" | "sla" | "attributes" | "identity" | "tenants" | "tests";
 
 function emptyChainForm() {
   return { name: "", segment: "", minPct: "0", maxPct: "100", tiers: [""] };
@@ -729,6 +737,167 @@ function IdentityProvidersSection() {
   );
 }
 
+function emptyTenantForm() {
+  return { name: "", slug: "", vertical: TENANT_VERTICALS[2] as string };
+}
+
+function TenantsSection() {
+  const [tenants, setTenants] = useState<Tenant[]>([]);
+  const [form, setForm] = useState(emptyTenantForm());
+  const [error, setError] = useState<string | null>(null);
+
+  function load() {
+    listTenants().then(setTenants);
+  }
+
+  useEffect(load, []);
+
+  async function submit() {
+    setError(null);
+    if (!form.name.trim() || !form.slug.trim()) {
+      setError("Name and slug are required.");
+      return;
+    }
+    try {
+      await createTenant({ name: form.name.trim(), slug: form.slug.trim(), vertical: form.vertical });
+      setForm(emptyTenantForm());
+      load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to create tenant.");
+    }
+  }
+
+  return (
+    <div className="space-y-6">
+      <p className="text-sm text-slate-400">
+        Every telecom operator using this platform is a tenant - fully data-isolated from every other tenant. A new
+        tenant is seeded immediately with its own atomic products, default approval chains and identity providers, so
+        it's usable right away. Switch between tenants using the selector in the top-right of the header.
+      </p>
+
+      <div className="space-y-2">
+        {tenants.map((t) => (
+          <div key={t.id} className="flex flex-wrap items-center gap-3 rounded-lg border border-slate-700 bg-slate-900/60 px-4 py-3 text-sm">
+            <span className="font-semibold text-slate-200">{t.name}</span>
+            <span className="font-mono text-xs text-slate-500">{t.slug}</span>
+            <span className="rounded-md bg-slate-800 px-2 py-0.5 text-xs text-slate-300">{t.vertical}</span>
+          </div>
+        ))}
+        {tenants.length === 0 && <p className="text-sm text-slate-500">No tenants yet.</p>}
+      </div>
+
+      <div className="flex flex-wrap items-end gap-2 rounded-xl border border-slate-700 bg-slate-900/60 p-4">
+        <label className="text-xs text-slate-400">
+          Name
+          <input value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} className="mt-1 w-48 rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200" placeholder="Acme Telecom" />
+        </label>
+        <label className="text-xs text-slate-400">
+          Slug
+          <input value={form.slug} onChange={(e) => setForm((f) => ({ ...f, slug: e.target.value }))} className="mt-1 w-40 rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200" placeholder="acme-telecom" />
+        </label>
+        <label className="text-xs text-slate-400">
+          Vertical
+          <select value={form.vertical} onChange={(e) => setForm((f) => ({ ...f, vertical: e.target.value }))} className="mt-1 w-28 rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200">
+            {TENANT_VERTICALS.map((v) => <option key={v} value={v}>{v}</option>)}
+          </select>
+        </label>
+        <button onClick={submit} className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-bold text-white hover:bg-sky-500">
+          Create Tenant
+        </button>
+      </div>
+
+      {error && <p className="text-xs text-red-400">{error}</p>}
+    </div>
+  );
+}
+
+const TEST_STATUS_STYLES: Record<string, string> = {
+  running: "bg-sky-500/15 text-sky-400 border-sky-500/30",
+  passed: "bg-emerald-500/15 text-emerald-400 border-emerald-500/30",
+  failed: "bg-red-500/15 text-red-400 border-red-500/30",
+  error: "bg-red-500/15 text-red-400 border-red-500/30",
+};
+
+function TestSuiteSection() {
+  const [runs, setRuns] = useState<TestRunSummary[]>([]);
+  const [selected, setSelected] = useState<TestRun | null>(null);
+  const [running, setRunning] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function load() {
+    listTestRuns().then(setRuns);
+  }
+
+  useEffect(load, []);
+
+  async function run() {
+    setError(null);
+    setRunning(true);
+    try {
+      const result = await triggerTestRun();
+      setSelected(result);
+      load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to run tests.");
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  async function viewDetail(id: number) {
+    const detail = await getTestRun(id);
+    setSelected(detail);
+  }
+
+  return (
+    <div className="space-y-6">
+      <p className="text-sm text-slate-400">
+        Runs the real backend test suite as a subprocess and reports the result - no SSH access needed to verify a
+        deployment is healthy. Tests run against their own isolated in-memory database, never the tenant's real data,
+        so this is safe to run against production. Takes roughly 10-20 seconds.
+      </p>
+
+      <button onClick={run} disabled={running} className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-bold text-white hover:bg-sky-500 disabled:opacity-50">
+        {running ? "Running…" : "Run Full Test Suite"}
+      </button>
+      {error && <p className="text-xs text-red-400">{error}</p>}
+
+      {selected && (
+        <div className="rounded-xl border border-slate-700 bg-slate-900/60 p-4">
+          <div className="mb-3 flex flex-wrap items-center gap-3">
+            <span className={`rounded-md border px-2 py-0.5 text-xs font-bold ${TEST_STATUS_STYLES[selected.status]}`}>{selected.status}</span>
+            <span className="text-sm text-slate-300">{selected.passed} passed</span>
+            {selected.failed > 0 && <span className="text-sm text-red-400">{selected.failed} failed</span>}
+            {selected.errors > 0 && <span className="text-sm text-red-400">{selected.errors} errors</span>}
+            <span className="text-xs text-slate-500">{selected.duration_seconds}s</span>
+          </div>
+          <pre className="max-h-96 overflow-auto rounded-lg bg-slate-950 p-3 text-xs text-slate-400">{selected.output}</pre>
+        </div>
+      )}
+
+      <div>
+        <h3 className="mb-3 text-base font-bold text-slate-100">History</h3>
+        <div className="space-y-2">
+          {runs.map((r) => (
+            <button
+              key={r.id}
+              onClick={() => viewDetail(r.id)}
+              className="flex w-full flex-wrap items-center gap-3 rounded-lg border border-slate-700 bg-slate-900/60 px-4 py-3 text-sm text-left hover:border-sky-500"
+            >
+              <span className={`rounded-md border px-2 py-0.5 text-xs font-bold ${TEST_STATUS_STYLES[r.status]}`}>{r.status}</span>
+              <span className="text-slate-300">{r.passed} passed</span>
+              {r.failed > 0 && <span className="text-red-400">{r.failed} failed</span>}
+              <span className="text-xs text-slate-500">{new Date(r.started_at).toLocaleString()}</span>
+              <span className="ml-auto text-xs text-slate-500">{r.duration_seconds}s</span>
+            </button>
+          ))}
+          {runs.length === 0 && <p className="text-sm text-slate-500">No test runs yet.</p>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function AdminPage() {
   const [section, setSection] = useState<Section>("approvals");
 
@@ -745,6 +914,8 @@ export default function AdminPage() {
           ["sla", "SLA Policies"],
           ["attributes", "Product Attributes"],
           ["identity", "Identity Providers"],
+          ["tenants", "Tenants"],
+          ["tests", "Test Suite"],
         ] as [Section, string][]).map(([id, label]) => (
           <button
             key={id}
@@ -762,6 +933,8 @@ export default function AdminPage() {
       {section === "sla" && <SlaPoliciesSection />}
       {section === "attributes" && <ProductAttributesSection />}
       {section === "identity" && <IdentityProvidersSection />}
+      {section === "tenants" && <TenantsSection />}
+      {section === "tests" && <TestSuiteSection />}
     </div>
   );
 }

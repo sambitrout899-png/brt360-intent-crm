@@ -20,16 +20,47 @@ import type {
   SlaPolicy,
   SlaSweepResult,
   Technician,
+  Tenant,
+  TestRun,
+  TestRunSummary,
   TroubleTicket,
   WorkOrder,
 } from "./types";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "http://127.0.0.1:8000";
 
+const TENANT_STORAGE_KEY = "brt360_active_tenant_slug";
+
+export function getActiveTenantSlug(): string | null {
+  try {
+    return localStorage.getItem(TENANT_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function setActiveTenantSlug(slug: string | null): void {
+  try {
+    if (slug) {
+      localStorage.setItem(TENANT_STORAGE_KEY, slug);
+    } else {
+      localStorage.removeItem(TENANT_STORAGE_KEY);
+    }
+  } catch {
+    // Private browsing or storage disabled - the backend falls back to
+    // the "default" tenant when no header is sent, so this is harmless.
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const tenantSlug = getActiveTenantSlug();
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (tenantSlug) {
+    headers["X-Tenant-Slug"] = tenantSlug;
+  }
   const res = await fetch(`${API_BASE}${path}`, {
-    headers: { "Content-Type": "application/json" },
     ...init,
+    headers: { ...headers, ...(init?.headers as Record<string, string> | undefined) },
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
@@ -39,6 +70,26 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     return undefined as T;
   }
   return res.json() as Promise<T>;
+}
+
+export function listTenants(): Promise<Tenant[]> {
+  return request<Tenant[]>("/api/platform/tenants");
+}
+
+export function createTenant(payload: { name: string; slug: string; vertical: string }): Promise<Tenant> {
+  return request<Tenant>("/api/platform/tenants", { method: "POST", body: JSON.stringify(payload) });
+}
+
+export function triggerTestRun(): Promise<TestRun> {
+  return request<TestRun>("/api/admin/test-runs", { method: "POST" });
+}
+
+export function listTestRuns(): Promise<TestRunSummary[]> {
+  return request<TestRunSummary[]>("/api/admin/test-runs");
+}
+
+export function getTestRun(id: number): Promise<TestRun> {
+  return request<TestRun>(`/api/admin/test-runs/${id}`);
 }
 
 export function submitIntent(text: string): Promise<IntentResponse> {

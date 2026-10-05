@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import AdminPage from "./pages/AdminPage";
 import AuditLogPage from "./pages/AuditLogPage";
 import CatalogPage from "./pages/CatalogPage";
@@ -8,6 +8,8 @@ import IntentCommandBar from "./pages/IntentCommandBar";
 import OrdersPage from "./pages/OrdersPage";
 import PipelinePage from "./pages/PipelinePage";
 import TicketsPage from "./pages/TicketsPage";
+import { getActiveTenantSlug, listTenants, setActiveTenantSlug } from "./api/client";
+import type { Tenant } from "./api/types";
 
 type Tab = "dashboard" | "customer" | "pipeline" | "orders" | "tickets" | "catalog" | "intent" | "audit" | "admin";
 
@@ -26,10 +28,25 @@ const TABS: { id: Tab; label: string }[] = [
 export default function App() {
   const [tab, setTab] = useState<Tab>("dashboard");
   const [intentPrefill, setIntentPrefill] = useState("");
+  const [tenants, setTenants] = useState<Tenant[]>([]);
+  const [activeSlug, setActiveSlug] = useState(getActiveTenantSlug() ?? "default");
+
+  useEffect(() => {
+    listTenants().then(setTenants);
+  }, []);
 
   function requestIntent(text: string) {
     setIntentPrefill(text);
     setTab("intent");
+  }
+
+  function switchTenant(slug: string) {
+    setActiveTenantSlug(slug === "default" ? null : slug);
+    setActiveSlug(slug);
+    // Every page fetches its own data in a useEffect with no tenant
+    // dependency - a full reload is the simplest way to guarantee
+    // everything re-fetches under the newly selected tenant.
+    window.location.reload();
   }
 
   return (
@@ -52,6 +69,19 @@ export default function App() {
               </button>
             ))}
           </nav>
+          <select
+            value={activeSlug}
+            onChange={(e) => switchTenant(e.target.value)}
+            className="ml-auto rounded-lg border border-slate-700 bg-slate-800 px-3 py-1.5 text-sm font-semibold text-slate-200"
+            title="Active tenant"
+          >
+            {tenants.length === 0 && <option value="default">default</option>}
+            {tenants.map((t) => (
+              <option key={t.slug} value={t.slug}>
+                {t.name} ({t.vertical})
+              </option>
+            ))}
+          </select>
         </div>
       </header>
 

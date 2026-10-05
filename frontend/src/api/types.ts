@@ -1,3 +1,13 @@
+export const TENANT_VERTICALS = ["b2c", "b2b", "both"] as const;
+
+export interface Tenant {
+  id: number;
+  name: string;
+  slug: string;
+  vertical: string;
+  created_at: string;
+}
+
 export interface PlanStep {
   step: number;
   action: string;
@@ -320,6 +330,22 @@ export interface IdentityProvider {
   name: string;
   is_active: boolean;
   created_at: string;
+}
+
+export interface TestRunSummary {
+  id: number;
+  status: "running" | "passed" | "failed" | "error";
+  total: number;
+  passed: number;
+  failed: number;
+  errors: number;
+  duration_seconds: number;
+  started_at: string;
+  completed_at: string | null;
+}
+
+export interface TestRun extends TestRunSummary {
+  output: string;
 }
 
 export interface Party360 {
