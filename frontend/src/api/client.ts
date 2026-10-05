@@ -1,5 +1,6 @@
 import type {
   ApprovalChainTemplate,
+  AttributeConstraintRule,
   AuditLogDetail,
   AuditLogEntry,
   DashboardSummary,
@@ -10,6 +11,9 @@ import type {
   Party,
   Party360,
   BillingAccount,
+  ProductAttributeDefinition,
+  ProductAttributeValue,
+  ProductSpecification,
   Quote,
   SlaClock,
   SlaPolicy,
@@ -168,4 +172,61 @@ export function listSlaClocks(status?: string): Promise<SlaClock[]> {
 
 export function processDueSlaClocks(): Promise<SlaSweepResult> {
   return request<SlaSweepResult>("/api/admin/sla/process-due", { method: "POST" });
+}
+
+export function listProductSpecifications(): Promise<ProductSpecification[]> {
+  return request<ProductSpecification[]>("/api/admin/product-specifications");
+}
+
+export function listAttributeDefinitions(): Promise<ProductAttributeDefinition[]> {
+  return request<ProductAttributeDefinition[]>("/api/admin/attribute-definitions");
+}
+
+export function createAttributeDefinition(payload: {
+  name: string;
+  data_type: string;
+  unit: string | null;
+  allowed_values: string | null;
+}): Promise<ProductAttributeDefinition> {
+  return request<ProductAttributeDefinition>("/api/admin/attribute-definitions", { method: "POST", body: JSON.stringify(payload) });
+}
+
+export function deleteAttributeDefinition(id: number): Promise<void> {
+  return request<void>(`/api/admin/attribute-definitions/${id}`, { method: "DELETE" });
+}
+
+export function listAttributeValues(productSpecificationId?: number): Promise<ProductAttributeValue[]> {
+  const qs = productSpecificationId != null ? `?product_specification_id=${productSpecificationId}` : "";
+  return request<ProductAttributeValue[]>(`/api/admin/attribute-values${qs}`);
+}
+
+export function setAttributeValue(payload: {
+  product_specification_id: number;
+  attribute_definition_id: number;
+  value: string;
+}): Promise<ProductAttributeValue> {
+  return request<ProductAttributeValue>("/api/admin/attribute-values", { method: "PUT", body: JSON.stringify(payload) });
+}
+
+export function listAttributeConstraintRules(): Promise<AttributeConstraintRule[]> {
+  return request<AttributeConstraintRule[]>("/api/admin/attribute-constraint-rules");
+}
+
+export function createAttributeConstraintRule(payload: {
+  if_product_spec_id: number;
+  if_attribute_id: number;
+  operator: string;
+  threshold: string;
+  rule_type: string;
+  then_product_spec_id: number;
+}): Promise<AttributeConstraintRule> {
+  return request<AttributeConstraintRule>("/api/admin/attribute-constraint-rules", { method: "POST", body: JSON.stringify(payload) });
+}
+
+export function deactivateAttributeConstraintRule(id: number): Promise<void> {
+  return request<void>(`/api/admin/attribute-constraint-rules/${id}/deactivate`, { method: "PATCH" });
+}
+
+export function deleteAttributeConstraintRule(id: number): Promise<void> {
+  return request<void>(`/api/admin/attribute-constraint-rules/${id}`, { method: "DELETE" });
 }

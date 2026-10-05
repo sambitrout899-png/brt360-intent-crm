@@ -7,6 +7,11 @@ from app.models.assurance import (
     TroubleTicket,
     WorkOrder,
 )
+from app.models.attributes import (
+    AttributeConstraintRule,
+    ProductAttributeDefinition,
+    ProductAttributeValue,
+)
 from app.models.catalog import (
     BundleCompatibilityRule,
     BundleEligibilityRule,
@@ -78,4 +83,7 @@ __all__ = [
     "SlaPolicy",
     "SlaClock",
     "SlaClockStatus",
+    "ProductAttributeDefinition",
+    "ProductAttributeValue",
+    "AttributeConstraintRule",
 ]

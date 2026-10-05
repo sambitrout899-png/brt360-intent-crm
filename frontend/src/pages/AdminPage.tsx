@@ -1,20 +1,38 @@
 import { useEffect, useState } from "react";
 import {
   createApprovalChain,
+  createAttributeConstraintRule,
+  createAttributeDefinition,
   createSlaPolicy,
   deactivateApprovalChain,
+  deactivateAttributeConstraintRule,
   deactivateSlaPolicy,
   deleteApprovalChain,
+  deleteAttributeConstraintRule,
+  deleteAttributeDefinition,
   deleteSlaPolicy,
   listApprovalChains,
+  listAttributeConstraintRules,
+  listAttributeDefinitions,
+  listAttributeValues,
+  listProductSpecifications,
   listSlaClocks,
   listSlaPolicies,
   processDueSlaClocks,
+  setAttributeValue,
 } from "../api/client";
-import { SLA_BREACH_ACTIONS } from "../api/types";
-import type { ApprovalChainTemplate, SlaClock, SlaPolicy } from "../api/types";
+import { ATTRIBUTE_DATA_TYPES, CONSTRAINT_OPERATORS, CONSTRAINT_RULE_TYPES, SLA_BREACH_ACTIONS } from "../api/types";
+import type {
+  ApprovalChainTemplate,
+  AttributeConstraintRule,
+  ProductAttributeDefinition,
+  ProductAttributeValue,
+  ProductSpecification,
+  SlaClock,
+  SlaPolicy,
+} from "../api/types";
 
-type Section = "approvals" | "sla";
+type Section = "approvals" | "sla" | "attributes";
 
 function emptyChainForm() {
   return { name: "", segment: "", minPct: "0", maxPct: "100", tiers: [""] };
@@ -359,6 +377,274 @@ function SlaPoliciesSection() {
   );
 }
 
+function emptyDefinitionForm() {
+  return { name: "", dataType: ATTRIBUTE_DATA_TYPES[0] as string, unit: "", allowedValues: "" };
+}
+
+function ProductAttributesSection() {
+  const [specs, setSpecs] = useState<ProductSpecification[]>([]);
+  const [definitions, setDefinitions] = useState<ProductAttributeDefinition[]>([]);
+  const [values, setValues] = useState<ProductAttributeValue[]>([]);
+  const [rules, setRules] = useState<AttributeConstraintRule[]>([]);
+
+  const [defForm, setDefForm] = useState(emptyDefinitionForm());
+  const [valueForm, setValueForm] = useState({ specId: 0, defId: 0, value: "" });
+  const [ruleForm, setRuleForm] = useState({ ifSpecId: 0, ifDefId: 0, operator: "eq", threshold: "", ruleType: "requires", thenSpecId: 0 });
+  const [error, setError] = useState<string | null>(null);
+
+  function load() {
+    listProductSpecifications().then(setSpecs);
+    listAttributeDefinitions().then(setDefinitions);
+    listAttributeValues().then(setValues);
+    listAttributeConstraintRules().then(setRules);
+  }
+
+  useEffect(load, []);
+
+  useEffect(() => {
+    if (specs.length && !valueForm.specId) {
+      setValueForm((f) => ({ ...f, specId: specs[0].id }));
+      setRuleForm((f) => ({ ...f, ifSpecId: specs[0].id, thenSpecId: specs[0].id }));
+    }
+    if (definitions.length && !valueForm.defId) {
+      setValueForm((f) => ({ ...f, defId: definitions[0].id }));
+      setRuleForm((f) => ({ ...f, ifDefId: definitions[0].id }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [specs, definitions]);
+
+  async function submitDefinition() {
+    setError(null);
+    if (!defForm.name.trim()) {
+      setError("Attribute name is required.");
+      return;
+    }
+    try {
+      await createAttributeDefinition({
+        name: defForm.name.trim(),
+        data_type: defForm.dataType,
+        unit: defForm.unit.trim() || null,
+        allowed_values: defForm.allowedValues.trim() || null,
+      });
+      setDefForm(emptyDefinitionForm());
+      load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to create attribute.");
+    }
+  }
+
+  async function removeDefinition(id: number) {
+    await deleteAttributeDefinition(id);
+    load();
+  }
+
+  async function submitValue() {
+    setError(null);
+    if (!valueForm.value.trim() || !valueForm.specId || !valueForm.defId) {
+      setError("Product, attribute and value are all required.");
+      return;
+    }
+    try {
+      await setAttributeValue({
+        product_specification_id: valueForm.specId,
+        attribute_definition_id: valueForm.defId,
+        value: valueForm.value.trim(),
+      });
+      setValueForm((f) => ({ ...f, value: "" }));
+      load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to set attribute value.");
+    }
+  }
+
+  async function submitRule() {
+    setError(null);
+    if (!ruleForm.threshold.trim()) {
+      setError("Threshold is required.");
+      return;
+    }
+    try {
+      await createAttributeConstraintRule({
+        if_product_spec_id: ruleForm.ifSpecId,
+        if_attribute_id: ruleForm.ifDefId,
+        operator: ruleForm.operator,
+        threshold: ruleForm.threshold.trim(),
+        rule_type: ruleForm.ruleType,
+        then_product_spec_id: ruleForm.thenSpecId,
+      });
+      setRuleForm((f) => ({ ...f, threshold: "" }));
+      load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to create constraint rule.");
+    }
+  }
+
+  async function deactivateRule(id: number) {
+    await deactivateAttributeConstraintRule(id);
+    load();
+  }
+
+  async function removeRule(id: number) {
+    await deleteAttributeConstraintRule(id);
+    load();
+  }
+
+  const specName = (id: number) => specs.find((s) => s.id === id)?.name ?? `#${id}`;
+
+  return (
+    <div className="space-y-6">
+      <p className="text-sm text-slate-400">
+        Typed attributes on atomic products (e.g. Fiber1000's Download Speed), and requires/excludes rules keyed off
+        those values - a second, finer-grained check that runs alongside the existing product-line compatibility
+        rules every time a bundle composition is validated (INT-01/02/05).
+      </p>
+
+      <div>
+        <h3 className="mb-3 text-base font-bold text-slate-100">Attribute Definitions</h3>
+        <div className="space-y-2">
+          {definitions.map((d) => (
+            <div key={d.id} className="flex flex-wrap items-center gap-3 rounded-lg border border-slate-700 bg-slate-900/60 px-4 py-3 text-sm">
+              <span className="font-semibold text-slate-200">{d.name}</span>
+              <span className="rounded-md bg-slate-800 px-2 py-0.5 text-xs text-slate-300">{d.data_type}</span>
+              {d.unit && <span className="text-xs text-slate-500">{d.unit}</span>}
+              {d.allowed_values && <span className="text-xs text-slate-500">values: {d.allowed_values}</span>}
+              <button onClick={() => removeDefinition(d.id)} className="ml-auto rounded-md border border-slate-700 px-2.5 py-1 text-xs font-bold text-slate-300 hover:border-red-500 hover:text-red-400">
+                Delete
+              </button>
+            </div>
+          ))}
+          {definitions.length === 0 && <p className="text-sm text-slate-500">No attributes defined yet.</p>}
+        </div>
+        <div className="mt-3 flex flex-wrap items-end gap-2 rounded-xl border border-slate-700 bg-slate-900/60 p-4">
+          <label className="text-xs text-slate-400">
+            Name
+            <input value={defForm.name} onChange={(e) => setDefForm((f) => ({ ...f, name: e.target.value }))} className="mt-1 w-40 rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200" placeholder="Download Speed" />
+          </label>
+          <label className="text-xs text-slate-400">
+            Type
+            <select value={defForm.dataType} onChange={(e) => setDefForm((f) => ({ ...f, dataType: e.target.value }))} className="mt-1 w-28 rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200">
+              {ATTRIBUTE_DATA_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+            </select>
+          </label>
+          <label className="text-xs text-slate-400">
+            Unit
+            <input value={defForm.unit} onChange={(e) => setDefForm((f) => ({ ...f, unit: e.target.value }))} className="mt-1 w-24 rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200" placeholder="Mbps" />
+          </label>
+          <label className="text-xs text-slate-400">
+            Allowed values (enum)
+            <input value={defForm.allowedValues} onChange={(e) => setDefForm((f) => ({ ...f, allowedValues: e.target.value }))} className="mt-1 w-40 rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200" placeholder="a,b,c" />
+          </label>
+          <button onClick={submitDefinition} className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-bold text-white hover:bg-sky-500">
+            Add
+          </button>
+        </div>
+      </div>
+
+      <div>
+        <h3 className="mb-3 text-base font-bold text-slate-100">Attribute Values</h3>
+        <div className="space-y-2">
+          {values.map((v) => (
+            <div key={v.id} className="flex flex-wrap items-center gap-3 rounded-lg border border-slate-700 bg-slate-900/60 px-4 py-3 text-sm">
+              <span className="text-slate-200">{specName(v.product_specification_id)}</span>
+              <span className="text-xs text-slate-500">{v.attribute_name} =</span>
+              <span className="font-semibold text-slate-200">{v.value}</span>
+            </div>
+          ))}
+          {values.length === 0 && <p className="text-sm text-slate-500">No attribute values set yet.</p>}
+        </div>
+        <div className="mt-3 flex flex-wrap items-end gap-2 rounded-xl border border-slate-700 bg-slate-900/60 p-4">
+          <label className="text-xs text-slate-400">
+            Product
+            <select value={valueForm.specId} onChange={(e) => setValueForm((f) => ({ ...f, specId: Number(e.target.value) }))} className="mt-1 w-40 rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200">
+              {specs.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+          </label>
+          <label className="text-xs text-slate-400">
+            Attribute
+            <select value={valueForm.defId} onChange={(e) => setValueForm((f) => ({ ...f, defId: Number(e.target.value) }))} className="mt-1 w-40 rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200">
+              {definitions.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+            </select>
+          </label>
+          <label className="text-xs text-slate-400">
+            Value
+            <input value={valueForm.value} onChange={(e) => setValueForm((f) => ({ ...f, value: e.target.value }))} className="mt-1 w-28 rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200" placeholder="1000" />
+          </label>
+          <button onClick={submitValue} className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-bold text-white hover:bg-sky-500">
+            Set
+          </button>
+        </div>
+      </div>
+
+      <div>
+        <h3 className="mb-3 text-base font-bold text-slate-100">Constraint Rules</h3>
+        <div className="space-y-2">
+          {rules.map((r) => (
+            <div key={r.id} className={`flex flex-wrap items-center gap-2 rounded-lg border px-4 py-3 text-sm ${r.is_active ? "border-slate-700 bg-slate-900/60" : "border-slate-800 bg-slate-950/60 opacity-60"}`}>
+              <span className="text-slate-200">{r.if_product_name}'s {r.if_attribute_name}</span>
+              <span className="text-xs text-slate-500">{r.operator} {r.threshold}</span>
+              <span className="rounded-md bg-slate-800 px-2 py-0.5 text-xs font-bold text-slate-300">{r.rule_type}</span>
+              <span className="text-slate-200">{r.then_product_name}</span>
+              {!r.is_active && <span className="rounded-md border border-slate-700 px-2 py-0.5 text-xs text-slate-500">inactive</span>}
+              <div className="ml-auto flex gap-2">
+                {r.is_active && (
+                  <button onClick={() => deactivateRule(r.id)} className="rounded-md border border-slate-700 px-2.5 py-1 text-xs font-bold text-slate-300 hover:border-amber-500 hover:text-amber-400">
+                    Deactivate
+                  </button>
+                )}
+                <button onClick={() => removeRule(r.id)} className="rounded-md border border-slate-700 px-2.5 py-1 text-xs font-bold text-slate-300 hover:border-red-500 hover:text-red-400">
+                  Delete
+                </button>
+              </div>
+            </div>
+          ))}
+          {rules.length === 0 && <p className="text-sm text-slate-500">No constraint rules configured yet.</p>}
+        </div>
+        <div className="mt-3 flex flex-wrap items-end gap-2 rounded-xl border border-slate-700 bg-slate-900/60 p-4">
+          <label className="text-xs text-slate-400">
+            If product
+            <select value={ruleForm.ifSpecId} onChange={(e) => setRuleForm((f) => ({ ...f, ifSpecId: Number(e.target.value) }))} className="mt-1 w-32 rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200">
+              {specs.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+          </label>
+          <label className="text-xs text-slate-400">
+            attribute
+            <select value={ruleForm.ifDefId} onChange={(e) => setRuleForm((f) => ({ ...f, ifDefId: Number(e.target.value) }))} className="mt-1 w-32 rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200">
+              {definitions.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+            </select>
+          </label>
+          <label className="text-xs text-slate-400">
+            op
+            <select value={ruleForm.operator} onChange={(e) => setRuleForm((f) => ({ ...f, operator: e.target.value }))} className="mt-1 w-20 rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200">
+              {CONSTRAINT_OPERATORS.map((o) => <option key={o} value={o}>{o}</option>)}
+            </select>
+          </label>
+          <label className="text-xs text-slate-400">
+            threshold
+            <input value={ruleForm.threshold} onChange={(e) => setRuleForm((f) => ({ ...f, threshold: e.target.value }))} className="mt-1 w-24 rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200" placeholder="500" />
+          </label>
+          <label className="text-xs text-slate-400">
+            then
+            <select value={ruleForm.ruleType} onChange={(e) => setRuleForm((f) => ({ ...f, ruleType: e.target.value }))} className="mt-1 w-24 rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200">
+              {CONSTRAINT_RULE_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+            </select>
+          </label>
+          <label className="text-xs text-slate-400">
+            product
+            <select value={ruleForm.thenSpecId} onChange={(e) => setRuleForm((f) => ({ ...f, thenSpecId: Number(e.target.value) }))} className="mt-1 w-32 rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200">
+              {specs.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+          </label>
+          <button onClick={submitRule} className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-bold text-white hover:bg-sky-500">
+            Add Rule
+          </button>
+        </div>
+      </div>
+
+      {error && <p className="text-xs text-red-400">{error}</p>}
+    </div>
+  );
+}
+
 export default function AdminPage() {
   const [section, setSection] = useState<Section>("approvals");
 
@@ -373,6 +659,7 @@ export default function AdminPage() {
         {([
           ["approvals", "Approval Chains"],
           ["sla", "SLA Policies"],
+          ["attributes", "Product Attributes"],
         ] as [Section, string][]).map(([id, label]) => (
           <button
             key={id}
@@ -386,7 +673,9 @@ export default function AdminPage() {
         ))}
       </div>
 
-      {section === "approvals" ? <ApprovalChainsSection /> : <SlaPoliciesSection />}
+      {section === "approvals" && <ApprovalChainsSection />}
+      {section === "sla" && <SlaPoliciesSection />}
+      {section === "attributes" && <ProductAttributesSection />}
     </div>
   );
 }

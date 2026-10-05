@@ -73,3 +73,70 @@ class SlaSweepResultOut(BaseModel):
     execution_id: int
     checked: int
     breached: list[dict]
+
+
+class ProductSpecificationOut(BaseModel):
+    id: int
+    name: str
+    product_line: str
+    is_atomic: bool
+
+    model_config = {"from_attributes": True}
+
+
+class ProductAttributeDefinitionCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    data_type: str = Field(min_length=1, max_length=20)
+    unit: str | None = None
+    allowed_values: str | None = None
+
+
+class ProductAttributeDefinitionOut(BaseModel):
+    id: int
+    name: str
+    data_type: str
+    unit: str | None
+    allowed_values: str | None
+    created_at: dt.datetime
+
+    model_config = {"from_attributes": True}
+
+
+class ProductAttributeValueSet(BaseModel):
+    product_specification_id: int
+    attribute_definition_id: int
+    value: str
+
+
+class ProductAttributeValueOut(BaseModel):
+    id: int
+    product_specification_id: int
+    attribute_definition_id: int
+    attribute_name: str
+    value: str
+
+    model_config = {"from_attributes": True}
+
+
+class AttributeConstraintRuleCreate(BaseModel):
+    if_product_spec_id: int
+    if_attribute_id: int
+    operator: str = Field(min_length=1, max_length=10)
+    threshold: str
+    rule_type: str = Field(min_length=1, max_length=20)
+    then_product_spec_id: int
+
+
+class AttributeConstraintRuleOut(BaseModel):
+    id: int
+    if_product_spec_id: int
+    if_product_name: str
+    if_attribute_id: int
+    if_attribute_name: str
+    operator: str
+    threshold: str
+    rule_type: str
+    then_product_spec_id: int
+    then_product_name: str
+    is_active: bool
+    created_at: dt.datetime

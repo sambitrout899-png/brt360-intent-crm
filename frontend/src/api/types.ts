@@ -113,6 +113,49 @@ export interface Quote {
   feasible: boolean | null;
 }
 
+export const ATTRIBUTE_DATA_TYPES = ["number", "string", "boolean", "enum"] as const;
+export const CONSTRAINT_OPERATORS = ["eq", "ne", "gt", "gte", "lt", "lte"] as const;
+export const CONSTRAINT_RULE_TYPES = ["requires", "excludes"] as const;
+
+export interface ProductSpecification {
+  id: number;
+  name: string;
+  product_line: string;
+  is_atomic: boolean;
+}
+
+export interface ProductAttributeDefinition {
+  id: number;
+  name: string;
+  data_type: string;
+  unit: string | null;
+  allowed_values: string | null;
+  created_at: string;
+}
+
+export interface ProductAttributeValue {
+  id: number;
+  product_specification_id: number;
+  attribute_definition_id: number;
+  attribute_name: string;
+  value: string;
+}
+
+export interface AttributeConstraintRule {
+  id: number;
+  if_product_spec_id: number;
+  if_product_name: string;
+  if_attribute_id: number;
+  if_attribute_name: string;
+  operator: string;
+  threshold: string;
+  rule_type: string;
+  then_product_spec_id: number;
+  then_product_name: string;
+  is_active: boolean;
+  created_at: string;
+}
+
 export interface ApprovalChainTier {
   sequence: number;
   approver_tier: string;

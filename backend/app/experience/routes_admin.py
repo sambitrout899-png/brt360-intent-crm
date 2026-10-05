@@ -9,13 +9,22 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app.crm_core import sla_service
+from app.crm_core import attribute_service, sla_service
 from app.db import get_db
 from app.models.approval import ApprovalChainTemplate, ApprovalChainTier
+from app.models.attributes import AttributeConstraintRule, ProductAttributeDefinition, ProductAttributeValue
+from app.models.catalog import ProductSpecification
 from app.models.sla import SlaClock, SlaPolicy
 from app.schemas.admin import (
     ApprovalChainTemplateCreate,
     ApprovalChainTemplateOut,
+    AttributeConstraintRuleCreate,
+    AttributeConstraintRuleOut,
+    ProductAttributeDefinitionCreate,
+    ProductAttributeDefinitionOut,
+    ProductAttributeValueOut,
+    ProductAttributeValueSet,
+    ProductSpecificationOut,
     SlaClockOut,
     SlaPolicyCreate,
     SlaPolicyOut,
@@ -151,3 +160,212 @@ def process_due_sla_clocks(db: Session = Depends(get_db), tenant_id: int = Depen
     result = sla_service.process_due_clocks(db, tenant_id)
     db.commit()
     return result
+
+
+@router.get("/product-specifications", response_model=list[ProductSpecificationOut])
+def list_product_specifications(
+    db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)
+) -> list[ProductSpecification]:
+    return (
+        db.query(ProductSpecification)
+        .filter(ProductSpecification.tenant_id == tenant_id)
+        .order_by(ProductSpecification.name)
+        .all()
+    )
+
+
+@router.get("/attribute-definitions", response_model=list[ProductAttributeDefinitionOut])
+def list_attribute_definitions(
+    db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)
+) -> list[ProductAttributeDefinition]:
+    return (
+        db.query(ProductAttributeDefinition)
+        .filter(ProductAttributeDefinition.tenant_id == tenant_id)
+        .order_by(ProductAttributeDefinition.name)
+        .all()
+    )
+
+
+@router.post("/attribute-definitions", response_model=ProductAttributeDefinitionOut, status_code=201)
+def create_attribute_definition(
+    payload: ProductAttributeDefinitionCreate,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_current_tenant_id),
+) -> ProductAttributeDefinition:
+    if payload.data_type not in ("number", "string", "boolean", "enum"):
+        raise HTTPException(400, "data_type must be one of: number, string, boolean, enum")
+    definition = ProductAttributeDefinition(
+        tenant_id=tenant_id,
+        name=payload.name,
+        data_type=payload.data_type,
+        unit=payload.unit,
+        allowed_values=payload.allowed_values,
+    )
+    db.add(definition)
+    db.commit()
+    db.refresh(definition)
+    return definition
+
+
+@router.delete("/attribute-definitions/{definition_id}", status_code=204)
+def delete_attribute_definition(
+    definition_id: int, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)
+) -> None:
+    definition = db.get(ProductAttributeDefinition, definition_id)
+    if definition is None or definition.tenant_id != tenant_id:
+        raise HTTPException(404, "Attribute definition not found")
+    db.delete(definition)
+    db.commit()
+
+
+def _owned_spec(db: Session, tenant_id: int, spec_id: int) -> ProductSpecification:
+    spec = db.get(ProductSpecification, spec_id)
+    if spec is None or spec.tenant_id != tenant_id:
+        raise HTTPException(404, f"Product specification {spec_id} not found")
+    return spec
+
+
+def _owned_attribute(db: Session, tenant_id: int, attribute_id: int) -> ProductAttributeDefinition:
+    attribute = db.get(ProductAttributeDefinition, attribute_id)
+    if attribute is None or attribute.tenant_id != tenant_id:
+        raise HTTPException(404, f"Attribute definition {attribute_id} not found")
+    return attribute
+
+
+@router.get("/attribute-values", response_model=list[ProductAttributeValueOut])
+def list_attribute_values(
+    product_specification_id: int | None = None,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_current_tenant_id),
+) -> list[dict]:
+    query = (
+        db.query(ProductAttributeValue, ProductAttributeDefinition)
+        .join(ProductAttributeDefinition, ProductAttributeValue.attribute_definition_id == ProductAttributeDefinition.id)
+        .filter(ProductAttributeDefinition.tenant_id == tenant_id)
+    )
+    if product_specification_id is not None:
+        query = query.filter(ProductAttributeValue.product_specification_id == product_specification_id)
+    rows = query.all()
+    return [
+        {
+            "id": value.id,
+            "product_specification_id": value.product_specification_id,
+            "attribute_definition_id": value.attribute_definition_id,
+            "attribute_name": defn.name,
+            "value": value.value,
+        }
+        for value, defn in rows
+    ]
+
+
+@router.put("/attribute-values", response_model=ProductAttributeValueOut)
+def set_attribute_value(
+    payload: ProductAttributeValueSet, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)
+) -> dict:
+    _owned_spec(db, tenant_id, payload.product_specification_id)
+    attribute = _owned_attribute(db, tenant_id, payload.attribute_definition_id)
+    row = attribute_service.set_attribute_value(
+        db, payload.product_specification_id, payload.attribute_definition_id, payload.value
+    )
+    db.commit()
+    db.refresh(row)
+    return {
+        "id": row.id,
+        "product_specification_id": row.product_specification_id,
+        "attribute_definition_id": row.attribute_definition_id,
+        "attribute_name": attribute.name,
+        "value": row.value,
+    }
+
+
+@router.get("/attribute-constraint-rules", response_model=list[AttributeConstraintRuleOut])
+def list_attribute_constraint_rules(
+    db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)
+) -> list[dict]:
+    rules = db.query(AttributeConstraintRule).filter(AttributeConstraintRule.tenant_id == tenant_id).all()
+    out = []
+    for rule in rules:
+        if_spec = db.get(ProductSpecification, rule.if_product_spec_id)
+        if_attr = db.get(ProductAttributeDefinition, rule.if_attribute_id)
+        then_spec = db.get(ProductSpecification, rule.then_product_spec_id)
+        out.append(
+            {
+                "id": rule.id,
+                "if_product_spec_id": rule.if_product_spec_id,
+                "if_product_name": if_spec.name if if_spec else f"#{rule.if_product_spec_id}",
+                "if_attribute_id": rule.if_attribute_id,
+                "if_attribute_name": if_attr.name if if_attr else f"#{rule.if_attribute_id}",
+                "operator": rule.operator,
+                "threshold": rule.threshold,
+                "rule_type": rule.rule_type,
+                "then_product_spec_id": rule.then_product_spec_id,
+                "then_product_name": then_spec.name if then_spec else f"#{rule.then_product_spec_id}",
+                "is_active": rule.is_active,
+                "created_at": rule.created_at,
+            }
+        )
+    return out
+
+
+@router.post("/attribute-constraint-rules", response_model=AttributeConstraintRuleOut, status_code=201)
+def create_attribute_constraint_rule(
+    payload: AttributeConstraintRuleCreate,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_current_tenant_id),
+) -> dict:
+    if payload.operator not in ("eq", "ne", "gt", "gte", "lt", "lte"):
+        raise HTTPException(400, "operator must be one of: eq, ne, gt, gte, lt, lte")
+    if payload.rule_type not in ("requires", "excludes"):
+        raise HTTPException(400, "rule_type must be 'requires' or 'excludes'")
+    if_spec = _owned_spec(db, tenant_id, payload.if_product_spec_id)
+    if_attr = _owned_attribute(db, tenant_id, payload.if_attribute_id)
+    then_spec = _owned_spec(db, tenant_id, payload.then_product_spec_id)
+
+    rule = AttributeConstraintRule(
+        tenant_id=tenant_id,
+        if_product_spec_id=payload.if_product_spec_id,
+        if_attribute_id=payload.if_attribute_id,
+        operator=payload.operator,
+        threshold=payload.threshold,
+        rule_type=payload.rule_type,
+        then_product_spec_id=payload.then_product_spec_id,
+    )
+    db.add(rule)
+    db.commit()
+    db.refresh(rule)
+    return {
+        "id": rule.id,
+        "if_product_spec_id": rule.if_product_spec_id,
+        "if_product_name": if_spec.name,
+        "if_attribute_id": rule.if_attribute_id,
+        "if_attribute_name": if_attr.name,
+        "operator": rule.operator,
+        "threshold": rule.threshold,
+        "rule_type": rule.rule_type,
+        "then_product_spec_id": rule.then_product_spec_id,
+        "then_product_name": then_spec.name,
+        "is_active": rule.is_active,
+        "created_at": rule.created_at,
+    }
+
+
+@router.patch("/attribute-constraint-rules/{rule_id}/deactivate", status_code=204)
+def deactivate_attribute_constraint_rule(
+    rule_id: int, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)
+) -> None:
+    rule = db.get(AttributeConstraintRule, rule_id)
+    if rule is None or rule.tenant_id != tenant_id:
+        raise HTTPException(404, "Constraint rule not found")
+    rule.is_active = False
+    db.commit()
+
+
+@router.delete("/attribute-constraint-rules/{rule_id}", status_code=204)
+def delete_attribute_constraint_rule(
+    rule_id: int, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)
+) -> None:
+    rule = db.get(AttributeConstraintRule, rule_id)
+    if rule is None or rule.tenant_id != tenant_id:
+        raise HTTPException(404, "Constraint rule not found")
+    db.delete(rule)
+    db.commit()

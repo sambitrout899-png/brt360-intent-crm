@@ -12,6 +12,7 @@ from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
 
+from app.crm_core import attribute_service
 from app.models.catalog import BundleCompatibilityRule, ProductSpecification
 
 
@@ -80,6 +81,12 @@ def validate_composition(db: Session, tenant_id: int, product_names: list[str]) 
             return CompositionCheckResult(
                 primary_line, addon_lines, False, f"Too many add-ons: {len(addon_names)} > max {max_addons}"
             )
+
+    # Second constraint layer: specific attribute VALUES (not just product-line
+    # category) can require/exclude another product in the same bundle.
+    attribute_violations = attribute_service.evaluate_constraints(db, tenant_id, specs)
+    if attribute_violations:
+        return CompositionCheckResult(primary_line, addon_lines, False, "; ".join(attribute_violations))
 
     return CompositionCheckResult(primary_line, addon_lines, True)
 
