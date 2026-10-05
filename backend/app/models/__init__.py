@@ -38,6 +38,7 @@ from app.models.orders import (
     Resource,
     ServiceOrder,
 )
+from app.models.sla import SlaClock, SlaClockStatus, SlaPolicy
 from app.models.tenant import Tenant, TenantVertical
 
 __all__ = [
@@ -74,4 +75,7 @@ __all__ = [
     "WorkOrder",
     "TechnicianAssignment",
     "CompletionEvidence",
+    "SlaPolicy",
+    "SlaClock",
+    "SlaClockStatus",
 ]

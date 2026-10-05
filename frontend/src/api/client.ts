@@ -11,6 +11,9 @@ import type {
   Party360,
   BillingAccount,
   Quote,
+  SlaClock,
+  SlaPolicy,
+  SlaSweepResult,
   Technician,
   TroubleTicket,
   WorkOrder,
@@ -140,4 +143,29 @@ export function deactivateApprovalChain(id: number): Promise<ApprovalChainTempla
 
 export function deleteApprovalChain(id: number): Promise<void> {
   return request<void>(`/api/admin/approval-chains/${id}`, { method: "DELETE" });
+}
+
+export function listSlaPolicies(): Promise<SlaPolicy[]> {
+  return request<SlaPolicy[]>("/api/admin/sla-policies");
+}
+
+export function createSlaPolicy(payload: { clock_type: string; duration_hours: number; on_breach_action: string }): Promise<SlaPolicy> {
+  return request<SlaPolicy>("/api/admin/sla-policies", { method: "POST", body: JSON.stringify(payload) });
+}
+
+export function deactivateSlaPolicy(id: number): Promise<SlaPolicy> {
+  return request<SlaPolicy>(`/api/admin/sla-policies/${id}/deactivate`, { method: "PATCH" });
+}
+
+export function deleteSlaPolicy(id: number): Promise<void> {
+  return request<void>(`/api/admin/sla-policies/${id}`, { method: "DELETE" });
+}
+
+export function listSlaClocks(status?: string): Promise<SlaClock[]> {
+  const qs = status ? `?status=${encodeURIComponent(status)}` : "";
+  return request<SlaClock[]>(`/api/admin/sla-clocks${qs}`);
+}
+
+export function processDueSlaClocks(): Promise<SlaSweepResult> {
+  return request<SlaSweepResult>("/api/admin/sla/process-due", { method: "POST" });
 }

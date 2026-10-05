@@ -9,9 +9,18 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from app.crm_core import sla_service
 from app.db import get_db
 from app.models.approval import ApprovalChainTemplate, ApprovalChainTier
-from app.schemas.admin import ApprovalChainTemplateCreate, ApprovalChainTemplateOut
+from app.models.sla import SlaClock, SlaPolicy
+from app.schemas.admin import (
+    ApprovalChainTemplateCreate,
+    ApprovalChainTemplateOut,
+    SlaClockOut,
+    SlaPolicyCreate,
+    SlaPolicyOut,
+    SlaSweepResultOut,
+)
 from app.tenancy import get_current_tenant_id
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -76,3 +85,69 @@ def delete_approval_chain(
         raise HTTPException(404, "Approval chain template not found")
     db.delete(template)
     db.commit()
+
+
+@router.get("/sla-policies", response_model=list[SlaPolicyOut])
+def list_sla_policies(db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> list[SlaPolicy]:
+    return db.query(SlaPolicy).filter(SlaPolicy.tenant_id == tenant_id).order_by(SlaPolicy.clock_type).all()
+
+
+@router.post("/sla-policies", response_model=SlaPolicyOut, status_code=201)
+def create_sla_policy(
+    payload: SlaPolicyCreate, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)
+) -> SlaPolicy:
+    if payload.on_breach_action not in sla_service.KNOWN_BREACH_ACTIONS:
+        raise HTTPException(400, f"on_breach_action must be one of {sla_service.KNOWN_BREACH_ACTIONS}")
+    policy = SlaPolicy(
+        tenant_id=tenant_id,
+        clock_type=payload.clock_type,
+        duration_hours=payload.duration_hours,
+        on_breach_action=payload.on_breach_action,
+    )
+    db.add(policy)
+    db.commit()
+    db.refresh(policy)
+    return policy
+
+
+@router.patch("/sla-policies/{policy_id}/deactivate", response_model=SlaPolicyOut)
+def deactivate_sla_policy(
+    policy_id: int, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)
+) -> SlaPolicy:
+    policy = db.get(SlaPolicy, policy_id)
+    if policy is None or policy.tenant_id != tenant_id:
+        raise HTTPException(404, "SLA policy not found")
+    policy.is_active = False
+    db.commit()
+    db.refresh(policy)
+    return policy
+
+
+@router.delete("/sla-policies/{policy_id}", status_code=204)
+def delete_sla_policy(policy_id: int, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> None:
+    policy = db.get(SlaPolicy, policy_id)
+    if policy is None or policy.tenant_id != tenant_id:
+        raise HTTPException(404, "SLA policy not found")
+    db.delete(policy)
+    db.commit()
+
+
+@router.get("/sla-clocks", response_model=list[SlaClockOut])
+def list_sla_clocks(
+    status: str | None = None, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)
+) -> list[SlaClock]:
+    query = db.query(SlaClock).filter(SlaClock.tenant_id == tenant_id)
+    if status:
+        query = query.filter(SlaClock.status == status)
+    return query.order_by(SlaClock.deadline).all()
+
+
+@router.post("/sla/process-due", response_model=SlaSweepResultOut)
+def process_due_sla_clocks(db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> dict:
+    """The sweep hook - point a cron/systemd timer at this endpoint. Not
+    invoked automatically by any request path; clocks only breach when
+    this is called.
+    """
+    result = sla_service.process_due_clocks(db, tenant_id)
+    db.commit()
+    return result

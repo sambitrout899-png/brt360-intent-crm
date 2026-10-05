@@ -118,6 +118,36 @@ export interface ApprovalChainTier {
   approver_tier: string;
 }
 
+export const SLA_BREACH_ACTIONS = ["escalate", "auto_approve", "auto_cancel", "auto_proceed"] as const;
+
+export interface SlaPolicy {
+  id: number;
+  clock_type: string;
+  duration_hours: number;
+  on_breach_action: string;
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface SlaClock {
+  id: number;
+  clock_type: string;
+  entity_type: string;
+  entity_id: number;
+  on_breach_action: string;
+  started_at: string;
+  deadline: string;
+  status: "running" | "completed" | "breached" | "cancelled";
+  resolved_at: string | null;
+  detail: string;
+}
+
+export interface SlaSweepResult {
+  execution_id: number;
+  checked: number;
+  breached: { clock_id: number; clock_type: string; outcome: string; detail: string }[];
+}
+
 export interface ApprovalChainTemplate {
   id: number;
   name: string;

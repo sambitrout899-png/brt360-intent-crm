@@ -1,5 +1,5 @@
 import { useState } from "react";
-import AdminApprovalChainsPage from "./pages/AdminApprovalChainsPage";
+import AdminPage from "./pages/AdminPage";
 import AuditLogPage from "./pages/AuditLogPage";
 import CatalogPage from "./pages/CatalogPage";
 import CustomerPage from "./pages/CustomerPage";
@@ -64,7 +64,7 @@ export default function App() {
         {tab === "catalog" && <CatalogPage />}
         {tab === "intent" && <IntentCommandBar prefillText={intentPrefill} />}
         {tab === "audit" && <AuditLogPage />}
-        {tab === "admin" && <AdminApprovalChainsPage />}
+        {tab === "admin" && <AdminPage />}
       </main>
     </div>
   );

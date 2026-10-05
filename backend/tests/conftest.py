@@ -42,5 +42,12 @@ def client():
             session.close()
 
     app.dependency_overrides[get_db] = override_get_db
-    yield TestClient(app)
+    test_client = TestClient(app)
+    # Exposed so tests that need to drive a service function directly
+    # (not through an HTTP endpoint) can get a session on this same
+    # in-memory DB - StaticPool means every session here shares the one
+    # underlying SQLite connection, so it sees exactly what the HTTP calls
+    # above committed, and vice versa.
+    test_client.TestSessionLocal = TestSession
+    yield test_client
     app.dependency_overrides.clear()
