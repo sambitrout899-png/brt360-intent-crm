@@ -91,9 +91,21 @@ def verify(db: Session, intent_type: str, result: dict[str, Any] | None) -> Veri
         order = db.get(Order, order_id) if order_id else None
         if order is None:
             return VerificationResult(False, "No order found after execution.")
-        if intent_type == "INT-07" and order.status != OrderStatus.active:
-            return VerificationResult(False, f"Expected order status 'active', found '{order.status.value}'.")
+        # A multi-site order (Phase 3 B2B process pack) deliberately stays
+        # "activating" after INT-07 - each site provisions independently
+        # via INT-14, so only a single-site INT-07 call must reach "active".
+        if intent_type == "INT-07" and order.status not in (OrderStatus.active, OrderStatus.activating):
+            return VerificationResult(False, f"Expected order status 'active' (or 'activating' for a multi-site order), found '{order.status.value}'.")
         return VerificationResult(True, f"Order {order.id} confirmed status '{order.status.value}'.")
+
+    if intent_type == "INT-14":
+        order_id = _require(result, "order_id")
+        order = db.get(Order, order_id) if order_id else None
+        if order is None:
+            return VerificationResult(False, "No order found after site provisioning.")
+        return VerificationResult(
+            True, f"Site '{result.get('site_label')}' provisioned on order {order.id} (order status: {order.status.value})."
+        )
 
     if intent_type == "INT-10":
         ticket_id = _require(result, "ticket_id")

@@ -25,7 +25,7 @@ from app.integration import tmf620_adapter
 from app.models.assurance import TroubleTicket, WorkOrder
 from app.models.catalog import BundleCompatibilityRule, ProductOffering
 from app.models.crm import Opportunity, Party, Quote, TerritoryRule
-from app.models.orders import Order
+from app.models.orders import Order, ServiceOrder
 from app.models.tenant import Tenant, TenantVertical
 
 _TTL_SECONDS = 90
@@ -136,6 +136,20 @@ def assemble_context(db: Session, tenant_id: int, intent_type: str, entities: di
             context["vertical_blocked"] = (
                 f"INT-13 (identity verification) is a B2C process-pack feature; tenant '{tenant.slug}' is "
                 f"configured for B2B only."
+            )
+
+    elif intent_type == "INT-14":
+        order = _get_owned(db, Order, tenant_id, entities.get("order_id"))
+        context["order"] = {"id": order.id, "status": order.status.value} if order else None
+        if order is not None:
+            context["order_site_labels"] = [
+                so.site_label for so in db.query(ServiceOrder).filter(ServiceOrder.order_id == order.id).all()
+            ]
+        tenant = db.get(Tenant, tenant_id)
+        if tenant is not None and tenant.vertical == TenantVertical.b2c:
+            context["vertical_blocked"] = (
+                f"INT-14 (multi-site provisioning) is a B2B process-pack feature; tenant '{tenant.slug}' is "
+                f"configured for B2C only."
             )
 
     elif intent_type == "INT-12":

@@ -82,14 +82,22 @@ class OrderItem(Base):
 
 
 class ServiceOrder(Base):
-    """Network/service-level execution unit - HLD 5.1. One per Order, carries
-    the provisioning deltas (network path, SIM, IP) as Resource rows.
+    """Network/service-level execution unit - HLD 5.1. Carries the
+    provisioning deltas (network path, SIM, IP) as Resource rows.
+
+    Usually exactly one per Order, but a B2B multi-site order (Phase 3:
+    IPLC's A-End/Z-End pattern) has one ServiceOrder per site, each with
+    its own independent status - site_label distinguishes them
+    ("Primary" for the default single-site case). See actions_o2a.py
+    (INT-07 creates them) and actions_site.py (INT-14 provisions one
+    independently).
     """
 
     __tablename__ = "service_orders"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     order_id: Mapped[int] = mapped_column(ForeignKey("orders.id"))
+    site_label: Mapped[str] = mapped_column(String(100), default="Primary")
     status: Mapped[ServiceOrderStatus] = mapped_column(Enum(ServiceOrderStatus), default=ServiceOrderStatus.pending)
     created_at: Mapped[dt.datetime] = mapped_column(default=utcnow)
     updated_at: Mapped[dt.datetime] = mapped_column(default=utcnow, onupdate=utcnow)

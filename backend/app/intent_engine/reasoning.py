@@ -42,6 +42,7 @@ _REQUIRED_FIELDS: dict[str, list[str]] = {
     "INT-10": ["description"],
     "INT-11": ["ticket_id"],
     "INT-13": ["party_id", "id_number"],
+    "INT-14": ["order_id", "site_label"],
 }
 
 
@@ -57,7 +58,7 @@ def _missing_fields(intent_type: str, entities: dict[str, Any]) -> list[str]:
     return missing
 
 
-def _context_missing(intent_type: str, context: dict[str, Any]) -> list[str]:
+def _context_missing(intent_type: str, context: dict[str, Any], entities: dict[str, Any]) -> list[str]:
     missing = []
     if intent_type in ("INT-02", "INT-03") and context.get("current_offering") is None:
         missing.append("current_offering (not found or not active)")
@@ -84,6 +85,13 @@ def _context_missing(intent_type: str, context: dict[str, Any]) -> list[str]:
             missing.append("party (not found)")
         if context.get("vertical_blocked"):
             missing.append(context["vertical_blocked"])
+    if intent_type == "INT-14":
+        if context.get("order") is None:
+            missing.append("order (not found)")
+        elif entities.get("site_label") not in context.get("order_site_labels", []):
+            missing.append(f"site_label '{entities.get('site_label')}' not found under this order")
+        if context.get("vertical_blocked"):
+            missing.append(context["vertical_blocked"])
     if intent_type == "INT-12":
         if context.get("work_order") is None and context.get("ticket") is None and context.get("order") is None:
             missing.append("none of ticket/order/work_order resolved")
@@ -102,7 +110,7 @@ def plan(
     if intent_type is None:
         return ReasoningResult(0.0, "Could not resolve a known intent from the input.", False, ["intent_type"])
 
-    missing = _missing_fields(intent_type, entities) + _context_missing(intent_type, context)
+    missing = _missing_fields(intent_type, entities) + _context_missing(intent_type, context, entities)
     confidence = classifier_confidence
     if missing:
         confidence = min(confidence, 0.5)

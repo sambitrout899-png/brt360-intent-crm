@@ -93,6 +93,7 @@ class ResourceOut(BaseModel):
 
 class ServiceOrderOut(BaseModel):
     id: int
+    site_label: str
     status: str
     resources: list[ResourceOut] = []
 

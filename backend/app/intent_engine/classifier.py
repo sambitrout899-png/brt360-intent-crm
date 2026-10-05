@@ -26,11 +26,11 @@ SUPPORTED_INTENTS = (
     "INT-04", "INT-05", "INT-06",
     "INT-07", "INT-08", "INT-09",
     "INT-10", "INT-11", "INT-12",
-    "INT-13",
+    "INT-13", "INT-14",
 )
 
 _SYSTEM_PROMPT = """You are the NLU classifier for BRT 360, a telecom Intent CRM.
-Classify the user's free text into exactly one of these 13 intent types, or UNKNOWN:
+Classify the user's free text into exactly one of these 14 intent types, or UNKNOWN:
 
 INT-01 "Launch a new bundle" - entities: name (str), composition (list[str] of
   product names, first is the primary connectivity line), segment (str, e.g.
@@ -58,7 +58,13 @@ INT-07 "Activate this order end-to-end" - entities: quote_id (int),
   service_account_name (str, optional - which service account this order
   belongs to, e.g. a site or bundle name; defaults to "<offering name>
   Service" if omitted. Re-activating under the same name on the same
-  account reuses that service account rather than creating a new one).
+  account reuses that service account rather than creating a new one),
+  sites (list[str], optional - B2B multi-site process pack: e.g. an IPLC
+  circuit's A-End and Z-End. Omitted or a single site: the whole order
+  provisions and activates in this one call, exactly as always. Two or
+  more sites: each gets its own independently-provisioned ServiceOrder -
+  the order itself stays "activating" until every site is separately
+  provisioned via INT-14).
 
 INT-08 "Change this live service" - entities: order_id (int), new_monthly_price
   (number).
@@ -84,8 +90,15 @@ INT-13 "Verify customer identity" - B2C process pack, blocked for tenants
   (str, default "national_id"), provider (str, optional - defaults to
   "Yakeen"; other configured providers include WATHQ, SIMAH, Abshir).
 
+INT-14 "Provision this site" - B2B process pack (multi-site orders),
+  blocked for tenants configured B2C-only. Entities: order_id (int),
+  site_label (str - must match one of the order's sites from INT-07,
+  e.g. "A-End"). Provisions just that one site independently; once every
+  site under the order is provisioned, the whole order goes active and
+  billing starts.
+
 Respond with strict JSON only:
-{"intent_type": "INT-01".."INT-13"|"UNKNOWN", "entities": {...},
+{"intent_type": "INT-01".."INT-14"|"UNKNOWN", "entities": {...},
  "confidence": 0.0-1.0, "rationale": "one sentence explaining the classification"}
 """
 
@@ -233,12 +246,23 @@ def _classify_with_rules(text: str) -> ClassificationResult:
         return ClassificationResult("INT-06", entities, confidence, "Matched keyword 'approve'/'reject' + parsed fields")
 
     if "activate" in lowered:
+        sites_raw = fields.get("sites", "")
+        sites = [s.strip() for s in re.split(r"[,+]", sites_raw) if s.strip()]
         entities = {
             "quote_id": _as_int(fields, "quote_id"),
             "service_account_name": fields.get("service_account_name"),
+            "sites": sites,
         }
         confidence = 0.9 if entities["quote_id"] else 0.4
         return ClassificationResult("INT-07", entities, confidence, "Matched keyword 'activate' + parsed fields")
+
+    if "provision" in lowered and ("site" in lowered or "end" in lowered):
+        entities = {
+            "order_id": _as_int(fields, "order_id"),
+            "site_label": fields.get("site_label", "").strip(),
+        }
+        confidence = 0.9 if entities["order_id"] and entities["site_label"] else 0.4
+        return ClassificationResult("INT-14", entities, confidence, "Matched keyword 'provision'/'site' + parsed fields")
 
     if "upgrade" in lowered or "relocate" in lowered or "change this service" in lowered:
         entities = {

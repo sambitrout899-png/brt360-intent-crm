@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from app.data_intelligence import audit
 from app.db import get_db
 from app.intent_engine import classifier, context_assembly, reasoning, verification
-from app.orchestration import actions, actions_identity, actions_l2q, actions_o2a, actions_t2r
+from app.orchestration import actions, actions_identity, actions_l2q, actions_o2a, actions_site, actions_t2r
 from app.orchestration.orchestrator import run_saga
 from app.schemas.intent import IntentRequest, IntentResponse, PlanStep
 from app.tenancy import get_current_tenant_id
@@ -36,6 +36,7 @@ _STEP_BUILDERS = {
     "INT-11": actions_t2r.build_int11_steps,
     "INT-12": actions_t2r.build_int12_steps,
     "INT-13": actions_identity.build_int13_steps,
+    "INT-14": actions_site.build_int14_steps,
 }
 
 

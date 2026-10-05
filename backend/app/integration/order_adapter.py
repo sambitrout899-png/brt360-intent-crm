@@ -58,8 +58,8 @@ def add_order_item(db: Session, order_id: int, product_offering_id: int, quantit
     return item
 
 
-def create_service_order(db: Session, order_id: int) -> ServiceOrder:
-    so = ServiceOrder(order_id=order_id, status=ServiceOrderStatus.pending)
+def create_service_order(db: Session, order_id: int, site_label: str = "Primary") -> ServiceOrder:
+    so = ServiceOrder(order_id=order_id, site_label=site_label, status=ServiceOrderStatus.pending)
     db.add(so)
     db.flush()
     return so

@@ -20,9 +20,19 @@ from app.timeutils import utcnow
 
 
 def build_int07_steps(db: Session, tenant_id: int, execution_id: int, entities: dict[str, Any]) -> list[SagaStep]:
-    """INT-07 - Activate this order end-to-end."""
+    """INT-07 - Activate this order end-to-end.
+
+    Default (no "sites", or exactly one): single ServiceOrder, provisioned
+    and activated in this one call - unchanged from before. Multi-site
+    (two or more "sites", e.g. an IPLC circuit's A-End/Z-End - Phase 3 B2B
+    process pack): creates one ServiceOrder per site, all left pending -
+    the order stays "activating" and billing stays inactive until every
+    site is independently provisioned via INT-14 ("Provision this site").
+    """
 
     quote_id = entities["quote_id"]
+    sites = entities.get("sites") or []
+    multi_site = len(sites) > 1
     state: dict[str, Any] = {}
 
     def step1() -> dict[str, Any]:
@@ -61,6 +71,7 @@ def build_int07_steps(db: Session, tenant_id: int, execution_id: int, entities: 
         state["party_id"] = party_id
         state["billing_account_id"] = billing_account.id
         state["service_account"] = service_account
+        state["sites"] = sites if multi_site else ["Primary"]
         return {
             "order_id": order.id,
             "service_account_id": service_account.id,
@@ -73,14 +84,21 @@ def build_int07_steps(db: Session, tenant_id: int, execution_id: int, entities: 
         return {"tasks": tasks}
 
     def step3() -> dict[str, Any]:
-        so = order_adapter.create_service_order(db, state["order"].id)
-        state["service_order_id"] = so.id
-        if "network" in state["tasks"]:
-            order_adapter.add_resource(db, so.id, "network_path", order_service.reserve_network_path())
-        return {"service_order_id": so.id}
+        service_order_ids = []
+        for site in state["sites"]:
+            so = order_adapter.create_service_order(db, state["order"].id, site_label=site)
+            service_order_ids.append(so.id)
+            if not multi_site and "network" in state["tasks"]:
+                order_adapter.add_resource(db, so.id, "network_path", order_service.reserve_network_path())
+        state["service_order_ids"] = service_order_ids
+        return {"service_order_ids": service_order_ids, "sites": state["sites"]}
 
     def step4() -> dict[str, Any]:
-        so_id = state["service_order_id"]
+        if multi_site:
+            # Each site is provisioned independently, later, via INT-14 -
+            # not all at once here.
+            return {"provisioned": False, "note": "Multi-site order - provision each site independently via INT-14."}
+        so_id = state["service_order_ids"][0]
         if "mobile_core" in state["tasks"]:
             order_adapter.add_resource(db, so_id, "sim_profile", order_service.allocate_sim_profile())
         order_adapter.add_resource(db, so_id, "ip_block", order_service.allocate_ip_block())
@@ -88,13 +106,30 @@ def build_int07_steps(db: Session, tenant_id: int, execution_id: int, entities: 
         return {"provisioned": True}
 
     def step5() -> dict[str, Any]:
+        if multi_site:
+            return {"billing_account_id": state["billing_account_id"], "billing_activated": False}
         # Billing account was already resolved/created in step1 - just flip
         # it active now that provisioning has actually completed.
         order_adapter.set_billing_account_status(db, state["billing_account_id"], "active", rate_plan=state["offering"].name)
-        return {"billing_account_id": state["billing_account_id"]}
+        return {"billing_account_id": state["billing_account_id"], "billing_activated": True}
 
     def step6() -> dict[str, Any]:
         from app.integration import ticket_adapter
+
+        if multi_site:
+            order_adapter.set_order_status(db, state["order"].id, OrderStatus.activating)
+            event_bus.publish(
+                db,
+                execution_id,
+                "order.multi_site_provisioning_started",
+                {"order_id": state["order"].id, "sites": state["sites"]},
+            )
+            return {
+                "order_id": state["order"].id,
+                "status": OrderStatus.activating.value,
+                "sites": state["sites"],
+                "service_order_ids": state["service_order_ids"],
+            }
 
         if "field_service" in state["tasks"]:
             ticket_adapter.create_work_order(

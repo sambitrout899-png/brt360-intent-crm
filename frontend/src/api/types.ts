@@ -211,6 +211,7 @@ export interface Resource {
 
 export interface ServiceOrder {
   id: number;
+  site_label: string;
   status: string;
   resources: Resource[];
 }

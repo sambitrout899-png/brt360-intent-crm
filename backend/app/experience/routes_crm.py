@@ -93,6 +93,7 @@ def _order_out(order: Order, party_name: str, service_account_name: str) -> Orde
     service_orders = [
         ServiceOrderOut(
             id=so.id,
+            site_label=so.site_label,
             status=so.status.value,
             resources=[ResourceOut(id=r.id, resource_type=r.resource_type, identifier=r.identifier, status=r.status.value) for r in so.resources],
         )

@@ -87,9 +87,19 @@ export default function OrdersPage({ onRequestIntent }: { onRequestIntent: (text
                 )}
               </div>
               {o.service_orders.map((so) => (
-                <div key={so.id} className="mt-3 rounded-lg bg-slate-950 px-3 py-2 text-xs text-slate-400">
-                  <span className="font-semibold text-slate-300">Service Order #{so.id}</span> · {so.status} ·{" "}
-                  {so.resources.map((r) => `${r.resource_type}:${r.identifier}(${r.status})`).join(", ") || "no resources"}
+                <div key={so.id} className="mt-3 flex flex-wrap items-center gap-2 rounded-lg bg-slate-950 px-3 py-2 text-xs text-slate-400">
+                  <span className="font-semibold text-slate-300">{so.site_label}</span>
+                  <span>#{so.id}</span>
+                  <span>· {so.status} ·</span>
+                  <span>{so.resources.map((r) => `${r.resource_type}:${r.identifier}(${r.status})`).join(", ") || "no resources"}</span>
+                  {so.status === "pending" && (
+                    <button
+                      onClick={() => onRequestIntent(`Provision this site. order_id: ${o.id}, site_label: ${so.site_label}`)}
+                      className="ml-auto rounded-md border border-sky-500/40 bg-sky-500/10 px-2 py-0.5 text-xs font-bold text-sky-400 hover:bg-sky-500/20"
+                    >
+                      Provision
+                    </button>
+                  )}
                 </div>
               ))}
             </div>
