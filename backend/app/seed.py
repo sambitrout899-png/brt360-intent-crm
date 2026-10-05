@@ -15,10 +15,13 @@ special-cased to "default" beyond being the fallback.
 
 from __future__ import annotations
 
+from app.auth import hash_password
+from app.config import get_settings
 from app.crm_core.approval_service import DEFAULT_SEED_TEMPLATES
 from app.db import SessionLocal
 from app.models.approval import ApprovalChainTemplate, ApprovalChainTier
 from app.models.assurance import Technician
+from app.models.auth import User, UserRole
 from app.models.catalog import BundleCompatibilityRule, ProductSpecification
 from app.models.crm import TerritoryRule
 from app.models.identity import IdentityVerificationProvider
@@ -109,17 +112,52 @@ def seed_reference_data(db, tenant_id: int) -> None:
             db.add(IdentityVerificationProvider(tenant_id=tenant_id, name=name))
 
 
+def get_or_create_user(db, *, tenant_id: int | None, email: str, password: str, name: str, role: UserRole) -> User:
+    user = db.query(User).filter(User.email == email).first()
+    if user is None:
+        user = User(tenant_id=tenant_id, email=email, password_hash=hash_password(password), name=name, role=role)
+        db.add(user)
+        db.flush()
+    return user
+
+
 def seed() -> None:
+    settings = get_settings()
     db = SessionLocal()
     try:
         tenant = get_or_create_tenant(db, DEFAULT_TENANT_SLUG, "Default Tenant")
         seed_reference_data(db, tenant.id)
+
+        get_or_create_user(
+            db,
+            tenant_id=None,
+            email=settings.bootstrap_platform_admin_email,
+            password=settings.bootstrap_platform_admin_password,
+            name="Platform Admin",
+            role=UserRole.platform_admin,
+        )
+        get_or_create_user(
+            db,
+            tenant_id=tenant.id,
+            email=settings.bootstrap_tenant_admin_email,
+            password=settings.bootstrap_tenant_admin_password,
+            name="Default Admin",
+            role=UserRole.admin,
+        )
         db.commit()
         print(
             f"Seeded tenant '{tenant.slug}' (id={tenant.id}) with {len(ATOMIC_PRODUCTS)} product specifications, "
             f"{len(COMPATIBILITY_RULES)} compatibility rules, {len(TERRITORY_RULES)} territory rules, "
             f"{len(TECHNICIANS)} technicians, {len(DEFAULT_SEED_TEMPLATES)} approval chain templates, "
             f"{len(DEFAULT_IDENTITY_PROVIDERS)} identity verification providers."
+        )
+        print(
+            f"Bootstrap platform admin: {settings.bootstrap_platform_admin_email} "
+            f"(password set from BOOTSTRAP_PLATFORM_ADMIN_PASSWORD or the insecure default - change it after first login)."
+        )
+        print(
+            f"Bootstrap tenant admin:   {settings.bootstrap_tenant_admin_email} "
+            f"(password set from BOOTSTRAP_TENANT_ADMIN_PASSWORD or the insecure default - change it after first login)."
         )
     finally:
         db.close()

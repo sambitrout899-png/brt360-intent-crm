@@ -80,6 +80,8 @@ def test_verify_identity_pending_auto_approves_after_sla_breach(client):
 def test_verify_identity_blocked_for_b2b_only_tenant(client):
     db = client.TestSessionLocal()
     try:
+        from app.auth import hash_password
+        from app.models.auth import User, UserRole
         from app.models.crm import Party
         from app.models.tenant import Tenant, TenantVertical
 
@@ -88,15 +90,24 @@ def test_verify_identity_blocked_for_b2b_only_tenant(client):
         db.flush()
         party = Party(tenant_id=b2b_tenant.id, name="B2BOnlyParty", party_type="organization")
         db.add(party)
+        user = User(
+            tenant_id=b2b_tenant.id,
+            email="admin@b2b-only.test",
+            password_hash=hash_password("password123"),
+            name="B2B Admin",
+            role=UserRole.admin,
+        )
+        db.add(user)
         db.commit()
         party_id = party.id
+        user_id = user.id
     finally:
         db.close()
 
     resp = client.post(
         "/api/intents",
         json={"text": f"Verify customer identity. party_id: {party_id}, id_number: 1234567890123"},
-        headers={"X-Tenant-Slug": "b2b-only"},
+        headers={"X-Test-User-Id": str(user_id)},
     )
     body = resp.json()
     assert body["status"] == "needs_review"

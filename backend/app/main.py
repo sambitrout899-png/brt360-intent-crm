@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
-from app.experience import routes_admin, routes_catalog, routes_crm, routes_intent, routes_tenants
+from app.experience import routes_admin, routes_auth, routes_catalog, routes_crm, routes_intent, routes_tenants
 
 # Schema is Alembic-driven (migrations/) - run `alembic upgrade head` before
 # starting the app, in both dev and production. Nothing here creates tables.
@@ -17,6 +17,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(routes_auth.router)
 app.include_router(routes_intent.router)
 app.include_router(routes_catalog.router)
 app.include_router(routes_crm.router)

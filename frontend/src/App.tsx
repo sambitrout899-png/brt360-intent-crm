@@ -5,11 +5,13 @@ import CatalogPage from "./pages/CatalogPage";
 import CustomerPage from "./pages/CustomerPage";
 import DashboardPage from "./pages/DashboardPage";
 import IntentCommandBar from "./pages/IntentCommandBar";
+import LoginPage from "./pages/LoginPage";
 import OrdersPage from "./pages/OrdersPage";
 import PipelinePage from "./pages/PipelinePage";
+import PlatformAdminPage from "./pages/PlatformAdminPage";
 import TicketsPage from "./pages/TicketsPage";
-import { getActiveTenantSlug, listTenants, setActiveTenantSlug } from "./api/client";
-import type { Tenant } from "./api/types";
+import { currentUser, getAccessToken, logout } from "./api/client";
+import type { CurrentUser } from "./api/types";
 
 type Tab = "dashboard" | "customer" | "pipeline" | "orders" | "tickets" | "catalog" | "intent" | "audit" | "admin";
 
@@ -25,29 +27,16 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "admin", label: "Admin" },
 ];
 
-export default function App() {
+function CrmApp({ user, onLoggedOut }: { user: CurrentUser; onLoggedOut: () => void }) {
   const [tab, setTab] = useState<Tab>("dashboard");
   const [intentPrefill, setIntentPrefill] = useState("");
-  const [tenants, setTenants] = useState<Tenant[]>([]);
-  const [activeSlug, setActiveSlug] = useState(getActiveTenantSlug() ?? "default");
-
-  useEffect(() => {
-    listTenants().then(setTenants);
-  }, []);
 
   function requestIntent(text: string) {
     setIntentPrefill(text);
     setTab("intent");
   }
 
-  function switchTenant(slug: string) {
-    setActiveTenantSlug(slug === "default" ? null : slug);
-    setActiveSlug(slug);
-    // Every page fetches its own data in a useEffect with no tenant
-    // dependency - a full reload is the simplest way to guarantee
-    // everything re-fetches under the newly selected tenant.
-    window.location.reload();
-  }
+  const tabs = user.role === "admin" ? TABS : TABS.filter((t) => t.id !== "admin");
 
   return (
     <div className="min-h-screen bg-slate-950">
@@ -57,7 +46,7 @@ export default function App() {
             BRT 360 <span className="text-sky-500">·</span> Intent CRM
           </span>
           <nav className="flex flex-wrap gap-1">
-            {TABS.map((t) => (
+            {tabs.map((t) => (
               <button
                 key={t.id}
                 onClick={() => setTab(t.id)}
@@ -69,19 +58,20 @@ export default function App() {
               </button>
             ))}
           </nav>
-          <select
-            value={activeSlug}
-            onChange={(e) => switchTenant(e.target.value)}
-            className="ml-auto rounded-lg border border-slate-700 bg-slate-800 px-3 py-1.5 text-sm font-semibold text-slate-200"
-            title="Active tenant"
-          >
-            {tenants.length === 0 && <option value="default">default</option>}
-            {tenants.map((t) => (
-              <option key={t.slug} value={t.slug}>
-                {t.name} ({t.vertical})
-              </option>
-            ))}
-          </select>
+          <div className="ml-auto flex items-center gap-3">
+            <span className="text-xs text-slate-500">
+              {user.name} · {user.role}
+            </span>
+            <button
+              onClick={() => {
+                logout();
+                onLoggedOut();
+              }}
+              className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs font-bold text-slate-300 hover:border-red-500 hover:text-red-400"
+            >
+              Log Out
+            </button>
+          </div>
         </div>
       </header>
 
@@ -94,8 +84,38 @@ export default function App() {
         {tab === "catalog" && <CatalogPage />}
         {tab === "intent" && <IntentCommandBar prefillText={intentPrefill} />}
         {tab === "audit" && <AuditLogPage />}
-        {tab === "admin" && <AdminPage />}
+        {tab === "admin" && user.role === "admin" && <AdminPage />}
       </main>
     </div>
   );
+}
+
+export default function App() {
+  const [user, setUser] = useState<CurrentUser | null | undefined>(undefined); // undefined = still checking
+
+  function refreshSession() {
+    if (!getAccessToken()) {
+      setUser(null);
+      return;
+    }
+    currentUser()
+      .then(setUser)
+      .catch(() => setUser(null));
+  }
+
+  useEffect(refreshSession, []);
+
+  if (user === undefined) {
+    return <div className="flex min-h-screen items-center justify-center bg-slate-950 text-sm text-slate-500">Loading…</div>;
+  }
+
+  if (user === null) {
+    return <LoginPage onLoggedIn={refreshSession} />;
+  }
+
+  if (user.role === "platform_admin") {
+    return <PlatformAdminPage onLoggedOut={refreshSession} />;
+  }
+
+  return <CrmApp user={user} onLoggedOut={refreshSession} />;
 }

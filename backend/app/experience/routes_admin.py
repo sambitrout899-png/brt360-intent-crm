@@ -9,10 +9,12 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from app.auth import hash_password, require_roles
 from app.crm_core import attribute_service, sla_service, test_runner_service
 from app.db import get_db
 from app.models.approval import ApprovalChainTemplate, ApprovalChainTier
 from app.models.attributes import AttributeConstraintRule, ProductAttributeDefinition, ProductAttributeValue
+from app.models.auth import User, UserRole
 from app.models.catalog import ProductSpecification
 from app.models.identity import IdentityVerificationProvider
 from app.models.sla import SlaClock, SlaPolicy
@@ -36,9 +38,13 @@ from app.schemas.admin import (
     TestRunOut,
     TestRunSummaryOut,
 )
+from app.schemas.auth import UserCreate, UserOut
 from app.tenancy import get_current_tenant_id
 
-router = APIRouter(prefix="/api/admin", tags=["admin"])
+# Every route in this router is admin-only, within the caller's own
+# tenant - a single router-level dependency instead of repeating the
+# check on each function.
+router = APIRouter(prefix="/api/admin", tags=["admin"], dependencies=[Depends(require_roles(UserRole.admin))])
 
 
 @router.get("/approval-chains", response_model=list[ApprovalChainTemplateOut])
@@ -447,3 +453,41 @@ def get_test_run(run_id: int, db: Session = Depends(get_db), tenant_id: int = De
     if run is None or run.tenant_id != tenant_id:
         raise HTTPException(404, "Test run not found")
     return run
+
+
+@router.get("/users", response_model=list[UserOut])
+def list_users(db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> list[User]:
+    return db.query(User).filter(User.tenant_id == tenant_id).order_by(User.email).all()
+
+
+@router.post("/users", response_model=UserOut, status_code=201)
+def create_user(
+    payload: UserCreate, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)
+) -> User:
+    if payload.role not in (UserRole.admin.value, UserRole.agent.value, UserRole.viewer.value):
+        raise HTTPException(400, "role must be one of: admin, agent, viewer")
+    if db.query(User).filter(User.email == payload.email).first() is not None:
+        raise HTTPException(400, f"Email '{payload.email}' is already registered")
+
+    user = User(
+        tenant_id=tenant_id,
+        email=payload.email,
+        password_hash=hash_password(payload.password),
+        name=payload.name,
+        role=UserRole(payload.role),
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+@router.patch("/users/{user_id}/deactivate", response_model=UserOut)
+def deactivate_user(user_id: int, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> User:
+    user = db.get(User, user_id)
+    if user is None or user.tenant_id != tenant_id:
+        raise HTTPException(404, "User not found")
+    user.is_active = False
+    db.commit()
+    db.refresh(user)
+    return user

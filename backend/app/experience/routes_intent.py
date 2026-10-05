@@ -12,15 +12,21 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
+from app.auth import require_roles
 from app.data_intelligence import audit
 from app.db import get_db
 from app.intent_engine import classifier, context_assembly, reasoning, verification
+from app.models.auth import UserRole
 from app.orchestration import actions, actions_identity, actions_l2q, actions_o2a, actions_site, actions_t2r
 from app.orchestration.orchestrator import run_saga
 from app.schemas.intent import IntentRequest, IntentResponse, PlanStep
 from app.tenancy import get_current_tenant_id
 
-router = APIRouter(prefix="/api/intents", tags=["intents"])
+# viewer is read-only - blocked from submitting intents (the only way
+# this platform mutates anything), not just from /api/admin/*.
+router = APIRouter(
+    prefix="/api/intents", tags=["intents"], dependencies=[Depends(require_roles(UserRole.admin, UserRole.agent))]
+)
 
 _STEP_BUILDERS = {
     "INT-01": actions.build_int01_steps,

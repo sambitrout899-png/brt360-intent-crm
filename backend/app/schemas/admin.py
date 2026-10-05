@@ -9,6 +9,12 @@ class TenantCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     slug: str = Field(min_length=1, max_length=100, pattern=r"^[a-z0-9][a-z0-9-]*$")
     vertical: str = Field(default="both")
+    # The tenant's first admin user - created in the same call, so the
+    # tenant is actually loggable-into the moment it's created, not an
+    # account-less shell someone has to provision separately.
+    admin_email: str = Field(pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+    admin_password: str = Field(min_length=8)
+    admin_name: str = Field(default="Admin", max_length=200)
 
 
 class TenantOut(BaseModel):

@@ -5,11 +5,12 @@ import {
   createAttributeDefinition,
   createIdentityProvider,
   createSlaPolicy,
-  createTenant,
+  createUser,
   deactivateApprovalChain,
   deactivateAttributeConstraintRule,
   deactivateIdentityProvider,
   deactivateSlaPolicy,
+  deactivateUser,
   deleteApprovalChain,
   deleteAttributeConstraintRule,
   deleteAttributeDefinition,
@@ -24,13 +25,13 @@ import {
   listProductSpecifications,
   listSlaClocks,
   listSlaPolicies,
-  listTenants,
   listTestRuns,
+  listUsers,
   processDueSlaClocks,
   setAttributeValue,
   triggerTestRun,
 } from "../api/client";
-import { ATTRIBUTE_DATA_TYPES, CONSTRAINT_OPERATORS, CONSTRAINT_RULE_TYPES, SLA_BREACH_ACTIONS, TENANT_VERTICALS } from "../api/types";
+import { ATTRIBUTE_DATA_TYPES, CONSTRAINT_OPERATORS, CONSTRAINT_RULE_TYPES, SLA_BREACH_ACTIONS, USER_ROLES } from "../api/types";
 import type {
   ApprovalChainTemplate,
   AttributeConstraintRule,
@@ -40,12 +41,12 @@ import type {
   ProductSpecification,
   SlaClock,
   SlaPolicy,
-  Tenant,
   TestRun,
   TestRunSummary,
+  User,
 } from "../api/types";
 
-type Section = "approvals" | "sla" | "attributes" | "identity" | "tenants" | "tests";
+type Section = "approvals" | "sla" | "attributes" | "identity" | "users" | "tests";
 
 function emptyChainForm() {
   return { name: "", segment: "", minPct: "0", maxPct: "100", tiers: [""] };
@@ -737,72 +738,88 @@ function IdentityProvidersSection() {
   );
 }
 
-function emptyTenantForm() {
-  return { name: "", slug: "", vertical: TENANT_VERTICALS[2] as string };
+function emptyUserForm() {
+  return { email: "", password: "", name: "", role: USER_ROLES[1] as string };
 }
 
-function TenantsSection() {
-  const [tenants, setTenants] = useState<Tenant[]>([]);
-  const [form, setForm] = useState(emptyTenantForm());
+function UsersSection() {
+  const [users, setUsers] = useState<User[]>([]);
+  const [form, setForm] = useState(emptyUserForm());
   const [error, setError] = useState<string | null>(null);
 
   function load() {
-    listTenants().then(setTenants);
+    listUsers().then(setUsers);
   }
 
   useEffect(load, []);
 
   async function submit() {
     setError(null);
-    if (!form.name.trim() || !form.slug.trim()) {
-      setError("Name and slug are required.");
+    if (!form.email.trim() || form.password.length < 8 || !form.name.trim()) {
+      setError("Email, name, and a password (8+ characters) are all required.");
       return;
     }
     try {
-      await createTenant({ name: form.name.trim(), slug: form.slug.trim(), vertical: form.vertical });
-      setForm(emptyTenantForm());
+      await createUser({ email: form.email.trim(), password: form.password, name: form.name.trim(), role: form.role });
+      setForm(emptyUserForm());
       load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to create tenant.");
+      setError(e instanceof Error ? e.message : "Failed to create user.");
     }
+  }
+
+  async function deactivate(id: number) {
+    await deactivateUser(id);
+    load();
   }
 
   return (
     <div className="space-y-6">
       <p className="text-sm text-slate-400">
-        Every telecom operator using this platform is a tenant - fully data-isolated from every other tenant. A new
-        tenant is seeded immediately with its own atomic products, default approval chains and identity providers, so
-        it's usable right away. Switch between tenants using the selector in the top-right of the header.
+        Accounts for your team. <span className="font-semibold text-slate-300">admin</span> can configure everything on
+        this Admin page; <span className="font-semibold text-slate-300">agent</span> can do day-to-day CRM work
+        (submit intents) but not touch admin configuration; <span className="font-semibold text-slate-300">viewer</span>{" "}
+        is read-only everywhere.
       </p>
 
       <div className="space-y-2">
-        {tenants.map((t) => (
-          <div key={t.id} className="flex flex-wrap items-center gap-3 rounded-lg border border-slate-700 bg-slate-900/60 px-4 py-3 text-sm">
-            <span className="font-semibold text-slate-200">{t.name}</span>
-            <span className="font-mono text-xs text-slate-500">{t.slug}</span>
-            <span className="rounded-md bg-slate-800 px-2 py-0.5 text-xs text-slate-300">{t.vertical}</span>
+        {users.map((u) => (
+          <div key={u.id} className={`flex flex-wrap items-center gap-3 rounded-lg border px-4 py-3 text-sm ${u.is_active ? "border-slate-700 bg-slate-900/60" : "border-slate-800 bg-slate-950/60 opacity-60"}`}>
+            <span className="font-semibold text-slate-200">{u.name}</span>
+            <span className="font-mono text-xs text-slate-500">{u.email}</span>
+            <span className="rounded-md bg-slate-800 px-2 py-0.5 text-xs text-slate-300">{u.role}</span>
+            {!u.is_active && <span className="rounded-md border border-slate-700 px-2 py-0.5 text-xs text-slate-500">deactivated</span>}
+            {u.is_active && (
+              <button onClick={() => deactivate(u.id)} className="ml-auto rounded-md border border-slate-700 px-2.5 py-1 text-xs font-bold text-slate-300 hover:border-red-500 hover:text-red-400">
+                Deactivate
+              </button>
+            )}
           </div>
         ))}
-        {tenants.length === 0 && <p className="text-sm text-slate-500">No tenants yet.</p>}
+        {users.length === 0 && <p className="text-sm text-slate-500">No users yet.</p>}
       </div>
 
       <div className="flex flex-wrap items-end gap-2 rounded-xl border border-slate-700 bg-slate-900/60 p-4">
         <label className="text-xs text-slate-400">
           Name
-          <input value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} className="mt-1 w-48 rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200" placeholder="Acme Telecom" />
+          <input value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} className="mt-1 w-40 rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200" />
         </label>
         <label className="text-xs text-slate-400">
-          Slug
-          <input value={form.slug} onChange={(e) => setForm((f) => ({ ...f, slug: e.target.value }))} className="mt-1 w-40 rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200" placeholder="acme-telecom" />
+          Email
+          <input type="email" value={form.email} onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))} className="mt-1 w-48 rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200" />
         </label>
         <label className="text-xs text-slate-400">
-          Vertical
-          <select value={form.vertical} onChange={(e) => setForm((f) => ({ ...f, vertical: e.target.value }))} className="mt-1 w-28 rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200">
-            {TENANT_VERTICALS.map((v) => <option key={v} value={v}>{v}</option>)}
+          Password
+          <input type="password" value={form.password} onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))} className="mt-1 w-36 rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200" placeholder="8+ characters" />
+        </label>
+        <label className="text-xs text-slate-400">
+          Role
+          <select value={form.role} onChange={(e) => setForm((f) => ({ ...f, role: e.target.value }))} className="mt-1 w-28 rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200">
+            {USER_ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
           </select>
         </label>
         <button onClick={submit} className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-bold text-white hover:bg-sky-500">
-          Create Tenant
+          Create User
         </button>
       </div>
 
@@ -914,7 +931,7 @@ export default function AdminPage() {
           ["sla", "SLA Policies"],
           ["attributes", "Product Attributes"],
           ["identity", "Identity Providers"],
-          ["tenants", "Tenants"],
+          ["users", "Users"],
           ["tests", "Test Suite"],
         ] as [Section, string][]).map(([id, label]) => (
           <button
@@ -933,7 +950,7 @@ export default function AdminPage() {
       {section === "sla" && <SlaPoliciesSection />}
       {section === "attributes" && <ProductAttributesSection />}
       {section === "identity" && <IdentityProvidersSection />}
-      {section === "tenants" && <TenantsSection />}
+      {section === "users" && <UsersSection />}
       {section === "tests" && <TestSuiteSection />}
     </div>
   );

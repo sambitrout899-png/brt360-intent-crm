@@ -12,6 +12,7 @@ from app.models.attributes import (
     ProductAttributeDefinition,
     ProductAttributeValue,
 )
+from app.models.auth import User, UserRole
 from app.models.catalog import (
     BundleCompatibilityRule,
     BundleEligibilityRule,
@@ -95,4 +96,6 @@ __all__ = [
     "VerificationStatus",
     "TestRun",
     "TestRunStatus",
+    "User",
+    "UserRole",
 ]

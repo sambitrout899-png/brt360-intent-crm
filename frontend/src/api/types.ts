@@ -1,4 +1,22 @@
 export const TENANT_VERTICALS = ["b2c", "b2b", "both"] as const;
+export const USER_ROLES = ["admin", "agent", "viewer"] as const;
+
+export interface CurrentUser {
+  id: number;
+  tenant_id: number | null;
+  email: string;
+  name: string;
+  role: "platform_admin" | "admin" | "agent" | "viewer";
+}
+
+export interface User {
+  id: number;
+  email: string;
+  name: string;
+  role: string;
+  is_active: boolean;
+  created_at: string;
+}
 
 export interface Tenant {
   id: number;

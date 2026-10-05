@@ -1,38 +1,31 @@
-"""Tenant resolution (HLD multi-tenant extension).
+"""Tenant resolution.
 
-Every request resolves to exactly one tenant, via the `X-Tenant-Slug` header.
-No auth exists yet (see docs - deferred, same as Sprint 1), so this is not a
-security boundary today; it IS the data-isolation boundary every query must
-respect. When auth lands, tenant resolution moves to come from the verified
-session/JWT instead of a client-supplied header - this function is the single
-seam that change touches.
+tenant_id now comes from the authenticated user's verified JWT
+(app/auth.py's get_current_user), not a client-supplied header - this
+closes the gap every docstring in this module used to disclose: before
+auth existed, any caller could set X-Tenant-Slug and read another
+tenant's data. get_current_tenant_id is still the one dependency every
+tenant-scoped route depends on, so this was the single seam that change
+touched - no route file needed editing.
 
-Falls back to the "default" tenant (seeded by app.seed) when no header is
-sent, so the existing single-tenant deployment and the Sprint 1-4 test suite
-keep working unchanged.
+A platform_admin's token carries tenant_id=None (they operate across
+tenants via /api/platform/*, not any single tenant's data) - calling
+get_current_tenant_id as that role is a 403, not a silent wrong answer.
 """
 
 from __future__ import annotations
 
-from fastapi import Depends, Header, HTTPException
-from sqlalchemy.orm import Session
+from fastapi import Depends, HTTPException, status
 
-from app.db import get_db
-from app.models.tenant import Tenant
+from app.auth import get_current_user
+from app.models.auth import User
 
+# Slug of the tenant app.seed creates by default - not an auth fallback
+# anymore, just the name every fresh deployment's first tenant gets.
 DEFAULT_TENANT_SLUG = "default"
 
 
-def get_current_tenant(
-    x_tenant_slug: str | None = Header(default=None),
-    db: Session = Depends(get_db),
-) -> Tenant:
-    slug = x_tenant_slug or DEFAULT_TENANT_SLUG
-    tenant = db.query(Tenant).filter(Tenant.slug == slug).first()
-    if tenant is None:
-        raise HTTPException(400, f"Unknown tenant '{slug}'")
-    return tenant
-
-
-def get_current_tenant_id(tenant: Tenant = Depends(get_current_tenant)) -> int:
-    return tenant.id
+def get_current_tenant_id(user: User = Depends(get_current_user)) -> int:
+    if user.tenant_id is None:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "This account is not bound to a tenant - use /api/platform/* instead")
+    return user.tenant_id

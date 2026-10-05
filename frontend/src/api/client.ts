@@ -3,6 +3,7 @@ import type {
   AttributeConstraintRule,
   AuditLogDetail,
   AuditLogEntry,
+  CurrentUser,
   DashboardSummary,
   IdentityProvider,
   IntentResponse,
@@ -24,44 +25,51 @@ import type {
   TestRun,
   TestRunSummary,
   TroubleTicket,
+  User,
   WorkOrder,
 } from "./types";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "http://127.0.0.1:8000";
 
-const TENANT_STORAGE_KEY = "brt360_active_tenant_slug";
+const TOKEN_STORAGE_KEY = "brt360_access_token";
 
-export function getActiveTenantSlug(): string | null {
+export function getAccessToken(): string | null {
   try {
-    return localStorage.getItem(TENANT_STORAGE_KEY);
+    return localStorage.getItem(TOKEN_STORAGE_KEY);
   } catch {
     return null;
   }
 }
 
-export function setActiveTenantSlug(slug: string | null): void {
+export function setAccessToken(token: string | null): void {
   try {
-    if (slug) {
-      localStorage.setItem(TENANT_STORAGE_KEY, slug);
+    if (token) {
+      localStorage.setItem(TOKEN_STORAGE_KEY, token);
     } else {
-      localStorage.removeItem(TENANT_STORAGE_KEY);
+      localStorage.removeItem(TOKEN_STORAGE_KEY);
     }
   } catch {
-    // Private browsing or storage disabled - the backend falls back to
-    // the "default" tenant when no header is sent, so this is harmless.
+    // Private browsing or storage disabled - the user will just need to
+    // log in again next load, which is a tolerable degradation.
   }
 }
 
+export class UnauthorizedError extends Error {}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const tenantSlug = getActiveTenantSlug();
+  const token = getAccessToken();
   const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (tenantSlug) {
-    headers["X-Tenant-Slug"] = tenantSlug;
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
   }
   const res = await fetch(`${API_BASE}${path}`, {
     ...init,
     headers: { ...headers, ...(init?.headers as Record<string, string> | undefined) },
   });
+  if (res.status === 401) {
+    setAccessToken(null);
+    throw new UnauthorizedError("Session expired - please log in again.");
+  }
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new Error(`${res.status} ${res.statusText}: ${text}`);
@@ -72,11 +80,58 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+export async function login(email: string, password: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+  if (!res.ok) {
+    throw new Error("Incorrect email or password.");
+  }
+  const body = (await res.json()) as { access_token: string };
+  setAccessToken(body.access_token);
+}
+
+export function logout(): void {
+  setAccessToken(null);
+}
+
+export function currentUser(): Promise<CurrentUser> {
+  return request<CurrentUser>("/api/auth/me");
+}
+
+export function changePassword(currentPassword: string, newPassword: string): Promise<void> {
+  return request<void>("/api/auth/change-password", {
+    method: "POST",
+    body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+  });
+}
+
+export function listUsers(): Promise<User[]> {
+  return request<User[]>("/api/admin/users");
+}
+
+export function createUser(payload: { email: string; password: string; name: string; role: string }): Promise<User> {
+  return request<User>("/api/admin/users", { method: "POST", body: JSON.stringify(payload) });
+}
+
+export function deactivateUser(id: number): Promise<User> {
+  return request<User>(`/api/admin/users/${id}/deactivate`, { method: "PATCH" });
+}
+
 export function listTenants(): Promise<Tenant[]> {
   return request<Tenant[]>("/api/platform/tenants");
 }
 
-export function createTenant(payload: { name: string; slug: string; vertical: string }): Promise<Tenant> {
+export function createTenant(payload: {
+  name: string;
+  slug: string;
+  vertical: string;
+  admin_email: string;
+  admin_password: string;
+  admin_name: string;
+}): Promise<Tenant> {
   return request<Tenant>("/api/platform/tenants", { method: "POST", body: JSON.stringify(payload) });
 }
 

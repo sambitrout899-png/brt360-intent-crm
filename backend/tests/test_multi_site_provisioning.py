@@ -99,6 +99,8 @@ def test_single_site_default_still_activates_immediately(client):
 def test_int14_blocked_for_b2c_only_tenant(client):
     db = client.TestSessionLocal()
     try:
+        from app.auth import hash_password
+        from app.models.auth import User, UserRole
         from app.models.crm import Party
         from app.models.orders import Order, ServiceOrder
         from app.models.accounts import ServiceAccount
@@ -127,15 +129,24 @@ def test_int14_blocked_for_b2c_only_tenant(client):
         db.flush()
         so = ServiceOrder(order_id=order.id, site_label="A-End")
         db.add(so)
+        user = User(
+            tenant_id=b2c_tenant.id,
+            email="admin@b2c-only.test",
+            password_hash=hash_password("password123"),
+            name="B2C Admin",
+            role=UserRole.admin,
+        )
+        db.add(user)
         db.commit()
         order_id = order.id
+        user_id = user.id
     finally:
         db.close()
 
     resp = client.post(
         "/api/intents",
         json={"text": f"Provision this site. order_id: {order_id}, site_label: A-End"},
-        headers={"X-Tenant-Slug": "b2c-only"},
+        headers={"X-Test-User-Id": str(user_id)},
     )
     body = resp.json()
     assert body["status"] == "needs_review"

@@ -1,10 +1,8 @@
 """Platform-level tenant management.
 
-Not tenant-scoped itself - this is what the X-Tenant-Slug header selects
-BETWEEN. No auth boundary exists yet (same disclosed gap as
-app/tenancy.py): anyone can list or create tenants today. A real
-deployment needs a platform-admin role gating this before it's safe to
-expose publicly - tracked as a known gap, not silently assumed away.
+Not tenant-scoped itself - this is what a user's JWT ties them to.
+platform_admin-only: a regular tenant's admin cannot create new tenants,
+only manage their own.
 """
 
 from __future__ import annotations
@@ -12,12 +10,16 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from app.auth import hash_password, require_roles
 from app.db import get_db
+from app.models.auth import User, UserRole
 from app.models.tenant import Tenant, TenantVertical
 from app.schemas.admin import TenantCreate, TenantOut
 from app.seed import seed_reference_data
 
-router = APIRouter(prefix="/api/platform", tags=["platform"])
+router = APIRouter(
+    prefix="/api/platform", tags=["platform"], dependencies=[Depends(require_roles(UserRole.platform_admin))]
+)
 
 
 @router.get("/tenants", response_model=list[TenantOut])
@@ -32,6 +34,8 @@ def create_tenant(payload: TenantCreate, db: Session = Depends(get_db)) -> Tenan
     existing = db.query(Tenant).filter(Tenant.slug == payload.slug).first()
     if existing is not None:
         raise HTTPException(400, f"Tenant slug '{payload.slug}' already exists")
+    if db.query(User).filter(User.email == payload.admin_email).first() is not None:
+        raise HTTPException(400, f"Email '{payload.admin_email}' is already registered")
 
     tenant = Tenant(name=payload.name, slug=payload.slug, vertical=TenantVertical(payload.vertical))
     db.add(tenant)
@@ -41,6 +45,15 @@ def create_tenant(payload: TenantCreate, db: Session = Depends(get_db)) -> Tenan
     # created through the UI, not an empty shell someone has to seed by
     # hand via the CLI.
     seed_reference_data(db, tenant.id)
+    db.add(
+        User(
+            tenant_id=tenant.id,
+            email=payload.admin_email,
+            password_hash=hash_password(payload.admin_password),
+            name=payload.admin_name,
+            role=UserRole.admin,
+        )
+    )
     db.commit()
     db.refresh(tenant)
     return tenant
