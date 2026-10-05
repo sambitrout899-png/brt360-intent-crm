@@ -223,7 +223,7 @@ export interface Order {
   service_account_name: string;
   quote_id: number | null;
   order_type: "new" | "change" | "cancel" | "suspend";
-  status: "created" | "activating" | "active" | "changed" | "suspended" | "cancelled" | "terminated";
+  status: "created" | "activating" | "active" | "changed" | "suspended" | "pending_cancellation" | "cancelled" | "terminated";
   monthly_price: number;
   contract_months: number;
   created_at: string;

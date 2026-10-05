@@ -145,6 +145,9 @@ export default function CustomerPage({ onRequestIntent }: { onRequestIntent: (te
                               <ActionButton label="Cancel" onClick={() => onRequestIntent(`Cancel this service. order_id: ${o.id}`)} />
                             </>
                           )}
+                          {o.status === "pending_cancellation" && (
+                            <ActionButton label="Retain Customer" onClick={() => onRequestIntent(`Cancel this service. order_id: ${o.id}, decision: retain`)} />
+                          )}
                         </div>
                       ))}
                       {sa.orders.length === 0 && <p className="text-xs text-slate-500">No orders under this service account.</p>}

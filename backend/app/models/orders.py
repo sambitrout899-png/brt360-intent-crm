@@ -23,6 +23,10 @@ class OrderStatus(str, enum.Enum):
     active = "active"
     changed = "changed"
     suspended = "suspended"
+    # Retention window open after a cancel request - the order is still
+    # live and billable; it only actually cancels if the window lapses
+    # with no retention offer accepted (see actions_o2a.py INT-09).
+    pending_cancellation = "pending_cancellation"
     cancelled = "cancelled"
     terminated = "terminated"
 

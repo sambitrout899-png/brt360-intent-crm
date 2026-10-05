@@ -8,12 +8,13 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.crm_core import account_service, order_service
+from app.crm_core import account_service, order_service, sla_service
 from app.data_intelligence import event_bus
 from app.integration import order_adapter
 from app.models.catalog import ProductOffering
 from app.models.crm import Opportunity, Quote, QuoteItem
 from app.models.orders import Order, OrderStatus, OrderType
+from app.models.sla import SlaClock
 from app.orchestration.orchestrator import SagaStep
 from app.timeutils import utcnow
 
@@ -165,11 +166,93 @@ def build_int08_steps(db: Session, tenant_id: int, execution_id: int, entities: 
     ]
 
 
+def _finalize_cancellation(db: Session, tenant_id: int, correlation_id: int, order_id: int, *, action: str) -> dict[str, Any]:
+    """Actually cancel/terminate an order: deprovision, apply the early
+    termination fee, close billing. Called either directly (terminate -
+    always immediate; cancel - immediately too, if no retention policy is
+    configured for this tenant) or by _handle_retention_breach once a
+    retention window lapses with no retention offer accepted.
+    """
+    order = db.get(Order, order_id)
+    months_elapsed = max(0, (utcnow() - order.created_at).days // 30)
+    fee = order_service.calculate_early_termination_fee(order.monthly_price, order.contract_months, months_elapsed)
+    for so in order.service_orders:
+        order_adapter.release_service_order(db, so.id)
+    account = order_adapter.get_or_create_billing_account(db, tenant_id, order.party_id)
+    if fee > 0:
+        order_adapter.apply_billing_adjustment(db, account.id, order.id, fee, f"Early termination fee ({action})")
+    new_status = OrderStatus.cancelled if action == "cancel" else OrderStatus.terminated
+    order_adapter.set_order_status(db, order.id, new_status)
+    order_adapter.set_billing_account_status(db, account.id, "closed")
+    event_bus.publish(db, correlation_id, "order.cancelled", {"order_id": order.id, "action": action})
+    return {"order_id": order.id, "status": new_status.value, "early_termination_fee": fee}
+
+
+def _escalate_suspension(db: Session, tenant_id: int, correlation_id: int, order_id: int) -> dict[str, Any]:
+    """The hard end of the soft-suspend -> hard-suspend BRD pattern: if a
+    suspension's grace period lapses with nothing resolved, the order
+    terminates outright. Called by _handle_suspension_breach.
+    """
+    order = db.get(Order, order_id)
+    for so in order.service_orders:
+        order_adapter.release_service_order(db, so.id)
+    account = order_adapter.get_or_create_billing_account(db, tenant_id, order.party_id)
+    months_elapsed = max(0, (utcnow() - order.created_at).days // 30)
+    fee = order_service.calculate_early_termination_fee(order.monthly_price, order.contract_months, months_elapsed)
+    if fee > 0:
+        order_adapter.apply_billing_adjustment(db, account.id, order.id, fee, "Termination after suspension grace period lapsed")
+    order_adapter.set_order_status(db, order.id, OrderStatus.terminated)
+    order_adapter.set_billing_account_status(db, account.id, "closed")
+    event_bus.publish(db, correlation_id, "order.terminated", {"order_id": order.id, "reason": "suspension_grace_expired"})
+    return {"order_id": order.id, "status": OrderStatus.terminated.value, "early_termination_fee": fee}
+
+
+def _handle_retention_breach(db: Session, clock: SlaClock, correlation_id: int) -> dict[str, Any]:
+    order = db.get(Order, clock.entity_id)
+    if order is None or order.status != OrderStatus.pending_cancellation:
+        return {"outcome": "skipped", "detail": "Order is no longer pending cancellation - nothing to do."}
+    result = _finalize_cancellation(db, clock.tenant_id, correlation_id, order.id, action="cancel")
+    return {
+        "outcome": "cancelled",
+        "detail": f"Retention window lapsed with no offer accepted - order {order.id} cancelled "
+        f"(fee {result['early_termination_fee']}).",
+    }
+
+
+def _handle_suspension_breach(db: Session, clock: SlaClock, correlation_id: int) -> dict[str, Any]:
+    order = db.get(Order, clock.entity_id)
+    if order is None or order.status != OrderStatus.suspended:
+        return {"outcome": "skipped", "detail": "Order is no longer suspended - nothing to do."}
+    result = _escalate_suspension(db, clock.tenant_id, correlation_id, order.id)
+    return {
+        "outcome": "terminated",
+        "detail": f"Suspension grace period lapsed - order {order.id} terminated (fee {result['early_termination_fee']}).",
+    }
+
+
+sla_service.register_breach_handler("retention_window", _handle_retention_breach)
+sla_service.register_breach_handler("suspension_grace", _handle_suspension_breach)
+
+
 def build_int09_steps(db: Session, tenant_id: int, execution_id: int, entities: dict[str, Any]) -> list[SagaStep]:
-    """INT-09 - Suspend, cancel or terminate."""
+    """INT-09 - Suspend, cancel or terminate.
+
+    "terminate" (for-cause) stays immediate, same as before. "suspend"
+    degrades the service immediately as before, but now also starts a
+    grace-period SLA clock - if a tenant has configured one and nobody
+    resolves things, _handle_suspension_breach escalates to terminated.
+    "cancel" no longer cancels on the spot: if a tenant has a
+    retention_window SLA policy configured, it opens that window instead
+    (order -> pending_cancellation) and only actually cancels if the
+    window lapses (_handle_retention_breach) or a later call passes
+    decision: retain, which restores the order to active. A tenant with
+    no retention policy configured keeps the old immediate-cancel
+    behavior - this is purely additive.
+    """
 
     order_id = entities["order_id"]
     action = entities.get("action", "cancel")
+    decision = entities.get("decision")
     state: dict[str, Any] = {}
 
     def step1() -> dict[str, Any]:
@@ -181,35 +264,48 @@ def build_int09_steps(db: Session, tenant_id: int, execution_id: int, entities: 
 
     def step2() -> dict[str, Any]:
         order = state["order"]
-        if action in ("cancel", "terminate"):
-            months_elapsed = max(0, (utcnow() - order.created_at).days // 30)
-            fee = order_service.calculate_early_termination_fee(order.monthly_price, order.contract_months, months_elapsed)
-        else:
-            fee = 0.0
-        state["fee"] = fee
-        return {"early_termination_fee": fee}
 
-    def step3() -> dict[str, Any]:
-        order = state["order"]
-        if action in ("cancel", "terminate"):
-            for so in order.service_orders:
-                order_adapter.release_service_order(db, so.id)
-        return {"deprovisioned": action in ("cancel", "terminate")}
+        if action == "terminate":
+            return _finalize_cancellation(db, tenant_id, execution_id, order.id, action="terminate")
 
-    def step4() -> dict[str, Any]:
-        order = state["order"]
+        if action == "cancel":
+            if order.status == OrderStatus.pending_cancellation:
+                if decision == "retain":
+                    sla_service.complete_clock(db, tenant_id, "retention_window", "order", order.id)
+                    order_adapter.set_order_status(db, order.id, OrderStatus.active)
+                    event_bus.publish(db, execution_id, "order.retained", {"order_id": order.id})
+                    return {"order_id": order.id, "status": OrderStatus.active.value, "retained": True}
+                # Already in the window from an earlier call - no-op, don't restart the clock.
+                return {"order_id": order.id, "status": OrderStatus.pending_cancellation.value}
+
+            clock = sla_service.start_clock(db, tenant_id, "retention_window", "order", order.id)
+            if clock is None:
+                # No retention policy configured for this tenant - cancel immediately.
+                return _finalize_cancellation(db, tenant_id, execution_id, order.id, action="cancel")
+            order_adapter.set_order_status(db, order.id, OrderStatus.pending_cancellation)
+            event_bus.publish(
+                db, execution_id, "order.retention_window_opened", {"order_id": order.id, "deadline": clock.deadline.isoformat()}
+            )
+            return {
+                "order_id": order.id,
+                "status": OrderStatus.pending_cancellation.value,
+                "retention_window_deadline": clock.deadline.isoformat(),
+            }
+
+        # suspend
+        if order.status == OrderStatus.suspended:
+            return {"order_id": order.id, "status": OrderStatus.suspended.value, "early_termination_fee": 0.0}
+        order_adapter.set_order_status(db, order.id, OrderStatus.suspended)
         account = order_adapter.get_or_create_billing_account(db, tenant_id, order.party_id)
-        if state["fee"] > 0:
-            order_adapter.apply_billing_adjustment(db, account.id, order_id, state["fee"], f"Early termination fee ({action})")
-        new_status = {"suspend": OrderStatus.suspended, "cancel": OrderStatus.cancelled, "terminate": OrderStatus.terminated}[action]
-        order_adapter.set_order_status(db, order.id, new_status)
-        order_adapter.set_billing_account_status(db, account.id, "suspended" if action == "suspend" else "closed")
-        event_bus.publish(db, execution_id, "order.cancelled", {"order_id": order.id, "action": action})
-        return {"order_id": order.id, "status": new_status.value, "early_termination_fee": state["fee"]}
+        order_adapter.set_billing_account_status(db, account.id, "suspended")
+        clock = sla_service.start_clock(db, tenant_id, "suspension_grace", "order", order.id)
+        event_bus.publish(db, execution_id, "order.suspended", {"order_id": order.id})
+        result = {"order_id": order.id, "status": OrderStatus.suspended.value, "early_termination_fee": 0.0}
+        if clock is not None:
+            result["suspension_grace_deadline"] = clock.deadline.isoformat()
+        return result
 
     return [
         SagaStep("validate_contract_and_notice_period", step1),
-        SagaStep("calculate_termination_fee", step2),
-        SagaStep("deprovision_resources", step3),
-        SagaStep("update_billing_and_inventory", step4),
+        SagaStep("process_lifecycle_action", step2),
     ]

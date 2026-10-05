@@ -63,7 +63,9 @@ INT-08 "Change this live service" - entities: order_id (int), new_monthly_price
   (number).
 
 INT-09 "Suspend, cancel or terminate" - entities: order_id (int), action
-  ("suspend"|"cancel"|"terminate").
+  ("suspend"|"cancel"|"terminate"), decision (str, optional - "retain" to
+  accept a retention offer and cancel a pending retention window instead
+  of letting it lapse into an actual cancellation).
 
 INT-10 "Log & classify this complaint" - entities: description (str),
   company_name (str, optional), sla_class (str, default "standard").
@@ -240,9 +242,13 @@ def _classify_with_rules(text: str) -> ClassificationResult:
         confidence = 0.85 if entities["order_id"] else 0.4
         return ClassificationResult("INT-08", entities, confidence, "Matched keyword 'upgrade'/'relocate' + parsed fields")
 
-    if "suspend" in lowered or "cancel" in lowered or "terminate" in lowered:
+    if "suspend" in lowered or "cancel" in lowered or "terminate" in lowered or "retain" in lowered:
         action = "suspend" if "suspend" in lowered else ("terminate" if "terminate" in lowered else "cancel")
-        entities = {"order_id": _as_int(fields, "order_id"), "action": fields.get("action", action)}
+        entities = {
+            "order_id": _as_int(fields, "order_id"),
+            "action": fields.get("action", action),
+            "decision": fields.get("decision"),
+        }
         confidence = 0.85 if entities["order_id"] else 0.4
         return ClassificationResult("INT-09", entities, confidence, "Matched keyword 'suspend'/'cancel'/'terminate' + parsed fields")
 

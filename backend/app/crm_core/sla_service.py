@@ -34,7 +34,11 @@ AUTO_CANCEL = "auto_cancel"
 AUTO_PROCEED = "auto_proceed"
 KNOWN_BREACH_ACTIONS = [ESCALATE, AUTO_APPROVE, AUTO_CANCEL, AUTO_PROCEED]
 
-BreachHandler = Callable[[Session, SlaClock], dict[str, Any]]
+#  (db, clock, correlation_id) -> outcome dict. correlation_id is the
+# sweep's own SYS-SLA IntentExecutionLog id - handlers that publish their
+# own domain events (via event_bus.publish) must use this, not clock.id,
+# since DomainEvent.correlation_id is a FK to intent_execution_log.
+BreachHandler = Callable[[Session, SlaClock, int], dict[str, Any]]
 _BREACH_HANDLERS: dict[str, BreachHandler] = {}
 
 
@@ -45,7 +49,7 @@ def register_breach_handler(clock_type: str, handler: BreachHandler) -> None:
     _BREACH_HANDLERS[clock_type] = handler
 
 
-def _escalate(db: Session, clock: SlaClock) -> dict[str, Any]:
+def _escalate(db: Session, clock: SlaClock, correlation_id: int) -> dict[str, Any]:
     if clock.on_breach_action != ESCALATE:
         detail = (
             f"No handler registered yet for action '{clock.on_breach_action}' on clock_type "
@@ -138,7 +142,7 @@ def process_due_clocks(db: Session, tenant_id: int, as_of: dt.datetime | None = 
     breached: list[dict[str, Any]] = []
     for clock in due:
         handler = _BREACH_HANDLERS.get(clock.clock_type, _escalate)
-        outcome = handler(db, clock)
+        outcome = handler(db, clock, log.id)
         clock.status = SlaClockStatus.breached
         clock.resolved_at = as_of
         clock.detail = outcome.get("detail", "")

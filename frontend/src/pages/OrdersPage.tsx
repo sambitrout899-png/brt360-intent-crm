@@ -8,6 +8,7 @@ const ORDER_STATUS_STYLES: Record<string, string> = {
   active: "bg-emerald-500/15 text-emerald-400 border-emerald-500/30",
   changed: "bg-amber-500/15 text-amber-400 border-amber-500/30",
   suspended: "bg-amber-500/15 text-amber-400 border-amber-500/30",
+  pending_cancellation: "bg-orange-500/15 text-orange-400 border-orange-500/30",
   cancelled: "bg-red-500/15 text-red-400 border-red-500/30",
   terminated: "bg-red-500/15 text-red-400 border-red-500/30",
 };
@@ -75,6 +76,14 @@ export default function OrdersPage({ onRequestIntent }: { onRequestIntent: (text
                       Cancel
                     </button>
                   </div>
+                )}
+                {o.status === "pending_cancellation" && (
+                  <button
+                    onClick={() => onRequestIntent(`Cancel this service. order_id: ${o.id}, decision: retain`)}
+                    className="ml-auto rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-xs font-bold text-emerald-400 hover:bg-emerald-500/20"
+                  >
+                    Retain Customer
+                  </button>
                 )}
               </div>
               {o.service_orders.map((so) => (
