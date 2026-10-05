@@ -53,7 +53,11 @@ INT-05 "Configure & quote this bundle" - entities: opportunity_id (int),
 INT-06 "Check feasibility & approve" - entities: quote_id (int), decision
   ("approve"|"reject"|"conditional"), reasoning (str, optional).
 
-INT-07 "Activate this order end-to-end" - entities: quote_id (int).
+INT-07 "Activate this order end-to-end" - entities: quote_id (int),
+  service_account_name (str, optional - which service account this order
+  belongs to, e.g. a site or bundle name; defaults to "<offering name>
+  Service" if omitted. Re-activating under the same name on the same
+  account reuses that service account rather than creating a new one).
 
 INT-08 "Change this live service" - entities: order_id (int), new_monthly_price
   (number).
@@ -221,7 +225,10 @@ def _classify_with_rules(text: str) -> ClassificationResult:
         return ClassificationResult("INT-06", entities, confidence, "Matched keyword 'approve'/'reject' + parsed fields")
 
     if "activate" in lowered:
-        entities = {"quote_id": _as_int(fields, "quote_id")}
+        entities = {
+            "quote_id": _as_int(fields, "quote_id"),
+            "service_account_name": fields.get("service_account_name"),
+        }
         confidence = 0.9 if entities["quote_id"] else 0.4
         return ClassificationResult("INT-07", entities, confidence, "Matched keyword 'activate' + parsed fields")
 

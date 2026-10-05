@@ -219,6 +219,8 @@ export interface Order {
   id: number;
   party_id: number;
   party_name: string;
+  service_account_id: number;
+  service_account_name: string;
   quote_id: number | null;
   order_type: "new" | "change" | "cancel" | "suspend";
   status: "created" | "activating" | "active" | "changed" | "suspended" | "cancelled" | "terminated";
@@ -226,6 +228,15 @@ export interface Order {
   contract_months: number;
   created_at: string;
   service_orders: ServiceOrder[];
+}
+
+export interface ServiceAccount {
+  id: number;
+  billing_account_id: number;
+  name: string;
+  status: string;
+  created_at: string;
+  orders: Order[];
 }
 
 export interface BillingAdjustment {
@@ -298,6 +309,7 @@ export interface Party360 {
   opportunities: Opportunity[];
   quotes: Quote[];
   orders: Order[];
+  service_accounts: ServiceAccount[];
   billing_account: BillingAccount | null;
   tickets: TroubleTicket[];
 }

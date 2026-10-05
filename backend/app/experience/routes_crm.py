@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.models.accounts import ServiceAccount
 from app.models.assurance import Technician, TroubleTicket, WorkOrder
 from app.models.catalog import ProductOffering
 from app.models.crm import Lead, Opportunity, Party, Quote
@@ -30,6 +31,7 @@ from app.schemas.crm import (
     QuoteOut,
     ResourceOut,
     RootCauseOut,
+    ServiceAccountOut,
     ServiceOrderOut,
     TechnicianOut,
     TroubleTicketOut,
@@ -85,7 +87,7 @@ def _quote_out(quote: Quote, offering_names: dict[int, str]) -> QuoteOut:
     )
 
 
-def _order_out(order: Order, party_name: str) -> OrderOut:
+def _order_out(order: Order, party_name: str, service_account_name: str) -> OrderOut:
     service_orders = [
         ServiceOrderOut(
             id=so.id,
@@ -98,6 +100,8 @@ def _order_out(order: Order, party_name: str) -> OrderOut:
         id=order.id,
         party_id=order.party_id,
         party_name=party_name,
+        service_account_id=order.service_account_id,
+        service_account_name=service_account_name,
         quote_id=order.quote_id,
         order_type=order.order_type.value,
         status=order.status.value,
@@ -201,12 +205,33 @@ def party_360(party_id: int, db: Session = Depends(get_db), tenant_id: int = Dep
     billing_account = db.query(BillingAccount).filter(BillingAccount.tenant_id == tenant_id, BillingAccount.party_id == party_id).first()
     tickets = db.query(TroubleTicket).filter(TroubleTicket.tenant_id == tenant_id, TroubleTicket.party_id == party_id).all()
 
+    service_accounts = (
+        db.query(ServiceAccount).filter(ServiceAccount.billing_account_id == billing_account.id).all()
+        if billing_account
+        else []
+    )
+    service_account_names = {sa.id: sa.name for sa in service_accounts}
+    orders_by_service_account: dict[int, list[Order]] = {}
+    for o in orders:
+        orders_by_service_account.setdefault(o.service_account_id, []).append(o)
+
     return Party360Out(
         party=PartyOut.model_validate(party),
         leads=[LeadOut.model_validate(l) for l in leads],
         opportunities=[OpportunityOut(id=o.id, lead_id=o.lead_id, name=o.name, stage=o.stage.value, created_at=o.created_at, updated_at=o.updated_at) for o in opportunities],
         quotes=[_quote_out(q, offering_names) for q in quotes],
-        orders=[_order_out(o, party.name) for o in orders],
+        orders=[_order_out(o, party.name, service_account_names.get(o.service_account_id, "?")) for o in orders],
+        service_accounts=[
+            ServiceAccountOut(
+                id=sa.id,
+                billing_account_id=sa.billing_account_id,
+                name=sa.name,
+                status=sa.status,
+                created_at=sa.created_at,
+                orders=[_order_out(o, party.name, sa.name) for o in orders_by_service_account.get(sa.id, [])],
+            )
+            for sa in service_accounts
+        ],
         billing_account=_billing_account_out(billing_account, party.name) if billing_account else None,
         tickets=[_ticket_out(t) for t in tickets],
     )
@@ -262,7 +287,10 @@ def list_orders(status: str | None = None, db: Session = Depends(get_db), tenant
         query = query.filter(Order.status == status)
     orders = query.order_by(Order.created_at.desc()).all()
     party_names = {p.id: p.name for p in db.query(Party.id, Party.name).filter(Party.tenant_id == tenant_id).all()}
-    return [_order_out(o, party_names.get(o.party_id, "?")) for o in orders]
+    service_account_names = {
+        sa.id: sa.name for sa in db.query(ServiceAccount.id, ServiceAccount.name).filter(ServiceAccount.tenant_id == tenant_id).all()
+    }
+    return [_order_out(o, party_names.get(o.party_id, "?"), service_account_names.get(o.service_account_id, "?")) for o in orders]
 
 
 @router.get("/orders/{order_id}", response_model=OrderOut)
@@ -271,7 +299,8 @@ def order_detail(order_id: int, db: Session = Depends(get_db), tenant_id: int = 
     if order is None or order.tenant_id != tenant_id:
         raise HTTPException(404, "Order not found")
     party = db.get(Party, order.party_id)
-    return _order_out(order, party.name if party else "?")
+    service_account = db.get(ServiceAccount, order.service_account_id)
+    return _order_out(order, party.name if party else "?", service_account.name if service_account else "?")
 
 
 @router.get("/billing-accounts", response_model=list[BillingAccountOut])

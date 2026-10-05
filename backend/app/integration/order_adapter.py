@@ -30,6 +30,7 @@ def create_order(
     *,
     tenant_id: int,
     party_id: int,
+    service_account_id: int,
     quote_id: int | None,
     order_type: OrderType,
     monthly_price: float,
@@ -38,6 +39,7 @@ def create_order(
     order = Order(
         tenant_id=tenant_id,
         party_id=party_id,
+        service_account_id=service_account_id,
         quote_id=quote_id,
         order_type=order_type,
         status=OrderStatus.created,

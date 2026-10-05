@@ -117,25 +117,6 @@ export default function CustomerPage({ onRequestIntent }: { onRequestIntent: (te
                 {detail.quotes.length === 0 && <p className="text-sm text-slate-500">None.</p>}
               </Section>
 
-              <Section title={`Orders (${detail.orders.length})`}>
-                {detail.orders.map((o) => (
-                  <div key={o.id} className="rounded-lg bg-slate-950 px-3 py-2 text-sm mb-2">
-                    <div className="flex items-center gap-3">
-                      <span className="font-mono text-xs text-slate-500">#{o.id}</span>
-                      <span className="text-slate-200">₹{o.monthly_price.toLocaleString()}/mo</span>
-                      <span className="rounded-md bg-slate-800 px-2 py-0.5 text-xs text-slate-300">{o.status}</span>
-                      {(o.status === "active" || o.status === "changed") && (
-                        <>
-                          <ActionButton label="Change" onClick={() => onRequestIntent(`Upgrade this service. order_id: ${o.id}, new_price: `)} />
-                          <ActionButton label="Cancel" onClick={() => onRequestIntent(`Cancel this service. order_id: ${o.id}`)} />
-                        </>
-                      )}
-                    </div>
-                  </div>
-                ))}
-                {detail.orders.length === 0 && <p className="text-sm text-slate-500">None.</p>}
-              </Section>
-
               {detail.billing_account && (
                 <Section title="Billing">
                   <div className="text-sm text-slate-300">
@@ -144,6 +125,34 @@ export default function CustomerPage({ onRequestIntent }: { onRequestIntent: (te
                   </div>
                 </Section>
               )}
+
+              <Section title={`Service Accounts (${detail.service_accounts.length})`}>
+                {detail.service_accounts.map((sa) => (
+                  <div key={sa.id} className="mb-3 rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-sm">
+                    <div className="mb-2 flex items-center gap-3">
+                      <span className="font-semibold text-slate-200">{sa.name}</span>
+                      <span className="rounded-md bg-slate-800 px-2 py-0.5 text-xs text-slate-300">{sa.status}</span>
+                    </div>
+                    <div className="space-y-2 pl-3">
+                      {sa.orders.map((o) => (
+                        <div key={o.id} className="flex items-center gap-3 rounded-lg bg-slate-900/60 px-3 py-2">
+                          <span className="font-mono text-xs text-slate-500">#{o.id}</span>
+                          <span className="text-slate-200">₹{o.monthly_price.toLocaleString()}/mo</span>
+                          <span className="rounded-md bg-slate-800 px-2 py-0.5 text-xs text-slate-300">{o.status}</span>
+                          {(o.status === "active" || o.status === "changed") && (
+                            <>
+                              <ActionButton label="Change" onClick={() => onRequestIntent(`Upgrade this service. order_id: ${o.id}, new_price: `)} />
+                              <ActionButton label="Cancel" onClick={() => onRequestIntent(`Cancel this service. order_id: ${o.id}`)} />
+                            </>
+                          )}
+                        </div>
+                      ))}
+                      {sa.orders.length === 0 && <p className="text-xs text-slate-500">No orders under this service account.</p>}
+                    </div>
+                  </div>
+                ))}
+                {detail.service_accounts.length === 0 && <p className="text-sm text-slate-500">None yet - created automatically on first order activation.</p>}
+              </Section>
 
               <Section title={`Tickets (${detail.tickets.length})`}>
                 {detail.tickets.map((t) => (

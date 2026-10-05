@@ -103,6 +103,8 @@ class OrderOut(BaseModel):
     id: int
     party_id: int
     party_name: str
+    service_account_id: int
+    service_account_name: str
     quote_id: int | None
     order_type: str
     status: str
@@ -110,6 +112,17 @@ class OrderOut(BaseModel):
     contract_months: int
     created_at: dt.datetime
     service_orders: list[ServiceOrderOut] = []
+
+    model_config = {"from_attributes": True}
+
+
+class ServiceAccountOut(BaseModel):
+    id: int
+    billing_account_id: int
+    name: str
+    status: str
+    created_at: dt.datetime
+    orders: list[OrderOut] = []
 
     model_config = {"from_attributes": True}
 
@@ -198,6 +211,7 @@ class Party360Out(BaseModel):
     opportunities: list[OpportunityOut]
     quotes: list[QuoteOut]
     orders: list[OrderOut]
+    service_accounts: list[ServiceAccountOut]
     billing_account: BillingAccountOut | None
     tickets: list[TroubleTicketOut]
 

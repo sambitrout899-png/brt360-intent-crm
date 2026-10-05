@@ -19,6 +19,7 @@ from app.models.catalog import (
     ProductOffering,
     ProductSpecification,
 )
+from app.models.accounts import ServiceAccount
 from app.models.approval import (
     ApprovalChainInstance,
     ApprovalChainTemplate,
@@ -86,4 +87,5 @@ __all__ = [
     "ProductAttributeDefinition",
     "ProductAttributeValue",
     "AttributeConstraintRule",
+    "ServiceAccount",
 ]

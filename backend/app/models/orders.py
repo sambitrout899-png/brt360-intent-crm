@@ -51,6 +51,10 @@ class Order(Base):
     tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id"))
     quote_id: Mapped[int | None] = mapped_column(ForeignKey("quotes.id"), nullable=True)
     party_id: Mapped[int] = mapped_column(ForeignKey("parties.id"))
+    # 3-tier account hierarchy (Phase 1 primitive #5): every Order belongs
+    # to a ServiceAccount, which belongs to a BillingAccount - party_id is
+    # kept too since every existing query already filters by it directly.
+    service_account_id: Mapped[int] = mapped_column(ForeignKey("service_accounts.id"))
     order_type: Mapped[OrderType] = mapped_column(Enum(OrderType), default=OrderType.new)
     status: Mapped[OrderStatus] = mapped_column(Enum(OrderStatus), default=OrderStatus.created)
     contract_months: Mapped[int] = mapped_column(Integer, default=12)

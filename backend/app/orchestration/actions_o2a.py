@@ -8,7 +8,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.crm_core import order_service
+from app.crm_core import account_service, order_service
 from app.data_intelligence import event_bus
 from app.integration import order_adapter
 from app.models.catalog import ProductOffering
@@ -30,11 +30,26 @@ def build_int07_steps(db: Session, tenant_id: int, execution_id: int, entities: 
         lead = opportunity.lead
         item = db.query(QuoteItem).filter(QuoteItem.quote_id == quote.id).first()
         offering = db.get(ProductOffering, item.product_offering_id)
+        party_id = lead.party_id
+
+        # 3-tier account hierarchy (Phase 1 primitive #5): resolve/create the
+        # billing account and the service account this order belongs to
+        # before the order itself - a ServiceAccount id is required on
+        # every Order, not assigned after the fact. Billing account
+        # creation moved here from step5 (which still flips it to "active"
+        # once provisioning completes); get_or_create is idempotent so this
+        # is a no-op on every order after a party's first.
+        billing_account = order_adapter.get_or_create_billing_account(db, tenant_id, party_id)
+        service_account_name = entities.get("service_account_name") or f"{offering.name} Service"
+        service_account = account_service.get_or_create_service_account(
+            db, tenant_id, billing_account.id, service_account_name
+        )
 
         order = order_adapter.create_order(
             db,
             tenant_id=tenant_id,
-            party_id=lead.party_id,
+            party_id=party_id,
+            service_account_id=service_account.id,
             quote_id=quote.id,
             order_type=OrderType.new,
             monthly_price=quote.total_price,
@@ -42,8 +57,14 @@ def build_int07_steps(db: Session, tenant_id: int, execution_id: int, entities: 
         order_adapter.add_order_item(db, order.id, offering.id, item.quantity)
         state["order"] = order
         state["offering"] = offering
-        state["party_id"] = lead.party_id
-        return {"order_id": order.id}
+        state["party_id"] = party_id
+        state["billing_account_id"] = billing_account.id
+        state["service_account"] = service_account
+        return {
+            "order_id": order.id,
+            "service_account_id": service_account.id,
+            "service_account_name": service_account.name,
+        }
 
     def step2() -> dict[str, Any]:
         tasks = order_service.decompose_tasks(state["offering"].composition)
@@ -66,10 +87,10 @@ def build_int07_steps(db: Session, tenant_id: int, execution_id: int, entities: 
         return {"provisioned": True}
 
     def step5() -> dict[str, Any]:
-        account = order_adapter.get_or_create_billing_account(db, tenant_id, state["party_id"])
-        order_adapter.set_billing_account_status(db, account.id, "active", rate_plan=state["offering"].name)
-        state["billing_account_id"] = account.id
-        return {"billing_account_id": account.id}
+        # Billing account was already resolved/created in step1 - just flip
+        # it active now that provisioning has actually completed.
+        order_adapter.set_billing_account_status(db, state["billing_account_id"], "active", rate_plan=state["offering"].name)
+        return {"billing_account_id": state["billing_account_id"]}
 
     def step6() -> dict[str, Any]:
         from app.integration import ticket_adapter

@@ -51,6 +51,7 @@ export default function OrdersPage({ onRequestIntent }: { onRequestIntent: (text
               <div className="flex flex-wrap items-center gap-3">
                 <span className="font-mono text-xs text-slate-500">#{o.id}</span>
                 <span className="font-bold text-slate-100">{o.party_name}</span>
+                <span className="text-xs text-slate-500">{o.service_account_name}</span>
                 <span className="text-slate-300">₹{o.monthly_price.toLocaleString()}/mo</span>
                 <span className={`rounded-md border px-2 py-0.5 text-xs font-bold ${ORDER_STATUS_STYLES[o.status]}`}>{o.status}</span>
                 {(o.status === "active" || o.status === "changed") && (
