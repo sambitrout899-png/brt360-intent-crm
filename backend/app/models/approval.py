@@ -7,16 +7,23 @@ just a different threshold), so the chain shape itself - which tiers, in
 what order, for which discount band and segment - is admin-configurable
 reference data (ApprovalChainTemplate + ApprovalChainTier), not Python.
 
-ApprovalChainInstance/ApprovalStepInstance are the resolved, per-quote
-execution of a template: one instance per quote, one step row per tier,
-advanced one at a time by successive INT-06 "Approve this quote" calls.
+ApprovalChainInstance/ApprovalStepInstance are the resolved execution of a
+template against one entity - originally quotes only (INT-06), now
+polymorphic (entity_type + entity_id, same pattern as SlaClock) so the
+same engine also gates Lead -> Opportunity qualification (a Sales
+Director approval, per the B2B sales journey) without a second approval
+engine. ApprovalChainTemplate.entity_type picks which kind of template a given
+resolve_* call considers: "quote" templates still match by discount band
++ segment (approval_service.resolve_template); "lead" templates match
+simply - one active chain per tenant, no discount band, since there's no
+discount concept on a Lead (approval_service.resolve_lead_qualification_template).
 """
 
 from __future__ import annotations
 
 import datetime as dt
 
-from sqlalchemy import Boolean, Enum, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Enum, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -37,6 +44,9 @@ class ApprovalChainTemplate(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id"))
     name: Mapped[str] = mapped_column(String(150))
+    # "quote" (discount-band matched) or "lead_qualification" (matched
+    # simply - see approval_service.resolve_lead_qualification_template).
+    entity_type: Mapped[str] = mapped_column(String(30), default="quote")
     segment: Mapped[str | None] = mapped_column(String(100), nullable=True)
     min_discount_pct: Mapped[float] = mapped_column(Float, default=0.0)
     max_discount_pct: Mapped[float] = mapped_column(Float, default=100.0)
@@ -62,15 +72,18 @@ class ApprovalChainTier(Base):
 
 
 class ApprovalChainInstance(Base):
-    """The resolved chain for one quote - instantiated on the first
-    "Approve this quote" call and reused on subsequent calls until it
-    reaches approved/rejected.
+    """The resolved chain for one entity (a quote, a lead, ...) -
+    instantiated on the first approval call against that entity and
+    reused on subsequent calls until it reaches approved/rejected.
+    entity_type + entity_id together are unique - one chain per entity.
     """
 
     __tablename__ = "approval_chain_instances"
+    __table_args__ = (UniqueConstraint("entity_type", "entity_id", name="uq_approval_chain_instances_entity"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    quote_id: Mapped[int] = mapped_column(ForeignKey("quotes.id"), unique=True)
+    entity_type: Mapped[str] = mapped_column(String(30))
+    entity_id: Mapped[int] = mapped_column(Integer)
     template_id: Mapped[int] = mapped_column(ForeignKey("approval_chain_templates.id"))
     status: Mapped[ApprovalStatus] = mapped_column(Enum(ApprovalStatus), default=ApprovalStatus.pending)
     current_sequence: Mapped[int] = mapped_column(Integer, default=1)

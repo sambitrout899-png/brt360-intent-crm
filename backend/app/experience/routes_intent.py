@@ -17,7 +17,16 @@ from app.data_intelligence import audit
 from app.db import get_db
 from app.intent_engine import classifier, context_assembly, reasoning, verification
 from app.models.auth import UserRole
-from app.orchestration import actions, actions_identity, actions_l2q, actions_o2a, actions_site, actions_t2r
+from app.orchestration import (
+    actions,
+    actions_feasibility,
+    actions_identity,
+    actions_l2q,
+    actions_o2a,
+    actions_prospect,
+    actions_site,
+    actions_t2r,
+)
 from app.orchestration.orchestrator import run_saga
 from app.schemas.intent import IntentRequest, IntentResponse, PlanStep
 from app.tenancy import get_current_tenant_id
@@ -43,6 +52,13 @@ _STEP_BUILDERS = {
     "INT-12": actions_t2r.build_int12_steps,
     "INT-13": actions_identity.build_int13_steps,
     "INT-14": actions_site.build_int14_steps,
+    "INT-15": actions_prospect.build_int15_steps,
+    "INT-16": actions_l2q.build_int16_steps,
+    "INT-17": actions_l2q.build_int17_steps,
+    "INT-18": actions_feasibility.build_int18_steps,
+    "INT-19": actions_l2q.build_int19_steps,
+    "INT-20": actions_l2q.build_int20_steps,
+    "INT-21": actions_o2a.build_int21_steps,
 }
 
 

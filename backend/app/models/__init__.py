@@ -30,11 +30,18 @@ from app.models.approval import (
 from app.models.crm import (
     FeasibilityResult,
     Lead,
+    LeadStatus,
     Opportunity,
     Party,
     Quote,
     QuoteItem,
     TerritoryRule,
+)
+from app.models.feasibility import (
+    FeasibilityAssessment,
+    FeasibilityCheckResult,
+    FeasibilityCheckType,
+    FeasibilityOutcome,
 )
 from app.models.identity import IdentityVerification, IdentityVerificationProvider, VerificationStatus
 from app.models.intent_log import DomainEvent, IntentExecutionLog
@@ -46,6 +53,7 @@ from app.models.orders import (
     Resource,
     ServiceOrder,
 )
+from app.models.ponr import PonrPolicy
 from app.models.sla import SlaClock, SlaClockStatus, SlaPolicy
 from app.models.tenant import Tenant, TenantVertical
 from app.models.testing import TestRun, TestRunStatus
@@ -63,6 +71,7 @@ __all__ = [
     "Party",
     "TerritoryRule",
     "Lead",
+    "LeadStatus",
     "Opportunity",
     "Quote",
     "QuoteItem",
@@ -71,6 +80,11 @@ __all__ = [
     "ApprovalChainInstance",
     "ApprovalStepInstance",
     "FeasibilityResult",
+    "FeasibilityAssessment",
+    "FeasibilityCheckResult",
+    "FeasibilityCheckType",
+    "FeasibilityOutcome",
+    "PonrPolicy",
     "Order",
     "OrderItem",
     "ServiceOrder",

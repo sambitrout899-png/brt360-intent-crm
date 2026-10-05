@@ -43,6 +43,13 @@ _REQUIRED_FIELDS: dict[str, list[str]] = {
     "INT-11": ["ticket_id"],
     "INT-13": ["party_id", "id_number"],
     "INT-14": ["order_id", "site_label"],
+    "INT-15": ["name"],
+    "INT-16": ["lead_id", "offering_name"],
+    "INT-17": ["lead_id", "decision"],
+    "INT-18": ["opportunity_id"],
+    "INT-19": ["quote_id"],
+    "INT-20": ["quote_id"],
+    "INT-21": ["order_id"],
 }
 
 
@@ -95,6 +102,24 @@ def _context_missing(intent_type: str, context: dict[str, Any], entities: dict[s
     if intent_type == "INT-12":
         if context.get("work_order") is None and context.get("ticket") is None and context.get("order") is None:
             missing.append("none of ticket/order/work_order resolved")
+    if intent_type in ("INT-19", "INT-20"):
+        if context.get("quote") is None:
+            missing.append("quote (not found)")
+        elif context.get("ponr_reached"):
+            missing.append(f"quote has passed its PONR (status={context['quote']['status']})")
+    if intent_type == "INT-21":
+        if context.get("order") is None:
+            missing.append("order (not found)")
+        elif context.get("ponr_reached"):
+            missing.append(f"order has passed its PONR (status={context['order']['status']})")
+    if intent_type == "INT-16" and context.get("lead") is None:
+        missing.append("lead (not found)")
+    if intent_type == "INT-16" and context.get("offering") is None:
+        missing.append("offering (not found or not active)")
+    if intent_type == "INT-17" and context.get("lead") is None:
+        missing.append("lead (not found)")
+    if intent_type == "INT-18" and context.get("opportunity") is None:
+        missing.append("opportunity (not found)")
     return missing
 
 

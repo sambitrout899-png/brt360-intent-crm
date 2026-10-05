@@ -8,12 +8,12 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.crm_core import account_service, order_service, sla_service
+from app.crm_core import account_service, order_service, ponr_service, sla_service
 from app.data_intelligence import event_bus
 from app.integration import order_adapter
 from app.models.catalog import ProductOffering
 from app.models.crm import Opportunity, Quote, QuoteItem
-from app.models.orders import Order, OrderStatus, OrderType
+from app.models.orders import Order, OrderItem, OrderStatus, OrderType
 from app.models.sla import SlaClock
 from app.orchestration.orchestrator import SagaStep
 from app.timeutils import utcnow
@@ -114,7 +114,7 @@ def build_int07_steps(db: Session, tenant_id: int, execution_id: int, entities: 
         return {"billing_account_id": state["billing_account_id"], "billing_activated": True}
 
     def step6() -> dict[str, Any]:
-        from app.integration import ticket_adapter
+        from app.integration import erp_adapter, orchestration_adapter, provisioning_adapter, ticket_adapter
 
         if multi_site:
             order_adapter.set_order_status(db, state["order"].id, OrderStatus.activating)
@@ -135,9 +135,35 @@ def build_int07_steps(db: Session, tenant_id: int, execution_id: int, entities: 
             ticket_adapter.create_work_order(
                 db, tenant_id=tenant_id, ticket_id=None, order_id=state["order"].id, scheduled_window="next business day"
             )
+        # External system touch points (Phase 4): a real deployment hands
+        # the order to an Order Orchestration system and gets a
+        # provisioning confirmation back asynchronously, rather than this
+        # saga doing the work itself - and syncs the newly paying
+        # customer to the ERP for financial/revenue recognition purposes,
+        # separate from this platform's own operational BillingAccount.
+        orchestration_ref = orchestration_adapter.submit_order_for_orchestration(state["order"].id)
+        provisioning_ref = provisioning_adapter.confirm_provisioning(state["service_order_ids"][0])
+        erp_ref = erp_adapter.sync_customer(state["offering"].name)
+
         order_adapter.set_order_status(db, state["order"].id, OrderStatus.active)
-        event_bus.publish(db, execution_id, "order.activated", {"order_id": state["order"].id})
-        return {"order_id": state["order"].id, "status": OrderStatus.active.value}
+        event_bus.publish(
+            db,
+            execution_id,
+            "order.activated",
+            {
+                "order_id": state["order"].id,
+                "orchestration_ref": orchestration_ref,
+                "provisioning_ref": provisioning_ref,
+                "erp_ref": erp_ref,
+            },
+        )
+        return {
+            "order_id": state["order"].id,
+            "status": OrderStatus.active.value,
+            "orchestration_ref": orchestration_ref,
+            "provisioning_ref": provisioning_ref,
+            "erp_ref": erp_ref,
+        }
 
     return [
         SagaStep("convert_quote_to_order", step1),
@@ -343,4 +369,46 @@ def build_int09_steps(db: Session, tenant_id: int, execution_id: int, entities: 
     return [
         SagaStep("validate_contract_and_notice_period", step1),
         SagaStep("process_lifecycle_action", step2),
+    ]
+
+
+def build_int21_steps(db: Session, tenant_id: int, execution_id: int, entities: dict[str, Any]) -> list[SagaStep]:
+    """INT-21 - Revise this order, before the PONR (point 5 of the Phase 4
+    spec). Distinct from INT-08 "Change this live service": INT-08 is for
+    an already-active order and always runs a billing proration delta;
+    this intent is a plain in-place edit (no proration, no re-provisioning)
+    allowed only while the order has not yet reached its configured PONR -
+    by default "created"/"activating", i.e. nothing has gone live yet. An
+    order past PONR must go through INT-08 or INT-09 instead.
+    """
+
+    order_id = entities["order_id"]
+    new_monthly_price = entities.get("new_monthly_price")
+    new_quantity = entities.get("new_quantity")
+
+    def step1() -> dict[str, Any]:
+        order = db.get(Order, order_id)
+        if order is None:
+            raise ValueError(f"Order {order_id} not found")
+        if ponr_service.has_reached_ponr(db, tenant_id, "order", order.status.value):
+            raise ValueError(f"Order {order_id} has passed the point of no return ({order.status.value}) - cannot revise.")
+        return {"order_id": order.id, "status": order.status.value}
+
+    def step2() -> dict[str, Any]:
+        order = db.get(Order, order_id)
+        if new_monthly_price is not None:
+            order.monthly_price = float(new_monthly_price)
+        if new_quantity is not None:
+            item = db.query(OrderItem).filter(OrderItem.order_id == order.id).first()
+            if item is not None:
+                item.quantity = int(new_quantity)
+        db.flush()
+        event_bus.publish(
+            db, execution_id, "order.revised", {"order_id": order.id, "monthly_price": order.monthly_price}
+        )
+        return {"order_id": order.id, "monthly_price": order.monthly_price, "status": order.status.value}
+
+    return [
+        SagaStep("check_ponr", step1),
+        SagaStep("apply_revision", step2),
     ]

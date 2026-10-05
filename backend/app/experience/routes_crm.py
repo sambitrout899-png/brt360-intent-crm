@@ -89,6 +89,38 @@ def _quote_out(quote: Quote, offering_names: dict[int, str]) -> QuoteOut:
     )
 
 
+def _lead_out(lead: Lead) -> LeadOut:
+    approval_chain = None
+    if lead.chain_instance:
+        instance = lead.chain_instance
+        current_tier = (
+            instance.steps[instance.current_sequence - 1].approver_tier
+            if instance.status.value == "pending" and instance.current_sequence <= len(instance.steps)
+            else None
+        )
+        approval_chain = {
+            "template_name": instance.template.name,
+            "status": instance.status.value,
+            "current_tier": current_tier,
+            "steps": [
+                {"sequence": s.sequence, "approver_tier": s.approver_tier, "status": s.status.value, "reasoning": s.reasoning or None}
+                for s in instance.steps
+            ],
+        }
+    return LeadOut(
+        id=lead.id,
+        party_id=lead.party_id,
+        source=lead.source,
+        region=lead.region,
+        owner_name=lead.owner_name,
+        propensity_score=lead.propensity_score,
+        status=lead.status.value,
+        interested_offering_name=lead.interested_offering_name,
+        created_at=lead.created_at,
+        approval_chain=approval_chain,
+    )
+
+
 def _order_out(order: Order, party_name: str, service_account_name: str) -> OrderOut:
     service_orders = [
         ServiceOrderOut(
@@ -226,8 +258,8 @@ def party_360(party_id: int, db: Session = Depends(get_db), tenant_id: int = Dep
 
     return Party360Out(
         party=PartyOut.model_validate(party),
-        leads=[LeadOut.model_validate(l) for l in leads],
-        opportunities=[OpportunityOut(id=o.id, lead_id=o.lead_id, name=o.name, stage=o.stage.value, created_at=o.created_at, updated_at=o.updated_at) for o in opportunities],
+        leads=[_lead_out(l) for l in leads],
+        opportunities=[_opportunity_out(o) for o in opportunities],
         quotes=[_quote_out(q, offering_names) for q in quotes],
         orders=[_order_out(o, party.name, service_account_names.get(o.service_account_id, "?")) for o in orders],
         service_accounts=[
@@ -251,8 +283,41 @@ def party_360(party_id: int, db: Session = Depends(get_db), tenant_id: int = Dep
 
 
 @router.get("/leads", response_model=list[LeadOut])
-def list_leads(db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> list[Lead]:
-    return db.query(Lead).filter(Lead.tenant_id == tenant_id).order_by(Lead.created_at.desc()).all()
+def list_leads(db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> list[LeadOut]:
+    leads = db.query(Lead).filter(Lead.tenant_id == tenant_id).order_by(Lead.created_at.desc()).all()
+    return [_lead_out(lead) for lead in leads]
+
+
+@router.get("/leads/{lead_id}", response_model=LeadOut)
+def lead_detail(lead_id: int, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> LeadOut:
+    lead = db.get(Lead, lead_id)
+    if lead is None or lead.tenant_id != tenant_id:
+        raise HTTPException(404, "Lead not found")
+    return _lead_out(lead)
+
+
+def _opportunity_out(opportunity: Opportunity) -> OpportunityOut:
+    return OpportunityOut(
+        id=opportunity.id,
+        lead_id=opportunity.lead_id,
+        name=opportunity.name,
+        stage=opportunity.stage.value,
+        created_at=opportunity.created_at,
+        updated_at=opportunity.updated_at,
+        feasibility_assessments=[
+            {
+                "id": a.id,
+                "outcome": a.outcome.value,
+                "created_at": a.created_at,
+                "resolved_at": a.resolved_at,
+                "results": [
+                    {"check_type_name": r.check_type_name, "outcome": r.outcome.value, "detail": r.detail}
+                    for r in a.results
+                ],
+            }
+            for a in sorted(opportunity.feasibility_assessments, key=lambda a: a.created_at, reverse=True)
+        ],
+    )
 
 
 @router.get("/opportunities", response_model=list[OpportunityOut])
@@ -263,10 +328,17 @@ def list_opportunities(
     if stage:
         query = query.filter(Opportunity.stage == stage)
     opportunities = query.order_by(Opportunity.updated_at.desc()).all()
-    return [
-        OpportunityOut(id=o.id, lead_id=o.lead_id, name=o.name, stage=o.stage.value, created_at=o.created_at, updated_at=o.updated_at)
-        for o in opportunities
-    ]
+    return [_opportunity_out(o) for o in opportunities]
+
+
+@router.get("/opportunities/{opportunity_id}", response_model=OpportunityOut)
+def opportunity_detail(
+    opportunity_id: int, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)
+) -> OpportunityOut:
+    opportunity = db.get(Opportunity, opportunity_id)
+    if opportunity is None or opportunity.tenant_id != tenant_id:
+        raise HTTPException(404, "Opportunity not found")
+    return _opportunity_out(opportunity)
 
 
 @router.get("/quotes", response_model=list[QuoteOut])

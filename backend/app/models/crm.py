@@ -18,11 +18,21 @@ class OpportunityStage(str, enum.Enum):
     lost = "lost"
 
 
+class LeadStatus(str, enum.Enum):
+    pending_qualification = "pending_qualification"
+    qualified = "qualified"
+    rejected = "rejected"
+
+
 class QuoteStatus(str, enum.Enum):
     draft = "draft"
     pending_approval = "pending_approval"
     approved = "approved"
     rejected = "rejected"
+    # Withdrawn by the requester (INT-20) - distinct from "rejected" (a
+    # business decision by an approver), per SID's separation of
+    # cancellation from rejection as different lifecycle transitions.
+    cancelled = "cancelled"
 
 
 class ApprovalStatus(str, enum.Enum):
@@ -73,10 +83,27 @@ class Lead(Base):
     region: Mapped[str] = mapped_column(String(100), default="ALL")
     owner_name: Mapped[str] = mapped_column(String(200))
     propensity_score: Mapped[float] = mapped_column(Float)
+    # Sales-Director approval gate (B2B sales journey): a lead starts
+    # pending_qualification, and only becomes an Opportunity once an
+    # approval chain against it (entity_type "lead") reaches approved -
+    # see approval_service.resolve_lead_qualification_template.
+    status: Mapped[LeadStatus] = mapped_column(Enum(LeadStatus), default=LeadStatus.pending_qualification)
+    # Product interest captured at lead stage, before qualification -
+    # MVP-simple single offering name, same convention as
+    # ProductOffering.composition's plain-string approach elsewhere.
+    interested_offering_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     created_at: Mapped[dt.datetime] = mapped_column(default=utcnow)
 
     party: Mapped[Party] = relationship()
     opportunity: Mapped["Opportunity"] = relationship(back_populates="lead", uselist=False)
+    chain_instance: Mapped["ApprovalChainInstance"] = relationship(
+        viewonly=True,
+        uselist=False,
+        primaryjoin=(
+            "and_(foreign(ApprovalChainInstance.entity_id) == Lead.id, "
+            "ApprovalChainInstance.entity_type == 'lead')"
+        ),
+    )
 
 
 class Opportunity(Base):
@@ -92,6 +119,7 @@ class Opportunity(Base):
 
     lead: Mapped[Lead] = relationship(back_populates="opportunity")
     quotes: Mapped[list["Quote"]] = relationship(back_populates="opportunity")
+    feasibility_assessments: Mapped[list["FeasibilityAssessment"]] = relationship(viewonly=True)
 
 
 class Quote(Base):
@@ -109,7 +137,17 @@ class Quote(Base):
 
     opportunity: Mapped[Opportunity] = relationship(back_populates="quotes")
     items: Mapped[list["QuoteItem"]] = relationship(back_populates="quote", cascade="all, delete-orphan")
-    chain_instance: Mapped["ApprovalChainInstance"] = relationship(viewonly=True, uselist=False)
+    # ApprovalChainInstance is polymorphic (entity_type/entity_id, not a
+    # quote_id FK) - this relationship is query-only, matched explicitly
+    # rather than via a foreign key SQLAlchemy can infer on its own.
+    chain_instance: Mapped["ApprovalChainInstance"] = relationship(
+        viewonly=True,
+        uselist=False,
+        primaryjoin=(
+            "and_(foreign(ApprovalChainInstance.entity_id) == Quote.id, "
+            "ApprovalChainInstance.entity_type == 'quote')"
+        ),
+    )
     feasibility_result: Mapped["FeasibilityResult"] = relationship(back_populates="quote", uselist=False)
 
 

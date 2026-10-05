@@ -1,5 +1,9 @@
 """Per-intent orchestration step sequences for INT-04/05/06 (Sprint 2,
-Lead-to-Quote) - directly from HLD Section 7's "Orchestration Steps".
+Lead-to-Quote) - directly from HLD Section 7's "Orchestration Steps" -
+plus Phase 4's B2B sales-journey extensions: a Sales Director approval
+gate between Lead and Opportunity (INT-17), product interest capture at
+the lead stage (INT-16), and quote revision/cancellation respecting a
+configurable PONR (INT-19/INT-20).
 """
 
 from __future__ import annotations
@@ -8,21 +12,31 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.crm_core import approval_service, catalog_service, lead_service
+from app.crm_core import approval_service, catalog_service, lead_service, ponr_service
 from app.data_intelligence import event_bus
 from app.integration import party_adapter, tmf620_adapter
-from app.models.approval import ApprovalChainInstance
 from app.models.catalog import ProductOffering
-from app.models.crm import FeasibilityResult, Opportunity, OpportunityStage, Quote, QuoteItem, QuoteStatus
+from app.models.crm import FeasibilityResult, Lead, LeadStatus, Opportunity, OpportunityStage, Quote, QuoteItem, QuoteStatus
 from app.orchestration.orchestrator import SagaStep
 
 
 def build_int04_steps(db: Session, tenant_id: int, execution_id: int, entities: dict[str, Any]) -> list[SagaStep]:
-    """INT-04 - Qualify this lead."""
+    """INT-04 - Qualify this lead.
+
+    Creates the Lead (and, against an existing prospect Party of the same
+    name - see INT-15 - reuses it rather than duplicating). Whether this
+    also immediately creates the Opportunity depends on whether the
+    tenant has configured a lead-qualification approval chain
+    (approval_service.resolve_lead_qualification_template): no chain
+    configured keeps the original immediate-qualification behavior
+    unchanged; a chain configured means the lead instead awaits a Sales
+    Director's decision via INT-17 ("Approve this lead").
+    """
 
     company_name = entities["company_name"]
     source = entities.get("source", "unknown")
     region = entities.get("region", "ALL")
+    interested_offering_name = entities.get("offering_name")
 
     state: dict[str, Any] = {}
 
@@ -43,8 +57,6 @@ def build_int04_steps(db: Session, tenant_id: int, execution_id: int, entities: 
 
     def step4() -> dict[str, Any]:
         party = party_adapter.get_or_create_party(db, tenant_id, company_name)
-        from app.models.crm import Lead
-
         lead = Lead(
             tenant_id=tenant_id,
             party_id=party.id,
@@ -52,22 +64,115 @@ def build_int04_steps(db: Session, tenant_id: int, execution_id: int, entities: 
             region=region,
             owner_name=state["owner"],
             propensity_score=state["score"],
+            interested_offering_name=interested_offering_name,
         )
         db.add(lead)
         db.flush()
-        opportunity = Opportunity(
-            tenant_id=tenant_id, lead_id=lead.id, name=f"{company_name} - initial opportunity", stage=OpportunityStage.draft
-        )
-        db.add(opportunity)
-        db.flush()
-        event_bus.publish(db, execution_id, "lead.qualified", {"lead_id": lead.id, "opportunity_id": opportunity.id})
-        return {"lead_id": lead.id, "opportunity_id": opportunity.id, "party_id": party.id}
+
+        gate_template = approval_service.resolve_lead_qualification_template(db, tenant_id)
+        if gate_template is None:
+            lead.status = LeadStatus.qualified
+            opportunity = Opportunity(
+                tenant_id=tenant_id, lead_id=lead.id, name=f"{company_name} - initial opportunity", stage=OpportunityStage.draft
+            )
+            db.add(opportunity)
+            db.flush()
+            event_bus.publish(db, execution_id, "lead.qualified", {"lead_id": lead.id, "opportunity_id": opportunity.id})
+            return {"lead_id": lead.id, "opportunity_id": opportunity.id, "party_id": party.id, "status": lead.status.value}
+
+        event_bus.publish(db, execution_id, "lead.pending_qualification", {"lead_id": lead.id})
+        return {"lead_id": lead.id, "party_id": party.id, "status": lead.status.value}
 
     return [
         SagaStep("enrich_lead", step1),
         SagaStep("score_lead", step2),
         SagaStep("assign_territory_owner", step3),
-        SagaStep("create_lead_and_opportunity", step4),
+        SagaStep("create_lead", step4),
+    ]
+
+
+def build_int16_steps(db: Session, tenant_id: int, execution_id: int, entities: dict[str, Any]) -> list[SagaStep]:
+    """INT-16 - Add a product to this lead."""
+
+    lead_id = entities["lead_id"]
+    offering_name = entities["offering_name"]
+
+    def step1() -> dict[str, Any]:
+        lead = db.get(Lead, lead_id)
+        if lead is None:
+            raise ValueError(f"Lead {lead_id} not found")
+        offering = tmf620_adapter.get_active_offering_by_name(db, tenant_id, offering_name)
+        if offering is None:
+            raise ValueError(f"No active offering named '{offering_name}' found")
+        lead.interested_offering_name = offering_name
+        db.flush()
+        event_bus.publish(db, execution_id, "lead.product_interest_added", {"lead_id": lead.id, "offering_name": offering_name})
+        return {"lead_id": lead.id, "offering_name": offering_name}
+
+    return [SagaStep("add_product_to_lead", step1)]
+
+
+def build_int17_steps(db: Session, tenant_id: int, execution_id: int, entities: dict[str, Any]) -> list[SagaStep]:
+    """INT-17 - Approve this lead (Sales Director qualification gate).
+
+    Only reachable for a lead whose tenant has a "lead" approval chain
+    configured (see INT-04) - otherwise the lead was already qualified
+    and its Opportunity already created in the same call.
+    """
+
+    lead_id = entities["lead_id"]
+    decision = entities.get("decision", "approve")
+    reasoning_text = entities.get("reasoning", "")
+
+    state: dict[str, Any] = {}
+
+    def step1() -> dict[str, Any]:
+        lead = db.get(Lead, lead_id)
+        if lead is None:
+            raise ValueError(f"Lead {lead_id} not found")
+        state["lead"] = lead
+        return {"lead_id": lead.id, "status": lead.status.value}
+
+    def step2() -> dict[str, Any]:
+        lead = state["lead"]
+        instance = approval_service.get_chain_instance(db, "lead", lead.id)
+        if instance is None:
+            template = approval_service.resolve_lead_qualification_template(db, tenant_id)
+            if template is None:
+                raise ValueError("No lead-qualification approval chain is configured for this tenant")
+            instance = approval_service.instantiate_chain(db, "lead", lead.id, template)
+        state["instance"] = instance
+        return {"chain_template": instance.template.name, "current_tier": instance.steps[instance.current_sequence - 1].approver_tier}
+
+    def step3() -> dict[str, Any]:
+        outcome = approval_service.record_step_decision(db, state["instance"], decision, reasoning_text or "")
+        state["outcome"] = outcome
+        return outcome
+
+    def step4() -> dict[str, Any]:
+        lead = state["lead"]
+        outcome = state["outcome"]
+        if outcome["chain_status"] == "approved":
+            lead.status = LeadStatus.qualified
+            opportunity = Opportunity(
+                tenant_id=tenant_id, lead_id=lead.id, name=f"{lead.party.name} - initial opportunity", stage=OpportunityStage.draft
+            )
+            db.add(opportunity)
+            db.flush()
+            event_bus.publish(db, execution_id, "lead.qualified", {"lead_id": lead.id, "opportunity_id": opportunity.id})
+            return {"lead_id": lead.id, "opportunity_id": opportunity.id, "status": lead.status.value}
+        elif outcome["chain_status"] == "rejected":
+            lead.status = LeadStatus.rejected
+            db.flush()
+            event_bus.publish(db, execution_id, "lead.rejected", {"lead_id": lead.id})
+            return {"lead_id": lead.id, "status": lead.status.value}
+        return {"lead_id": lead.id, "status": lead.status.value}
+
+    return [
+        SagaStep("resolve_lead", step1),
+        SagaStep("load_or_instantiate_chain", step2),
+        SagaStep("capture_decision", step3),
+        SagaStep("finalize_lead_status", step4),
     ]
 
 
@@ -167,7 +272,7 @@ def build_int06_steps(db: Session, tenant_id: int, execution_id: int, entities: 
 
     def step2() -> dict[str, Any]:
         quote = state["quote"]
-        instance = db.query(ApprovalChainInstance).filter(ApprovalChainInstance.quote_id == quote.id).first()
+        instance = approval_service.get_chain_instance(db, "quote", quote.id)
         if instance is None:
             item = quote.items[0] if quote.items else None
             offering = db.get(ProductOffering, item.product_offering_id) if item else None
@@ -175,7 +280,7 @@ def build_int06_steps(db: Session, tenant_id: int, execution_id: int, entities: 
             template = approval_service.resolve_template(db, tenant_id, quote.requested_discount_pct, segment)
             if template is None:
                 raise ValueError("No approval chain is configured for this discount band - an admin must add one")
-            instance = approval_service.instantiate_chain(db, quote, template)
+            instance = approval_service.instantiate_chain(db, "quote", quote.id, template)
             quote.status = QuoteStatus.pending_approval
             db.flush()
         state["instance"] = instance
@@ -208,3 +313,64 @@ def build_int06_steps(db: Session, tenant_id: int, execution_id: int, entities: 
         SagaStep("capture_decision", step3),
         SagaStep("finalize_quote_status", step4),
     ]
+
+
+def build_int19_steps(db: Session, tenant_id: int, execution_id: int, entities: dict[str, Any]) -> list[SagaStep]:
+    """INT-19 - Revise this quote. Blocked once the quote has reached its
+    configured PONR (default: once approved) - cancel and requote instead.
+    """
+
+    quote_id = entities["quote_id"]
+    new_discount_pct = entities.get("requested_discount_pct")
+    new_quantity = entities.get("quantity")
+
+    state: dict[str, Any] = {}
+
+    def step1() -> dict[str, Any]:
+        quote = db.get(Quote, quote_id)
+        if quote is None:
+            raise ValueError(f"Quote {quote_id} not found")
+        if ponr_service.has_reached_ponr(db, tenant_id, "quote", quote.status.value):
+            raise ValueError(f"Quote {quote.id} has passed its PONR (status={quote.status.value}) - cannot be revised")
+        state["quote"] = quote
+        return {"quote_id": quote.id, "status": quote.status.value}
+
+    def step2() -> dict[str, Any]:
+        quote = state["quote"]
+        item = quote.items[0] if quote.items else None
+        if new_discount_pct is not None:
+            quote.requested_discount_pct = float(new_discount_pct)
+        if item is not None and new_quantity is not None:
+            item.quantity = int(new_quantity)
+        if item is not None:
+            quote.total_price = round(item.unit_price * item.quantity * (1 - quote.requested_discount_pct / 100), 2)
+        db.flush()
+        event_bus.publish(db, execution_id, "quote.revised", {"quote_id": quote.id, "total_price": quote.total_price})
+        return {"quote_id": quote.id, "total_price": quote.total_price, "requested_discount_pct": quote.requested_discount_pct}
+
+    return [
+        SagaStep("check_ponr", step1),
+        SagaStep("apply_revision", step2),
+    ]
+
+
+def build_int20_steps(db: Session, tenant_id: int, execution_id: int, entities: dict[str, Any]) -> list[SagaStep]:
+    """INT-20 - Cancel this quote (withdrawn by the requester, distinct
+    from a reject decision by an approver). Same PONR gate as INT-19.
+    """
+
+    quote_id = entities["quote_id"]
+    reasoning_text = entities.get("reasoning", "")
+
+    def step1() -> dict[str, Any]:
+        quote = db.get(Quote, quote_id)
+        if quote is None:
+            raise ValueError(f"Quote {quote_id} not found")
+        if ponr_service.has_reached_ponr(db, tenant_id, "quote", quote.status.value):
+            raise ValueError(f"Quote {quote.id} has passed its PONR (status={quote.status.value}) - cannot be cancelled")
+        quote.status = QuoteStatus.cancelled
+        db.flush()
+        event_bus.publish(db, execution_id, "quote.cancelled", {"quote_id": quote.id, "reasoning": reasoning_text})
+        return {"quote_id": quote.id, "status": quote.status.value}
+
+    return [SagaStep("cancel_quote", step1)]

@@ -177,6 +177,36 @@ class IdentityProviderOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class PonrPolicyCreate(BaseModel):
+    entity_type: str = Field(min_length=1, max_length=30)  # "quote" | "order"
+    ponr_statuses: str = Field(min_length=1)  # comma-separated status values
+
+
+class PonrPolicyOut(BaseModel):
+    id: int
+    entity_type: str
+    ponr_statuses: str
+    is_active: bool
+    created_at: dt.datetime
+
+    model_config = {"from_attributes": True}
+
+
+class FeasibilityCheckTypeCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=150)
+    resource_type: str = Field(min_length=1, max_length=50)  # "fiber" | "port" | "switch" | "inventory" | ...
+
+
+class FeasibilityCheckTypeOut(BaseModel):
+    id: int
+    name: str
+    resource_type: str
+    is_active: bool
+    created_at: dt.datetime
+
+    model_config = {"from_attributes": True}
+
+
 class TestRunSummaryOut(BaseModel):
     id: int
     status: str

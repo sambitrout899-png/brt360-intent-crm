@@ -16,7 +16,9 @@ from app.models.approval import ApprovalChainTemplate, ApprovalChainTier
 from app.models.attributes import AttributeConstraintRule, ProductAttributeDefinition, ProductAttributeValue
 from app.models.auth import User, UserRole
 from app.models.catalog import ProductSpecification
+from app.models.feasibility import FeasibilityCheckType
 from app.models.identity import IdentityVerificationProvider
+from app.models.ponr import PonrPolicy
 from app.models.sla import SlaClock, SlaPolicy
 from app.models.testing import TestRun
 from app.schemas.admin import (
@@ -24,8 +26,12 @@ from app.schemas.admin import (
     ApprovalChainTemplateOut,
     AttributeConstraintRuleCreate,
     AttributeConstraintRuleOut,
+    FeasibilityCheckTypeCreate,
+    FeasibilityCheckTypeOut,
     IdentityProviderCreate,
     IdentityProviderOut,
+    PonrPolicyCreate,
+    PonrPolicyOut,
     ProductAttributeDefinitionCreate,
     ProductAttributeDefinitionOut,
     ProductAttributeValueOut,
@@ -427,6 +433,93 @@ def delete_identity_provider(
     if provider is None or provider.tenant_id != tenant_id:
         raise HTTPException(404, "Identity provider not found")
     db.delete(provider)
+    db.commit()
+
+
+@router.get("/ponr-policies", response_model=list[PonrPolicyOut])
+def list_ponr_policies(db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> list[PonrPolicy]:
+    return db.query(PonrPolicy).filter(PonrPolicy.tenant_id == tenant_id).order_by(PonrPolicy.entity_type).all()
+
+
+@router.post("/ponr-policies", response_model=PonrPolicyOut, status_code=201)
+def create_ponr_policy(
+    payload: PonrPolicyCreate, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)
+) -> PonrPolicy:
+    if payload.entity_type not in ("quote", "order"):
+        raise HTTPException(400, "entity_type must be 'quote' or 'order'")
+    policy = PonrPolicy(tenant_id=tenant_id, entity_type=payload.entity_type, ponr_statuses=payload.ponr_statuses)
+    db.add(policy)
+    db.commit()
+    db.refresh(policy)
+    return policy
+
+
+@router.patch("/ponr-policies/{policy_id}/deactivate", response_model=PonrPolicyOut)
+def deactivate_ponr_policy(
+    policy_id: int, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)
+) -> PonrPolicy:
+    policy = db.get(PonrPolicy, policy_id)
+    if policy is None or policy.tenant_id != tenant_id:
+        raise HTTPException(404, "PONR policy not found")
+    policy.is_active = False
+    db.commit()
+    db.refresh(policy)
+    return policy
+
+
+@router.delete("/ponr-policies/{policy_id}", status_code=204)
+def delete_ponr_policy(policy_id: int, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> None:
+    policy = db.get(PonrPolicy, policy_id)
+    if policy is None or policy.tenant_id != tenant_id:
+        raise HTTPException(404, "PONR policy not found")
+    db.delete(policy)
+    db.commit()
+
+
+@router.get("/feasibility-check-types", response_model=list[FeasibilityCheckTypeOut])
+def list_feasibility_check_types(
+    db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)
+) -> list[FeasibilityCheckType]:
+    return (
+        db.query(FeasibilityCheckType)
+        .filter(FeasibilityCheckType.tenant_id == tenant_id)
+        .order_by(FeasibilityCheckType.name)
+        .all()
+    )
+
+
+@router.post("/feasibility-check-types", response_model=FeasibilityCheckTypeOut, status_code=201)
+def create_feasibility_check_type(
+    payload: FeasibilityCheckTypeCreate, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)
+) -> FeasibilityCheckType:
+    check_type = FeasibilityCheckType(tenant_id=tenant_id, name=payload.name, resource_type=payload.resource_type)
+    db.add(check_type)
+    db.commit()
+    db.refresh(check_type)
+    return check_type
+
+
+@router.patch("/feasibility-check-types/{check_type_id}/deactivate", response_model=FeasibilityCheckTypeOut)
+def deactivate_feasibility_check_type(
+    check_type_id: int, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)
+) -> FeasibilityCheckType:
+    check_type = db.get(FeasibilityCheckType, check_type_id)
+    if check_type is None or check_type.tenant_id != tenant_id:
+        raise HTTPException(404, "Feasibility check type not found")
+    check_type.is_active = False
+    db.commit()
+    db.refresh(check_type)
+    return check_type
+
+
+@router.delete("/feasibility-check-types/{check_type_id}", status_code=204)
+def delete_feasibility_check_type(
+    check_type_id: int, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)
+) -> None:
+    check_type = db.get(FeasibilityCheckType, check_type_id)
+    if check_type is None or check_type.tenant_id != tenant_id:
+        raise HTTPException(404, "Feasibility check type not found")
+    db.delete(check_type)
     db.commit()
 
 

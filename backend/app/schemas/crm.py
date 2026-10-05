@@ -23,7 +23,10 @@ class LeadOut(BaseModel):
     region: str
     owner_name: str
     propensity_score: float
+    status: str
+    interested_offering_name: str | None
     created_at: dt.datetime
+    approval_chain: dict | None = None
 
     model_config = {"from_attributes": True}
 
@@ -35,6 +38,7 @@ class OpportunityOut(BaseModel):
     stage: str
     created_at: dt.datetime
     updated_at: dt.datetime
+    feasibility_assessments: list[dict] = []
 
     model_config = {"from_attributes": True}
 

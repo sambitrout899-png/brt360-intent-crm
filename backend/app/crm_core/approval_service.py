@@ -22,7 +22,7 @@ from __future__ import annotations
 from sqlalchemy.orm import Session
 
 from app.models.approval import ApprovalChainInstance, ApprovalChainTemplate, ApprovalStepInstance
-from app.models.crm import ApprovalStatus, Quote
+from app.models.crm import ApprovalStatus
 from app.timeutils import utcnow
 
 # (name, segment, min_discount_pct, max_discount_pct, [approver tiers in order])
@@ -35,14 +35,16 @@ DEFAULT_SEED_TEMPLATES: list[tuple[str, str | None, float, float, list[str]]] = 
 
 
 def resolve_template(db: Session, tenant_id: int, discount_pct: float, segment: str | None) -> ApprovalChainTemplate | None:
-    """Pick the chain template covering this discount band. A template
-    scoped to the quote's exact segment wins over a generic (segment=None)
-    one when both cover the discount; ties broken by the narrowest band.
+    """Pick the quote chain template covering this discount band. A
+    template scoped to the quote's exact segment wins over a generic
+    (segment=None) one when both cover the discount; ties broken by the
+    narrowest band.
     """
     candidates = (
         db.query(ApprovalChainTemplate)
         .filter(
             ApprovalChainTemplate.tenant_id == tenant_id,
+            ApprovalChainTemplate.entity_type == "quote",
             ApprovalChainTemplate.is_active.is_(True),
             ApprovalChainTemplate.min_discount_pct <= discount_pct,
             ApprovalChainTemplate.max_discount_pct >= discount_pct,
@@ -58,6 +60,32 @@ def resolve_template(db: Session, tenant_id: int, discount_pct: float, segment: 
     return min(pool, key=lambda t: t.max_discount_pct - t.min_discount_pct)
 
 
+def resolve_lead_qualification_template(db: Session, tenant_id: int) -> ApprovalChainTemplate | None:
+    """The B2B sales journey's Sales-Director-approves-lead gate: unlike
+    quote templates, there's no discount band to match on - a tenant
+    either has one active "lead" chain configured (opt-in) or none, in
+    which case INT-04 keeps qualifying leads immediately with no gate,
+    exactly as it always has.
+    """
+    return (
+        db.query(ApprovalChainTemplate)
+        .filter(
+            ApprovalChainTemplate.tenant_id == tenant_id,
+            ApprovalChainTemplate.entity_type == "lead",
+            ApprovalChainTemplate.is_active.is_(True),
+        )
+        .first()
+    )
+
+
+def get_chain_instance(db: Session, entity_type: str, entity_id: int) -> ApprovalChainInstance | None:
+    return (
+        db.query(ApprovalChainInstance)
+        .filter(ApprovalChainInstance.entity_type == entity_type, ApprovalChainInstance.entity_id == entity_id)
+        .first()
+    )
+
+
 def get_rep_authority_ceiling_pct(db: Session, tenant_id: int, segment: str | None) -> float:
     """The discount pct above which a rep cannot submit a quote without a
     written justification - the ceiling of whichever template is a single,
@@ -70,9 +98,11 @@ def get_rep_authority_ceiling_pct(db: Session, tenant_id: int, segment: str | No
     return 0.0
 
 
-def instantiate_chain(db: Session, quote: Quote, template: ApprovalChainTemplate) -> ApprovalChainInstance:
+def instantiate_chain(
+    db: Session, entity_type: str, entity_id: int, template: ApprovalChainTemplate
+) -> ApprovalChainInstance:
     instance = ApprovalChainInstance(
-        quote_id=quote.id, template_id=template.id, status=ApprovalStatus.pending, current_sequence=1
+        entity_type=entity_type, entity_id=entity_id, template_id=template.id, status=ApprovalStatus.pending, current_sequence=1
     )
     db.add(instance)
     db.flush()

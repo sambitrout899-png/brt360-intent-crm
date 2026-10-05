@@ -18,7 +18,8 @@ from sqlalchemy.orm import Session
 
 from app.models.assurance import TroubleTicket, WorkOrder
 from app.models.catalog import OfferingStatus, ProductOffering
-from app.models.crm import Opportunity, Quote, QuoteStatus
+from app.models.crm import Lead, Opportunity, Party, Quote, QuoteStatus
+from app.models.feasibility import FeasibilityAssessment
 from app.models.identity import IdentityVerification
 from app.models.orders import Order, OrderStatus
 
@@ -54,8 +55,17 @@ def verify(db: Session, intent_type: str, result: dict[str, Any] | None) -> Veri
         return VerificationResult(True, f"Offering {offering.id} confirmed retired with a migration path on file.")
 
     if intent_type == "INT-04":
+        lead_id = _require(result, "lead_id")
+        lead = db.get(Lead, lead_id) if lead_id else None
+        if lead is None:
+            return VerificationResult(False, "No lead created.")
         opportunity_id = _require(result, "opportunity_id")
-        opportunity = db.get(Opportunity, opportunity_id) if opportunity_id else None
+        if opportunity_id is None:
+            # No Sales Director gate configured for this tenant, or the
+            # gate is configured and the lead is awaiting INT-17 - either
+            # way, the lead itself existing is enough to verify here.
+            return VerificationResult(True, f"Lead {lead.id} created, status '{lead.status.value}'.")
+        opportunity = db.get(Opportunity, opportunity_id)
         if opportunity is None:
             return VerificationResult(False, "No opportunity created.")
         return VerificationResult(True, f"Lead qualified, opportunity {opportunity.id} created in draft stage.")
@@ -136,5 +146,53 @@ def verify(db: Session, intent_type: str, result: dict[str, Any] | None) -> Veri
         if wo is None:
             return VerificationResult(False, "No work order found after execution.")
         return VerificationResult(True, f"Work order {wo.id} confirmed status '{wo.status}'.")
+
+    if intent_type == "INT-15":
+        party_id = _require(result, "party_id")
+        party = db.get(Party, party_id) if party_id else None
+        if party is None:
+            return VerificationResult(False, "No prospect party created.")
+        return VerificationResult(True, f"Prospect {party.id} ('{party.name}') on file.")
+
+    if intent_type == "INT-16":
+        lead_id = _require(result, "lead_id")
+        lead = db.get(Lead, lead_id) if lead_id else None
+        if lead is None:
+            return VerificationResult(False, "No lead found after adding product interest.")
+        if not lead.interested_offering_name:
+            return VerificationResult(False, f"Lead {lead.id} has no interested_offering_name recorded.")
+        return VerificationResult(True, f"Lead {lead.id} now interested in '{lead.interested_offering_name}'.")
+
+    if intent_type == "INT-17":
+        lead_id = _require(result, "lead_id")
+        lead = db.get(Lead, lead_id) if lead_id else None
+        if lead is None:
+            return VerificationResult(False, "Lead not found after qualification decision.")
+        if lead.status.value == "qualified" and _require(result, "opportunity_id") is None:
+            return VerificationResult(False, f"Lead {lead.id} qualified but no opportunity_id in the saga result.")
+        return VerificationResult(True, f"Lead {lead.id} chain decision recorded, status '{lead.status.value}'.")
+
+    if intent_type == "INT-18":
+        assessment_id = _require(result, "assessment_id")
+        assessment = db.get(FeasibilityAssessment, assessment_id) if assessment_id else None
+        if assessment is None:
+            return VerificationResult(False, "No feasibility assessment recorded.")
+        return VerificationResult(True, f"Feasibility assessment {assessment.id} outcome: {assessment.outcome.value}.")
+
+    if intent_type in ("INT-19", "INT-20"):
+        quote_id = _require(result, "quote_id")
+        quote = db.get(Quote, quote_id) if quote_id else None
+        if quote is None:
+            return VerificationResult(False, "Quote not found after revision/cancellation.")
+        if intent_type == "INT-20" and quote.status != QuoteStatus.cancelled:
+            return VerificationResult(False, f"Expected quote status 'cancelled', found '{quote.status.value}'.")
+        return VerificationResult(True, f"Quote {quote.id} confirmed status '{quote.status.value}'.")
+
+    if intent_type == "INT-21":
+        order_id = _require(result, "order_id")
+        order = db.get(Order, order_id) if order_id else None
+        if order is None:
+            return VerificationResult(False, "No order found after revision.")
+        return VerificationResult(True, f"Order {order.id} revised, monthly_price now {order.monthly_price}.")
 
     return VerificationResult(True, "No verification rule defined for this intent type; passing through.")

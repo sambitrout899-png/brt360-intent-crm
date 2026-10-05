@@ -27,6 +27,7 @@ SUPPORTED_INTENTS = (
     "INT-07", "INT-08", "INT-09",
     "INT-10", "INT-11", "INT-12",
     "INT-13", "INT-14",
+    "INT-15", "INT-16", "INT-17", "INT-18", "INT-19", "INT-20", "INT-21",
 )
 
 _SYSTEM_PROMPT = """You are the NLU classifier for BRT 360, a telecom Intent CRM.
@@ -97,8 +98,38 @@ INT-14 "Provision this site" - B2B process pack (multi-site orders),
   site under the order is provisioned, the whole order goes active and
   billing starts.
 
+INT-15 "Add a prospect" - entities: name (str), email (str, optional),
+  phone (str, optional). The entry point ahead of any Lead.
+
+INT-16 "Add a product to this lead" - entities: lead_id (int),
+  offering_name (str, an existing active offering).
+
+INT-17 "Approve this lead" - Sales Director qualification gate, only
+  reachable when a tenant has a "lead" approval chain configured.
+  Entities: lead_id (int), decision ("approve"|"reject", default
+  "approve"), reasoning (str, optional).
+
+INT-18 "Run feasibility assessment" - B2B, at the Opportunity level
+  before quoting. Entities: opportunity_id (int), address (str,
+  optional - site/locator to check network availability/inventory
+  against).
+
+INT-19 "Revise this quote" - entities: quote_id (int),
+  requested_discount_pct (number, optional), quantity (int, optional).
+  Blocked once the quote has passed its configured PONR.
+
+INT-20 "Cancel this quote" - entities: quote_id (int), reasoning (str,
+  optional). Same PONR gate as INT-19.
+
+INT-21 "Revise this order" - entities: order_id (int),
+  new_monthly_price (number, optional), new_quantity (int, optional).
+  Distinct from INT-08 (which is for an already-active order with
+  billing proration): this is a plain pre-PONR edit, blocked once the
+  order has passed its configured PONR (default: anything past
+  "created"/"activating").
+
 Respond with strict JSON only:
-{"intent_type": "INT-01".."INT-14"|"UNKNOWN", "entities": {...},
+{"intent_type": "INT-01".."INT-21"|"UNKNOWN", "entities": {...},
  "confidence": 0.0-1.0, "rationale": "one sentence explaining the classification"}
 """
 
@@ -213,6 +244,43 @@ def _classify_with_rules(text: str) -> ClassificationResult:
         confidence = 0.85 if entities["offering_name"] else 0.4
         return ClassificationResult("INT-03", entities, confidence, "Matched keyword 'retire' + parsed fields")
 
+    if "prospect" in lowered:
+        entities = {
+            "name": fields.get("name", "").strip(),
+            "email": fields.get("email"),
+            "phone": fields.get("phone"),
+        }
+        confidence = 0.9 if entities["name"] else 0.4
+        return ClassificationResult("INT-15", entities, confidence, "Matched keyword 'prospect' + parsed fields")
+
+    if "lead_id" in fields and ("product" in lowered or "offering" in lowered) and "approve" not in lowered and "reject" not in lowered:
+        entities = {
+            "lead_id": _as_int(fields, "lead_id"),
+            "offering_name": fields.get("offering_name", "").strip(),
+        }
+        confidence = 0.85 if entities["lead_id"] and entities["offering_name"] else 0.4
+        return ClassificationResult("INT-16", entities, confidence, "Matched field 'lead_id' + 'product'/'offering' + parsed fields")
+
+    if ("approve" in lowered or "reject" in lowered) and "lead_id" in fields:
+        decision = "approve" if "approve" in lowered and "reject" not in lowered else (
+            "reject" if "reject" in lowered else fields.get("decision", "approve")
+        )
+        entities = {
+            "lead_id": _as_int(fields, "lead_id"),
+            "decision": fields.get("decision", decision),
+            "reasoning": fields.get("reasoning"),
+        }
+        confidence = 0.9 if entities["lead_id"] else 0.4
+        return ClassificationResult("INT-17", entities, confidence, "Matched keyword 'approve'/'reject' + 'lead' + parsed fields")
+
+    if "feasibility" in lowered and "opportunity_id" in fields:
+        entities = {
+            "opportunity_id": _as_int(fields, "opportunity_id"),
+            "address": fields.get("address", fields.get("site")),
+        }
+        confidence = 0.85 if entities["opportunity_id"] else 0.4
+        return ClassificationResult("INT-18", entities, confidence, "Matched keyword 'feasibility' + parsed fields")
+
     if "qualify" in lowered:
         entities = {
             "company_name": fields.get("company_name", fields.get("name", "")).strip(),
@@ -263,6 +331,32 @@ def _classify_with_rules(text: str) -> ClassificationResult:
         }
         confidence = 0.9 if entities["order_id"] and entities["site_label"] else 0.4
         return ClassificationResult("INT-14", entities, confidence, "Matched keyword 'provision'/'site' + parsed fields")
+
+    if "revise" in lowered and "order" in lowered:
+        entities = {
+            "order_id": _as_int(fields, "order_id"),
+            "new_monthly_price": _as_float(fields, "new_price") if "new_price" in fields else None,
+            "new_quantity": _as_int(fields, "new_quantity"),
+        }
+        confidence = 0.85 if entities["order_id"] else 0.4
+        return ClassificationResult("INT-21", entities, confidence, "Matched keyword 'revise' + 'order' + parsed fields")
+
+    if "revise" in lowered:
+        entities = {
+            "quote_id": _as_int(fields, "quote_id"),
+            "requested_discount_pct": _as_float(fields, "discount") if "discount" in fields else None,
+            "quantity": _as_int(fields, "quantity"),
+        }
+        confidence = 0.85 if entities["quote_id"] else 0.4
+        return ClassificationResult("INT-19", entities, confidence, "Matched keyword 'revise' + parsed fields")
+
+    if "cancel" in lowered and "quote" in lowered:
+        entities = {
+            "quote_id": _as_int(fields, "quote_id"),
+            "reasoning": fields.get("reasoning"),
+        }
+        confidence = 0.85 if entities["quote_id"] else 0.4
+        return ClassificationResult("INT-20", entities, confidence, "Matched keyword 'cancel' + 'quote' + parsed fields")
 
     if "upgrade" in lowered or "relocate" in lowered or "change this service" in lowered:
         entities = {

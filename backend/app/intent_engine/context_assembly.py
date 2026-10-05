@@ -21,10 +21,11 @@ from typing import Any, TypeVar
 
 from sqlalchemy.orm import Session
 
+from app.crm_core import ponr_service
 from app.integration import tmf620_adapter
 from app.models.assurance import TroubleTicket, WorkOrder
 from app.models.catalog import BundleCompatibilityRule, ProductOffering
-from app.models.crm import Opportunity, Party, Quote, TerritoryRule
+from app.models.crm import Lead, Opportunity, Party, Quote, TerritoryRule
 from app.models.orders import Order, ServiceOrder
 from app.models.tenant import Tenant, TenantVertical
 
@@ -116,6 +117,16 @@ def assemble_context(db: Session, tenant_id: int, intent_type: str, entities: di
             else None
         )
 
+    elif intent_type in ("INT-19", "INT-20"):
+        quote = _get_owned(db, Quote, tenant_id, entities.get("quote_id"))
+        context["quote"] = (
+            {"id": quote.id, "status": quote.status.value, "total_price": quote.total_price, "discount_pct": quote.requested_discount_pct}
+            if quote
+            else None
+        )
+        if quote is not None:
+            context["ponr_reached"] = ponr_service.has_reached_ponr(db, tenant_id, "quote", quote.status.value)
+
     elif intent_type in ("INT-08", "INT-09"):
         order = _get_owned(db, Order, tenant_id, entities.get("order_id"))
         context["order"] = (
@@ -123,6 +134,36 @@ def assemble_context(db: Session, tenant_id: int, intent_type: str, entities: di
             if order
             else None
         )
+
+    elif intent_type == "INT-21":
+        order = _get_owned(db, Order, tenant_id, entities.get("order_id"))
+        context["order"] = (
+            {"id": order.id, "status": order.status.value, "monthly_price": order.monthly_price, "contract_months": order.contract_months}
+            if order
+            else None
+        )
+        if order is not None:
+            context["ponr_reached"] = ponr_service.has_reached_ponr(db, tenant_id, "order", order.status.value)
+
+    elif intent_type == "INT-16":
+        lead = _get_owned(db, Lead, tenant_id, entities.get("lead_id"))
+        context["lead"] = {"id": lead.id, "status": lead.status.value} if lead else None
+        offering = tmf620_adapter.get_active_offering_by_name(db, tenant_id, entities.get("offering_name", ""))
+        context["offering"] = {"id": offering.id, "name": offering.name} if offering else None
+
+    elif intent_type == "INT-17":
+        lead = _get_owned(db, Lead, tenant_id, entities.get("lead_id"))
+        context["lead"] = (
+            {"id": lead.id, "status": lead.status.value, "interested_offering_name": lead.interested_offering_name}
+            if lead
+            else None
+        )
+        if lead is not None and lead.chain_instance is not None:
+            context["chain_status"] = lead.chain_instance.status.value
+
+    elif intent_type == "INT-18":
+        opportunity = _get_owned(db, Opportunity, tenant_id, entities.get("opportunity_id"))
+        context["opportunity"] = {"id": opportunity.id, "stage": opportunity.stage.value} if opportunity else None
 
     elif intent_type == "INT-11":
         ticket = _get_owned(db, TroubleTicket, tenant_id, entities.get("ticket_id"))
