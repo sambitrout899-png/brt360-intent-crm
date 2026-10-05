@@ -52,13 +52,19 @@ def upgrade() -> None:
         sa.UniqueConstraint("email"),
     )
 
+    # role MUST be declared with the real Enum type here, not sa.String() -
+    # on SQLite this makes no difference (enums are just a CHECK
+    # constraint over a VARCHAR, strings bind fine either way), but
+    # Postgres has a genuine "userrole" enum type and refuses to
+    # implicitly cast a VARCHAR-typed bind parameter onto it, raising
+    # DatatypeMismatch on the INSERT below.
     users_table = sa.table(
         "users",
         sa.column("tenant_id", sa.Integer()),
         sa.column("email", sa.String()),
         sa.column("password_hash", sa.String()),
         sa.column("name", sa.String()),
-        sa.column("role", sa.String()),
+        sa.column("role", sa.Enum("platform_admin", "admin", "agent", "viewer", name="userrole")),
         sa.column("is_active", sa.Boolean()),
         sa.column("created_at", sa.DateTime()),
     )
