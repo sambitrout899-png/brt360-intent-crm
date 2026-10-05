@@ -26,10 +26,11 @@ SUPPORTED_INTENTS = (
     "INT-04", "INT-05", "INT-06",
     "INT-07", "INT-08", "INT-09",
     "INT-10", "INT-11", "INT-12",
+    "INT-13",
 )
 
 _SYSTEM_PROMPT = """You are the NLU classifier for BRT 360, a telecom Intent CRM.
-Classify the user's free text into exactly one of these 12 intent types, or UNKNOWN:
+Classify the user's free text into exactly one of these 13 intent types, or UNKNOWN:
 
 INT-01 "Launch a new bundle" - entities: name (str), composition (list[str] of
   product names, first is the primary connectivity line), segment (str, e.g.
@@ -78,8 +79,13 @@ INT-12 "Assign & track the field team" - entities: ticket_id (int, optional),
   optional), work_order_id (int, optional - if set with action "complete",
   this call records completion instead of dispatching), action (str, optional).
 
+INT-13 "Verify customer identity" - B2C process pack, blocked for tenants
+  configured B2B-only. Entities: party_id (int), id_number (str), id_type
+  (str, default "national_id"), provider (str, optional - defaults to
+  "Yakeen"; other configured providers include WATHQ, SIMAH, Abshir).
+
 Respond with strict JSON only:
-{"intent_type": "INT-01".."INT-12"|"UNKNOWN", "entities": {...},
+{"intent_type": "INT-01".."INT-13"|"UNKNOWN", "entities": {...},
  "confidence": 0.0-1.0, "rationale": "one sentence explaining the classification"}
 """
 
@@ -251,6 +257,16 @@ def _classify_with_rules(text: str) -> ClassificationResult:
         }
         confidence = 0.85 if entities["order_id"] else 0.4
         return ClassificationResult("INT-09", entities, confidence, "Matched keyword 'suspend'/'cancel'/'terminate' + parsed fields")
+
+    if "verify" in lowered and ("identity" in lowered or "kyc" in lowered):
+        entities = {
+            "party_id": _as_int(fields, "party_id"),
+            "id_number": fields.get("id_number"),
+            "id_type": fields.get("id_type", "national_id"),
+            "provider": fields.get("provider"),
+        }
+        confidence = 0.9 if entities["party_id"] and entities["id_number"] else 0.4
+        return ClassificationResult("INT-13", entities, confidence, "Matched keyword 'verify identity'/'kyc' + parsed fields")
 
     if "complaint" in lowered:
         entities = {

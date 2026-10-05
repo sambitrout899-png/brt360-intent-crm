@@ -3,18 +3,22 @@ import {
   createApprovalChain,
   createAttributeConstraintRule,
   createAttributeDefinition,
+  createIdentityProvider,
   createSlaPolicy,
   deactivateApprovalChain,
   deactivateAttributeConstraintRule,
+  deactivateIdentityProvider,
   deactivateSlaPolicy,
   deleteApprovalChain,
   deleteAttributeConstraintRule,
   deleteAttributeDefinition,
+  deleteIdentityProvider,
   deleteSlaPolicy,
   listApprovalChains,
   listAttributeConstraintRules,
   listAttributeDefinitions,
   listAttributeValues,
+  listIdentityProviders,
   listProductSpecifications,
   listSlaClocks,
   listSlaPolicies,
@@ -25,6 +29,7 @@ import { ATTRIBUTE_DATA_TYPES, CONSTRAINT_OPERATORS, CONSTRAINT_RULE_TYPES, SLA_
 import type {
   ApprovalChainTemplate,
   AttributeConstraintRule,
+  IdentityProvider,
   ProductAttributeDefinition,
   ProductAttributeValue,
   ProductSpecification,
@@ -32,7 +37,7 @@ import type {
   SlaPolicy,
 } from "../api/types";
 
-type Section = "approvals" | "sla" | "attributes";
+type Section = "approvals" | "sla" | "attributes" | "identity";
 
 function emptyChainForm() {
   return { name: "", segment: "", minPct: "0", maxPct: "100", tiers: [""] };
@@ -645,6 +650,85 @@ function ProductAttributesSection() {
   );
 }
 
+function IdentityProvidersSection() {
+  const [providers, setProviders] = useState<IdentityProvider[]>([]);
+  const [name, setName] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  function load() {
+    listIdentityProviders().then(setProviders);
+  }
+
+  useEffect(load, []);
+
+  async function submit() {
+    setError(null);
+    if (!name.trim()) {
+      setError("Provider name is required.");
+      return;
+    }
+    try {
+      await createIdentityProvider(name.trim());
+      setName("");
+      load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to create provider.");
+    }
+  }
+
+  async function deactivate(id: number) {
+    await deactivateIdentityProvider(id);
+    load();
+  }
+
+  async function remove(id: number) {
+    await deleteIdentityProvider(id);
+    load();
+  }
+
+  return (
+    <div className="space-y-6">
+      <p className="text-sm text-slate-400">
+        B2C process pack: pluggable identity-verification providers for INT-13 ("Verify customer identity"), blocked
+        outright for tenants configured B2B-only. "Yakeen", "WATHQ", "SIMAH" and "Abshir" are seeded by default,
+        matching the providers named in the B2C BRD docs - add, deactivate or remove as needed.
+      </p>
+
+      <div className="space-y-2">
+        {providers.map((p) => (
+          <div key={p.id} className={`flex flex-wrap items-center gap-3 rounded-lg border px-4 py-3 text-sm ${p.is_active ? "border-slate-700 bg-slate-900/60" : "border-slate-800 bg-slate-950/60 opacity-60"}`}>
+            <span className="font-semibold text-slate-200">{p.name}</span>
+            {!p.is_active && <span className="rounded-md border border-slate-700 px-2 py-0.5 text-xs text-slate-500">inactive</span>}
+            <div className="ml-auto flex gap-2">
+              {p.is_active && (
+                <button onClick={() => deactivate(p.id)} className="rounded-md border border-slate-700 px-2.5 py-1 text-xs font-bold text-slate-300 hover:border-amber-500 hover:text-amber-400">
+                  Deactivate
+                </button>
+              )}
+              <button onClick={() => remove(p.id)} className="rounded-md border border-slate-700 px-2.5 py-1 text-xs font-bold text-slate-300 hover:border-red-500 hover:text-red-400">
+                Delete
+              </button>
+            </div>
+          </div>
+        ))}
+        {providers.length === 0 && <p className="text-sm text-slate-500">No identity providers configured yet.</p>}
+      </div>
+
+      <div className="flex flex-wrap items-end gap-2 rounded-xl border border-slate-700 bg-slate-900/60 p-4">
+        <label className="text-xs text-slate-400">
+          Provider name
+          <input value={name} onChange={(e) => setName(e.target.value)} className="mt-1 w-48 rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200" placeholder="e.g. Nafath" />
+        </label>
+        <button onClick={submit} className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-bold text-white hover:bg-sky-500">
+          Add Provider
+        </button>
+      </div>
+
+      {error && <p className="text-xs text-red-400">{error}</p>}
+    </div>
+  );
+}
+
 export default function AdminPage() {
   const [section, setSection] = useState<Section>("approvals");
 
@@ -660,6 +744,7 @@ export default function AdminPage() {
           ["approvals", "Approval Chains"],
           ["sla", "SLA Policies"],
           ["attributes", "Product Attributes"],
+          ["identity", "Identity Providers"],
         ] as [Section, string][]).map(([id, label]) => (
           <button
             key={id}
@@ -676,6 +761,7 @@ export default function AdminPage() {
       {section === "approvals" && <ApprovalChainsSection />}
       {section === "sla" && <SlaPoliciesSection />}
       {section === "attributes" && <ProductAttributesSection />}
+      {section === "identity" && <IdentityProvidersSection />}
     </div>
   );
 }

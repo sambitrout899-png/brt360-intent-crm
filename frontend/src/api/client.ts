@@ -4,6 +4,7 @@ import type {
   AuditLogDetail,
   AuditLogEntry,
   DashboardSummary,
+  IdentityProvider,
   IntentResponse,
   Offering,
   Opportunity,
@@ -229,4 +230,20 @@ export function deactivateAttributeConstraintRule(id: number): Promise<void> {
 
 export function deleteAttributeConstraintRule(id: number): Promise<void> {
   return request<void>(`/api/admin/attribute-constraint-rules/${id}`, { method: "DELETE" });
+}
+
+export function listIdentityProviders(): Promise<IdentityProvider[]> {
+  return request<IdentityProvider[]>("/api/admin/identity-providers");
+}
+
+export function createIdentityProvider(name: string): Promise<IdentityProvider> {
+  return request<IdentityProvider>("/api/admin/identity-providers", { method: "POST", body: JSON.stringify({ name }) });
+}
+
+export function deactivateIdentityProvider(id: number): Promise<IdentityProvider> {
+  return request<IdentityProvider>(`/api/admin/identity-providers/${id}/deactivate`, { method: "PATCH" });
+}
+
+export function deleteIdentityProvider(id: number): Promise<void> {
+  return request<void>(`/api/admin/identity-providers/${id}`, { method: "DELETE" });
 }

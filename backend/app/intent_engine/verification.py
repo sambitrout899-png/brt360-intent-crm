@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from app.models.assurance import TroubleTicket, WorkOrder
 from app.models.catalog import OfferingStatus, ProductOffering
 from app.models.crm import Opportunity, Quote, QuoteStatus
+from app.models.identity import IdentityVerification
 from app.models.orders import Order, OrderStatus
 
 
@@ -109,6 +110,13 @@ def verify(db: Session, intent_type: str, result: dict[str, Any] | None) -> Veri
         if ticket.root_cause_analysis is None:
             return VerificationResult(False, "No root cause analysis recorded.")
         return VerificationResult(True, f"Diagnosis recorded for ticket {ticket.id} (confidence {ticket.root_cause_analysis.confidence}).")
+
+    if intent_type == "INT-13":
+        verification_id = _require(result, "verification_id")
+        record = db.get(IdentityVerification, verification_id) if verification_id else None
+        if record is None:
+            return VerificationResult(False, "No identity verification record created.")
+        return VerificationResult(True, f"Identity verification {record.id} recorded: {record.status.value}.")
 
     if intent_type == "INT-12":
         work_order_id = _require(result, "work_order_id")

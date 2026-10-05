@@ -205,6 +205,19 @@ class TechnicianOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class IdentityVerificationOut(BaseModel):
+    id: int
+    provider_name: str
+    id_type: str
+    id_last4: str
+    status: str
+    detail: str
+    created_at: dt.datetime
+    resolved_at: dt.datetime | None
+
+    model_config = {"from_attributes": True}
+
+
 class Party360Out(BaseModel):
     party: PartyOut
     leads: list[LeadOut]
@@ -212,6 +225,7 @@ class Party360Out(BaseModel):
     quotes: list[QuoteOut]
     orders: list[OrderOut]
     service_accounts: list[ServiceAccountOut]
+    identity_verifications: list[IdentityVerificationOut]
     billing_account: BillingAccountOut | None
     tickets: list[TroubleTicketOut]
 

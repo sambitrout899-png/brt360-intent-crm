@@ -87,6 +87,31 @@ export default function CustomerPage({ onRequestIntent }: { onRequestIntent: (te
                 </div>
               </Section>
 
+              <Section title={`Identity Verification (${detail.identity_verifications.length})`}>
+                {detail.identity_verifications.map((v) => (
+                  <div key={v.id} className="flex items-center gap-3 rounded-lg bg-slate-950 px-3 py-2 text-sm mb-2">
+                    <span className="text-slate-200">{v.provider_name}</span>
+                    <span className="text-xs text-slate-500">{v.id_type} ····{v.id_last4}</span>
+                    <span
+                      className={`ml-auto rounded-md px-2 py-0.5 text-xs font-bold ${
+                        v.status === "verified"
+                          ? "bg-emerald-500/15 text-emerald-400"
+                          : v.status === "rejected"
+                            ? "bg-red-500/15 text-red-400"
+                            : "bg-amber-500/15 text-amber-400"
+                      }`}
+                    >
+                      {v.status}
+                    </span>
+                  </div>
+                ))}
+                {detail.identity_verifications.length === 0 && <p className="text-sm text-slate-500 mb-2">None yet.</p>}
+                <ActionButton
+                  label="Verify Identity"
+                  onClick={() => onRequestIntent(`Verify customer identity. party_id: ${detail.party.id}, id_number: `)}
+                />
+              </Section>
+
               <Section title={`Opportunities (${detail.opportunities.length})`}>
                 {detail.opportunities.map((o) => (
                   <div key={o.id} className="flex items-center gap-3 rounded-lg bg-slate-950 px-3 py-2 text-sm mb-2">

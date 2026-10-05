@@ -35,6 +35,7 @@ from app.models.crm import (
     QuoteItem,
     TerritoryRule,
 )
+from app.models.identity import IdentityVerification, IdentityVerificationProvider, VerificationStatus
 from app.models.intent_log import DomainEvent, IntentExecutionLog
 from app.models.orders import (
     BillingAccount,
@@ -88,4 +89,7 @@ __all__ = [
     "ProductAttributeValue",
     "AttributeConstraintRule",
     "ServiceAccount",
+    "IdentityVerificationProvider",
+    "IdentityVerification",
+    "VerificationStatus",
 ]

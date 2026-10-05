@@ -140,3 +140,16 @@ class AttributeConstraintRuleOut(BaseModel):
     then_product_name: str
     is_active: bool
     created_at: dt.datetime
+
+
+class IdentityProviderCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+
+
+class IdentityProviderOut(BaseModel):
+    id: int
+    name: str
+    is_active: bool
+    created_at: dt.datetime
+
+    model_config = {"from_attributes": True}

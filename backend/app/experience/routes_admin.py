@@ -14,12 +14,15 @@ from app.db import get_db
 from app.models.approval import ApprovalChainTemplate, ApprovalChainTier
 from app.models.attributes import AttributeConstraintRule, ProductAttributeDefinition, ProductAttributeValue
 from app.models.catalog import ProductSpecification
+from app.models.identity import IdentityVerificationProvider
 from app.models.sla import SlaClock, SlaPolicy
 from app.schemas.admin import (
     ApprovalChainTemplateCreate,
     ApprovalChainTemplateOut,
     AttributeConstraintRuleCreate,
     AttributeConstraintRuleOut,
+    IdentityProviderCreate,
+    IdentityProviderOut,
     ProductAttributeDefinitionCreate,
     ProductAttributeDefinitionOut,
     ProductAttributeValueOut,
@@ -368,4 +371,51 @@ def delete_attribute_constraint_rule(
     if rule is None or rule.tenant_id != tenant_id:
         raise HTTPException(404, "Constraint rule not found")
     db.delete(rule)
+    db.commit()
+
+
+@router.get("/identity-providers", response_model=list[IdentityProviderOut])
+def list_identity_providers(
+    db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)
+) -> list[IdentityVerificationProvider]:
+    return (
+        db.query(IdentityVerificationProvider)
+        .filter(IdentityVerificationProvider.tenant_id == tenant_id)
+        .order_by(IdentityVerificationProvider.name)
+        .all()
+    )
+
+
+@router.post("/identity-providers", response_model=IdentityProviderOut, status_code=201)
+def create_identity_provider(
+    payload: IdentityProviderCreate, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)
+) -> IdentityVerificationProvider:
+    provider = IdentityVerificationProvider(tenant_id=tenant_id, name=payload.name)
+    db.add(provider)
+    db.commit()
+    db.refresh(provider)
+    return provider
+
+
+@router.patch("/identity-providers/{provider_id}/deactivate", response_model=IdentityProviderOut)
+def deactivate_identity_provider(
+    provider_id: int, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)
+) -> IdentityVerificationProvider:
+    provider = db.get(IdentityVerificationProvider, provider_id)
+    if provider is None or provider.tenant_id != tenant_id:
+        raise HTTPException(404, "Identity provider not found")
+    provider.is_active = False
+    db.commit()
+    db.refresh(provider)
+    return provider
+
+
+@router.delete("/identity-providers/{provider_id}", status_code=204)
+def delete_identity_provider(
+    provider_id: int, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)
+) -> None:
+    provider = db.get(IdentityVerificationProvider, provider_id)
+    if provider is None or provider.tenant_id != tenant_id:
+        raise HTTPException(404, "Identity provider not found")
+    db.delete(provider)
     db.commit()

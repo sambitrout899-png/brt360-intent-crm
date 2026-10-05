@@ -17,11 +17,13 @@ from app.models.accounts import ServiceAccount
 from app.models.assurance import Technician, TroubleTicket, WorkOrder
 from app.models.catalog import ProductOffering
 from app.models.crm import Lead, Opportunity, Party, Quote
+from app.models.identity import IdentityVerification
 from app.models.orders import BillingAccount, Order
 from app.schemas.crm import (
     BillingAccountOut,
     BillingAdjustmentOut,
     DashboardSummaryOut,
+    IdentityVerificationOut,
     LeadOut,
     OpportunityOut,
     OrderOut,
@@ -204,6 +206,12 @@ def party_360(party_id: int, db: Session = Depends(get_db), tenant_id: int = Dep
     orders = db.query(Order).filter(Order.tenant_id == tenant_id, Order.party_id == party_id).all()
     billing_account = db.query(BillingAccount).filter(BillingAccount.tenant_id == tenant_id, BillingAccount.party_id == party_id).first()
     tickets = db.query(TroubleTicket).filter(TroubleTicket.tenant_id == tenant_id, TroubleTicket.party_id == party_id).all()
+    identity_verifications = (
+        db.query(IdentityVerification)
+        .filter(IdentityVerification.tenant_id == tenant_id, IdentityVerification.party_id == party_id)
+        .order_by(IdentityVerification.created_at.desc())
+        .all()
+    )
 
     service_accounts = (
         db.query(ServiceAccount).filter(ServiceAccount.billing_account_id == billing_account.id).all()
@@ -232,6 +240,7 @@ def party_360(party_id: int, db: Session = Depends(get_db), tenant_id: int = Dep
             )
             for sa in service_accounts
         ],
+        identity_verifications=[IdentityVerificationOut.model_validate(v) for v in identity_verifications],
         billing_account=_billing_account_out(billing_account, party.name) if billing_account else None,
         tickets=[_ticket_out(t) for t in tickets],
     )

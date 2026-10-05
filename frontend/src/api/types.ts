@@ -303,6 +303,24 @@ export interface Technician {
   status: string;
 }
 
+export interface IdentityVerification {
+  id: number;
+  provider_name: string;
+  id_type: string;
+  id_last4: string;
+  status: "pending" | "verified" | "rejected";
+  detail: string;
+  created_at: string;
+  resolved_at: string | null;
+}
+
+export interface IdentityProvider {
+  id: number;
+  name: string;
+  is_active: boolean;
+  created_at: string;
+}
+
 export interface Party360 {
   party: Party;
   leads: Lead[];
@@ -310,6 +328,7 @@ export interface Party360 {
   quotes: Quote[];
   orders: Order[];
   service_accounts: ServiceAccount[];
+  identity_verifications: IdentityVerification[];
   billing_account: BillingAccount | null;
   tickets: TroubleTicket[];
 }

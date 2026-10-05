@@ -41,6 +41,7 @@ _REQUIRED_FIELDS: dict[str, list[str]] = {
     "INT-09": ["order_id", "action"],
     "INT-10": ["description"],
     "INT-11": ["ticket_id"],
+    "INT-13": ["party_id", "id_number"],
 }
 
 
@@ -78,6 +79,11 @@ def _context_missing(intent_type: str, context: dict[str, Any]) -> list[str]:
             missing.append(f"order already {context['order']['status']}")
     if intent_type == "INT-11" and context.get("ticket") is None:
         missing.append("ticket (not found)")
+    if intent_type == "INT-13":
+        if context.get("party") is None:
+            missing.append("party (not found)")
+        if context.get("vertical_blocked"):
+            missing.append(context["vertical_blocked"])
     if intent_type == "INT-12":
         if context.get("work_order") is None and context.get("ticket") is None and context.get("order") is None:
             missing.append("none of ticket/order/work_order resolved")

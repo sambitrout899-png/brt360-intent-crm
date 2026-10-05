@@ -21,8 +21,14 @@ from app.models.approval import ApprovalChainTemplate, ApprovalChainTier
 from app.models.assurance import Technician
 from app.models.catalog import BundleCompatibilityRule, ProductSpecification
 from app.models.crm import TerritoryRule
+from app.models.identity import IdentityVerificationProvider
 from app.models.tenant import Tenant, TenantVertical
 from app.tenancy import DEFAULT_TENANT_SLUG
+
+# B2C process pack (Phase 3): the identity-verification providers named in
+# the BRD docs, seeded as reference data an admin can deactivate/extend -
+# never hardcoded into the verification flow itself (see identity_service.py).
+DEFAULT_IDENTITY_PROVIDERS = ["Yakeen", "WATHQ", "SIMAH", "Abshir"]
 
 ATOMIC_PRODUCTS = [
     ("Fiber100", "connectivity"),
@@ -98,6 +104,10 @@ def seed_reference_data(db, tenant_id: int) -> None:
             for sequence, approver_tier in enumerate(tiers, start=1):
                 db.add(ApprovalChainTier(template_id=template.id, sequence=sequence, approver_tier=approver_tier))
 
+    if db.query(IdentityVerificationProvider).filter(IdentityVerificationProvider.tenant_id == tenant_id).count() == 0:
+        for name in DEFAULT_IDENTITY_PROVIDERS:
+            db.add(IdentityVerificationProvider(tenant_id=tenant_id, name=name))
+
 
 def seed() -> None:
     db = SessionLocal()
@@ -108,7 +118,8 @@ def seed() -> None:
         print(
             f"Seeded tenant '{tenant.slug}' (id={tenant.id}) with {len(ATOMIC_PRODUCTS)} product specifications, "
             f"{len(COMPATIBILITY_RULES)} compatibility rules, {len(TERRITORY_RULES)} territory rules, "
-            f"{len(TECHNICIANS)} technicians, {len(DEFAULT_SEED_TEMPLATES)} approval chain templates."
+            f"{len(TECHNICIANS)} technicians, {len(DEFAULT_SEED_TEMPLATES)} approval chain templates, "
+            f"{len(DEFAULT_IDENTITY_PROVIDERS)} identity verification providers."
         )
     finally:
         db.close()

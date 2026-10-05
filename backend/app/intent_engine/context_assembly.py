@@ -24,8 +24,9 @@ from sqlalchemy.orm import Session
 from app.integration import tmf620_adapter
 from app.models.assurance import TroubleTicket, WorkOrder
 from app.models.catalog import BundleCompatibilityRule, ProductOffering
-from app.models.crm import Opportunity, Quote, TerritoryRule
+from app.models.crm import Opportunity, Party, Quote, TerritoryRule
 from app.models.orders import Order
+from app.models.tenant import Tenant, TenantVertical
 
 _TTL_SECONDS = 90
 _cache: dict[str, tuple[float, Any]] = {}
@@ -126,6 +127,16 @@ def assemble_context(db: Session, tenant_id: int, intent_type: str, entities: di
     elif intent_type == "INT-11":
         ticket = _get_owned(db, TroubleTicket, tenant_id, entities.get("ticket_id"))
         context["ticket"] = {"id": ticket.id, "status": ticket.status, "severity": ticket.severity} if ticket else None
+
+    elif intent_type == "INT-13":
+        party = _get_owned(db, Party, tenant_id, entities.get("party_id"))
+        context["party"] = {"id": party.id, "name": party.name} if party else None
+        tenant = db.get(Tenant, tenant_id)
+        if tenant is not None and tenant.vertical == TenantVertical.b2b:
+            context["vertical_blocked"] = (
+                f"INT-13 (identity verification) is a B2C process-pack feature; tenant '{tenant.slug}' is "
+                f"configured for B2B only."
+            )
 
     elif intent_type == "INT-12":
         if entities.get("work_order_id"):
