@@ -73,13 +73,20 @@ export default function PipelinePage({ onRequestIntent }: { onRequestIntent: (te
               <span className="text-slate-200">₹{q.total_price.toLocaleString()}</span>
               <span className="text-xs text-slate-500">{q.requested_discount_pct}% discount</span>
               <span className={`rounded-md border px-2 py-0.5 text-xs font-bold ${QUOTE_STATUS_STYLES[q.status]}`}>{q.status}</span>
-              {q.approval && <span className="text-xs text-slate-500">tier: {q.approval.approver_tier}</span>}
-              {q.status === "draft" && (
+              {q.approval_chain && (
+                <span className="text-xs text-slate-500">
+                  {q.approval_chain.template_name}
+                  {q.approval_chain.current_tier
+                    ? ` — awaiting ${q.approval_chain.current_tier} (step ${q.approval_chain.steps.filter((s) => s.status !== "pending").length + 1}/${q.approval_chain.steps.length})`
+                    : ` — ${q.approval_chain.status}`}
+                </span>
+              )}
+              {(q.status === "draft" || q.status === "pending_approval") && (
                 <button
                   onClick={() => onRequestIntent(`Approve this quote. quote_id: ${q.id}, reasoning: `)}
                   className="ml-auto rounded-md border border-sky-500/40 bg-sky-500/10 px-2.5 py-1 text-xs font-bold text-sky-400 hover:bg-sky-500/20"
                 >
-                  Approve / Reject
+                  Approve / Reject {q.approval_chain?.current_tier ? `(${q.approval_chain.current_tier})` : ""}
                 </button>
               )}
               {q.status === "approved" && (

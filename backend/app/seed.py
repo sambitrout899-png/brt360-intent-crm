@@ -15,7 +15,9 @@ special-cased to "default" beyond being the fallback.
 
 from __future__ import annotations
 
+from app.crm_core.approval_service import DEFAULT_SEED_TEMPLATES
 from app.db import SessionLocal
+from app.models.approval import ApprovalChainTemplate, ApprovalChainTier
 from app.models.assurance import Technician
 from app.models.catalog import BundleCompatibilityRule, ProductSpecification
 from app.models.crm import TerritoryRule
@@ -86,6 +88,16 @@ def seed_reference_data(db, tenant_id: int) -> None:
         for name, skills, region in TECHNICIANS:
             db.add(Technician(tenant_id=tenant_id, name=name, skills=skills, region=region, status="available"))
 
+    if db.query(ApprovalChainTemplate).filter(ApprovalChainTemplate.tenant_id == tenant_id).count() == 0:
+        for name, segment, min_pct, max_pct, tiers in DEFAULT_SEED_TEMPLATES:
+            template = ApprovalChainTemplate(
+                tenant_id=tenant_id, name=name, segment=segment, min_discount_pct=min_pct, max_discount_pct=max_pct
+            )
+            db.add(template)
+            db.flush()
+            for sequence, approver_tier in enumerate(tiers, start=1):
+                db.add(ApprovalChainTier(template_id=template.id, sequence=sequence, approver_tier=approver_tier))
+
 
 def seed() -> None:
     db = SessionLocal()
@@ -96,7 +108,7 @@ def seed() -> None:
         print(
             f"Seeded tenant '{tenant.slug}' (id={tenant.id}) with {len(ATOMIC_PRODUCTS)} product specifications, "
             f"{len(COMPATIBILITY_RULES)} compatibility rules, {len(TERRITORY_RULES)} territory rules, "
-            f"{len(TECHNICIANS)} technicians."
+            f"{len(TECHNICIANS)} technicians, {len(DEFAULT_SEED_TEMPLATES)} approval chain templates."
         )
     finally:
         db.close()

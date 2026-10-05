@@ -11,7 +11,9 @@ from sqlalchemy.orm import Session
 from app.crm_core import approval_service, catalog_service, lead_service
 from app.data_intelligence import event_bus
 from app.integration import party_adapter, tmf620_adapter
-from app.models.crm import ApprovalDecision, ApprovalRequest, ApprovalStatus, FeasibilityResult, Opportunity, OpportunityStage, Quote, QuoteItem, QuoteStatus
+from app.models.approval import ApprovalChainInstance
+from app.models.catalog import ProductOffering
+from app.models.crm import FeasibilityResult, Opportunity, OpportunityStage, Quote, QuoteItem, QuoteStatus
 from app.orchestration.orchestrator import SagaStep
 
 
@@ -95,7 +97,7 @@ def build_int05_steps(db: Session, tenant_id: int, execution_id: int, entities: 
         return {"unit_price": unit_price, "discount_applied_pct": min(requested_discount_pct, ceiling)}
 
     def step3() -> dict[str, Any]:
-        rep_authority_pct = approval_service.DISCOUNT_MATRIX[0][0]  # "Auto-Approved" ceiling
+        rep_authority_pct = approval_service.get_rep_authority_ceiling_pct(db, tenant_id, state["offering"].segment)
         if requested_discount_pct > rep_authority_pct and not justification:
             raise ValueError(
                 f"Discount {requested_discount_pct}% exceeds rep authority ({rep_authority_pct}%) and requires a justification"
@@ -129,7 +131,15 @@ def build_int05_steps(db: Session, tenant_id: int, execution_id: int, entities: 
 
 
 def build_int06_steps(db: Session, tenant_id: int, execution_id: int, entities: dict[str, Any]) -> list[SagaStep]:
-    """INT-06 - Check feasibility & approve."""
+    """INT-06 - Check feasibility & approve.
+
+    A quote's chain can take more than one "Approve this quote" call to
+    resolve (one per tier). The first call instantiates the chain from the
+    tenant's configured templates (approval_service.resolve_template) and
+    decides tier 1; each subsequent call decides whichever tier is next,
+    reusing the same ApprovalChainInstance rather than re-resolving it, so
+    re-matching never contradicts a chain already in progress.
+    """
 
     quote_id = entities["quote_id"]
     decision = entities.get("decision", "approve")
@@ -143,54 +153,58 @@ def build_int06_steps(db: Session, tenant_id: int, execution_id: int, entities: 
             raise ValueError(f"Quote {quote_id} not found")
         state["quote"] = quote
         # Stand-in network feasibility check (HLD: "fiber route, capacity via OSS") -
-        # deterministic so this is testable without a live OSS.
-        feasible = "unavailable" not in (quote.discount_justification or "").lower()
-        fr = FeasibilityResult(quote_id=quote.id, feasible=feasible, details="Stub OSS feasibility check")
-        db.add(fr)
-        db.flush()
-        state["feasible"] = feasible
-        return {"feasible": feasible}
+        # deterministic so this is testable without a live OSS. Only run once per
+        # quote - FeasibilityResult has a unique quote_id, and a multi-tier chain
+        # calls this step more than once.
+        if quote.feasibility_result is not None:
+            state["feasible"] = quote.feasibility_result.feasible
+        else:
+            feasible = "unavailable" not in (quote.discount_justification or "").lower()
+            db.add(FeasibilityResult(quote_id=quote.id, feasible=feasible, details="Stub OSS feasibility check"))
+            db.flush()
+            state["feasible"] = feasible
+        return {"feasible": state["feasible"]}
 
     def step2() -> dict[str, Any]:
-        tier = approval_service.determine_approver_tier(state["quote"].requested_discount_pct)
-        state["tier"] = tier
-        return {"approver_tier": tier}
+        quote = state["quote"]
+        instance = db.query(ApprovalChainInstance).filter(ApprovalChainInstance.quote_id == quote.id).first()
+        if instance is None:
+            item = quote.items[0] if quote.items else None
+            offering = db.get(ProductOffering, item.product_offering_id) if item else None
+            segment = offering.segment if offering else None
+            template = approval_service.resolve_template(db, tenant_id, quote.requested_discount_pct, segment)
+            if template is None:
+                raise ValueError("No approval chain is configured for this discount band - an admin must add one")
+            instance = approval_service.instantiate_chain(db, quote, template)
+            quote.status = QuoteStatus.pending_approval
+            db.flush()
+        state["instance"] = instance
+        return {"chain_template": instance.template.name, "current_tier": instance.steps[instance.current_sequence - 1].approver_tier}
 
     def step3() -> dict[str, Any]:
-        ar = ApprovalRequest(
-            quote_id=quote_id,
-            approver_tier=state["tier"],
-            deal_size=state["quote"].total_price,
-            status=ApprovalStatus.pending,
-        )
-        db.add(ar)
-        db.flush()
-        state["approval_request_id"] = ar.id
-        return {"approval_request_id": ar.id, "approver_tier": state["tier"]}
-
-    def step4() -> dict[str, Any]:
-        # Routing to the queue is represented by the ApprovalRequest row
-        # created above staying "pending" until step 5 below.
-        return {"routed": True}
-
-    def step5() -> dict[str, Any]:
         if not state["feasible"] and decision == "approve":
             raise ValueError("Cannot approve a quote that failed the feasibility check")
+        outcome = approval_service.record_step_decision(db, state["instance"], decision, reasoning_text or "")
+        state["outcome"] = outcome
+        return outcome
 
-        ad = ApprovalDecision(approval_request_id=state["approval_request_id"], decision=decision, reasoning=reasoning_text or "")
-        db.add(ad)
-        ar = db.get(ApprovalRequest, state["approval_request_id"])
-        ar.status = ApprovalStatus(decision if decision in ("approved", "rejected", "conditional") else {"approve": "approved", "reject": "rejected"}.get(decision, "conditional"))
+    def step4() -> dict[str, Any]:
         quote = state["quote"]
-        quote.status = QuoteStatus.approved if decision == "approve" else QuoteStatus.rejected
+        outcome = state["outcome"]
+        if outcome["chain_status"] == "approved":
+            quote.status = QuoteStatus.approved
+        elif outcome["chain_status"] == "rejected":
+            quote.status = QuoteStatus.rejected
         db.flush()
-        event_bus.publish(db, execution_id, "quote.approved" if decision == "approve" else "quote.rejected", {"quote_id": quote.id})
+        if quote.status in (QuoteStatus.approved, QuoteStatus.rejected):
+            event_bus.publish(
+                db, execution_id, "quote.approved" if quote.status == QuoteStatus.approved else "quote.rejected", {"quote_id": quote.id}
+            )
         return {"quote_id": quote.id, "status": quote.status.value, "decision": decision}
 
     return [
         SagaStep("run_feasibility_check", step1),
-        SagaStep("evaluate_discount_matrix", step2),
-        SagaStep("assemble_approval_case", step3),
-        SagaStep("route_to_approver_queue", step4),
-        SagaStep("capture_decision", step5),
+        SagaStep("resolve_approval_chain", step2),
+        SagaStep("capture_decision", step3),
+        SagaStep("finalize_quote_status", step4),
     ]

@@ -86,11 +86,18 @@ export interface QuoteItem {
   unit_price: number;
 }
 
-export interface Approval {
+export interface ApprovalStep {
+  sequence: number;
   approver_tier: string;
   status: string;
-  decision: string | null;
   reasoning: string | null;
+}
+
+export interface ApprovalChain {
+  template_name: string;
+  status: string;
+  current_tier: string | null;
+  steps: ApprovalStep[];
 }
 
 export interface Quote {
@@ -102,8 +109,24 @@ export interface Quote {
   discount_justification: string | null;
   created_at: string;
   items: QuoteItem[];
-  approval: Approval | null;
+  approval_chain: ApprovalChain | null;
   feasible: boolean | null;
+}
+
+export interface ApprovalChainTier {
+  sequence: number;
+  approver_tier: string;
+}
+
+export interface ApprovalChainTemplate {
+  id: number;
+  name: string;
+  segment: string | null;
+  min_discount_pct: number;
+  max_discount_pct: number;
+  is_active: boolean;
+  created_at: string;
+  tiers: ApprovalChainTier[];
 }
 
 export interface Resource {

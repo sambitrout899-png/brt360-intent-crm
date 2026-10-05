@@ -49,11 +49,20 @@ class QuoteItemOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
-class ApprovalOut(BaseModel):
+class ApprovalStepOut(BaseModel):
+    sequence: int
     approver_tier: str
     status: str
-    decision: str | None
     reasoning: str | None
+
+    model_config = {"from_attributes": True}
+
+
+class ApprovalChainOut(BaseModel):
+    template_name: str
+    status: str
+    current_tier: str | None
+    steps: list[ApprovalStepOut]
 
     model_config = {"from_attributes": True}
 
@@ -67,7 +76,7 @@ class QuoteOut(BaseModel):
     discount_justification: str | None
     created_at: dt.datetime
     items: list[QuoteItemOut] = []
-    approval: ApprovalOut | None = None
+    approval_chain: ApprovalChainOut | None = None
     feasible: bool | None = None
 
     model_config = {"from_attributes": True}

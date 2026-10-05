@@ -14,9 +14,13 @@ from app.models.catalog import (
     ProductOffering,
     ProductSpecification,
 )
+from app.models.approval import (
+    ApprovalChainInstance,
+    ApprovalChainTemplate,
+    ApprovalChainTier,
+    ApprovalStepInstance,
+)
 from app.models.crm import (
-    ApprovalDecision,
-    ApprovalRequest,
     FeasibilityResult,
     Lead,
     Opportunity,
@@ -52,8 +56,10 @@ __all__ = [
     "Opportunity",
     "Quote",
     "QuoteItem",
-    "ApprovalRequest",
-    "ApprovalDecision",
+    "ApprovalChainTemplate",
+    "ApprovalChainTier",
+    "ApprovalChainInstance",
+    "ApprovalStepInstance",
     "FeasibilityResult",
     "Order",
     "OrderItem",

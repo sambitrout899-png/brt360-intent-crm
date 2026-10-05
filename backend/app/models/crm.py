@@ -108,7 +108,7 @@ class Quote(Base):
 
     opportunity: Mapped[Opportunity] = relationship(back_populates="quotes")
     items: Mapped[list["QuoteItem"]] = relationship(back_populates="quote", cascade="all, delete-orphan")
-    approval_request: Mapped["ApprovalRequest"] = relationship(back_populates="quote", uselist=False)
+    chain_instance: Mapped["ApprovalChainInstance"] = relationship(viewonly=True, uselist=False)
     feasibility_result: Mapped["FeasibilityResult"] = relationship(back_populates="quote", uselist=False)
 
 
@@ -122,32 +122,6 @@ class QuoteItem(Base):
     unit_price: Mapped[float] = mapped_column(Float)
 
     quote: Mapped[Quote] = relationship(back_populates="items")
-
-
-class ApprovalRequest(Base):
-    __tablename__ = "approval_requests"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    quote_id: Mapped[int] = mapped_column(ForeignKey("quotes.id"), unique=True)
-    approver_tier: Mapped[str] = mapped_column(String(100))
-    deal_size: Mapped[float] = mapped_column(Float)
-    status: Mapped[ApprovalStatus] = mapped_column(Enum(ApprovalStatus), default=ApprovalStatus.pending)
-    created_at: Mapped[dt.datetime] = mapped_column(default=utcnow)
-
-    quote: Mapped[Quote] = relationship(back_populates="approval_request")
-    decision: Mapped["ApprovalDecision"] = relationship(back_populates="approval_request", uselist=False)
-
-
-class ApprovalDecision(Base):
-    __tablename__ = "approval_decisions"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    approval_request_id: Mapped[int] = mapped_column(ForeignKey("approval_requests.id"), unique=True)
-    decision: Mapped[str] = mapped_column(String(20))  # approve/reject/conditional
-    reasoning: Mapped[str] = mapped_column(Text, default="")
-    decided_at: Mapped[dt.datetime] = mapped_column(default=utcnow)
-
-    approval_request: Mapped[ApprovalRequest] = relationship(back_populates="decision")
 
 
 class FeasibilityResult(Base):

@@ -1,4 +1,5 @@
 import type {
+  ApprovalChainTemplate,
   AuditLogDetail,
   AuditLogEntry,
   DashboardSummary,
@@ -25,6 +26,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new Error(`${res.status} ${res.statusText}: ${text}`);
+  }
+  if (res.status === 204) {
+    return undefined as T;
   }
   return res.json() as Promise<T>;
 }
@@ -111,4 +115,29 @@ export function listWorkOrders(status?: string): Promise<WorkOrder[]> {
 
 export function listTechnicians(): Promise<Technician[]> {
   return request<Technician[]>("/api/technicians");
+}
+
+export function listApprovalChains(): Promise<ApprovalChainTemplate[]> {
+  return request<ApprovalChainTemplate[]>("/api/admin/approval-chains");
+}
+
+export function createApprovalChain(payload: {
+  name: string;
+  segment: string | null;
+  min_discount_pct: number;
+  max_discount_pct: number;
+  tiers: { approver_tier: string }[];
+}): Promise<ApprovalChainTemplate> {
+  return request<ApprovalChainTemplate>("/api/admin/approval-chains", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function deactivateApprovalChain(id: number): Promise<ApprovalChainTemplate> {
+  return request<ApprovalChainTemplate>(`/api/admin/approval-chains/${id}/deactivate`, { method: "PATCH" });
+}
+
+export function deleteApprovalChain(id: number): Promise<void> {
+  return request<void>(`/api/admin/approval-chains/${id}`, { method: "DELETE" });
 }

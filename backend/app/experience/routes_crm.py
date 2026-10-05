@@ -54,13 +54,22 @@ def _quote_out(quote: Quote, offering_names: dict[int, str]) -> QuoteOut:
         )
         for i in quote.items
     ]
-    approval = None
-    if quote.approval_request:
-        approval = {
-            "approver_tier": quote.approval_request.approver_tier,
-            "status": quote.approval_request.status.value,
-            "decision": quote.approval_request.decision.decision if quote.approval_request.decision else None,
-            "reasoning": quote.approval_request.decision.reasoning if quote.approval_request.decision else None,
+    approval_chain = None
+    if quote.chain_instance:
+        instance = quote.chain_instance
+        current_tier = (
+            instance.steps[instance.current_sequence - 1].approver_tier
+            if instance.status.value == "pending" and instance.current_sequence <= len(instance.steps)
+            else None
+        )
+        approval_chain = {
+            "template_name": instance.template.name,
+            "status": instance.status.value,
+            "current_tier": current_tier,
+            "steps": [
+                {"sequence": s.sequence, "approver_tier": s.approver_tier, "status": s.status.value, "reasoning": s.reasoning or None}
+                for s in instance.steps
+            ],
         }
     return QuoteOut(
         id=quote.id,
@@ -71,7 +80,7 @@ def _quote_out(quote: Quote, offering_names: dict[int, str]) -> QuoteOut:
         discount_justification=quote.discount_justification,
         created_at=quote.created_at,
         items=items,
-        approval=approval,
+        approval_chain=approval_chain,
         feasible=quote.feasibility_result.feasible if quote.feasibility_result else None,
     )
 

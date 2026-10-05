@@ -1,4 +1,5 @@
 import { useState } from "react";
+import AdminApprovalChainsPage from "./pages/AdminApprovalChainsPage";
 import AuditLogPage from "./pages/AuditLogPage";
 import CatalogPage from "./pages/CatalogPage";
 import CustomerPage from "./pages/CustomerPage";
@@ -8,7 +9,7 @@ import OrdersPage from "./pages/OrdersPage";
 import PipelinePage from "./pages/PipelinePage";
 import TicketsPage from "./pages/TicketsPage";
 
-type Tab = "dashboard" | "customer" | "pipeline" | "orders" | "tickets" | "catalog" | "intent" | "audit";
+type Tab = "dashboard" | "customer" | "pipeline" | "orders" | "tickets" | "catalog" | "intent" | "audit" | "admin";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "dashboard", label: "Dashboard" },
@@ -19,6 +20,7 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "catalog", label: "Catalog" },
   { id: "intent", label: "Intent Command Bar" },
   { id: "audit", label: "Audit Log" },
+  { id: "admin", label: "Admin" },
 ];
 
 export default function App() {
@@ -62,6 +64,7 @@ export default function App() {
         {tab === "catalog" && <CatalogPage />}
         {tab === "intent" && <IntentCommandBar prefillText={intentPrefill} />}
         {tab === "audit" && <AuditLogPage />}
+        {tab === "admin" && <AdminApprovalChainsPage />}
       </main>
     </div>
   );

@@ -69,13 +69,21 @@ def verify(db: Session, intent_type: str, result: dict[str, Any] | None) -> Veri
         return VerificationResult(True, f"Quote {quote.id} confirmed at {quote.total_price}.")
 
     if intent_type == "INT-06":
+        # A multi-tier chain can legitimately leave the quote at
+        # pending_approval after an intermediate tier's decision - only
+        # the absence of any recorded decision is a verification failure.
         quote_id = _require(result, "quote_id")
         quote = db.get(Quote, quote_id) if quote_id else None
         if quote is None:
             return VerificationResult(False, "Quote not found after approval decision.")
-        if quote.status not in (QuoteStatus.approved, QuoteStatus.rejected):
-            return VerificationResult(False, f"Expected quote status approved/rejected, found '{quote.status.value}'.")
-        return VerificationResult(True, f"Quote {quote.id} decision recorded: {quote.status.value}.")
+        if quote.status not in (QuoteStatus.approved, QuoteStatus.rejected, QuoteStatus.pending_approval):
+            return VerificationResult(
+                False, f"Expected quote status approved/rejected/pending_approval, found '{quote.status.value}'."
+            )
+        instance = quote.chain_instance
+        if instance is None or not any(s.status.value != "pending" for s in instance.steps):
+            return VerificationResult(False, "No approval chain decision was recorded for this quote.")
+        return VerificationResult(True, f"Quote {quote.id} chain status: {quote.status.value} (chain {instance.status.value}).")
 
     if intent_type in ("INT-07", "INT-08", "INT-09"):
         order_id = _require(result, "order_id")
