@@ -440,7 +440,7 @@ def list_technicians(db: Session = Depends(get_db), tenant_id: int = Depends(get
 
 @router.get("/dashboard/summary", response_model=DashboardSummaryOut)
 def dashboard_summary(db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> DashboardSummaryOut:
-    from app.models.crm import OpportunityStage, QuoteStatus
+    from app.models.crm import LeadStatus, OpportunityStage, QuoteStatus
     from app.models.orders import OrderStatus
 
     total_parties = db.query(Party).filter(Party.tenant_id == tenant_id).count()
@@ -453,6 +453,9 @@ def dashboard_summary(db: Session = Depends(get_db), tenant_id: int = Depends(ge
     ).all()
     pipeline_value = sum(q.total_price for q in pipeline_quotes)
     pending_approvals = db.query(Quote).filter(Quote.tenant_id == tenant_id, Quote.status == QuoteStatus.pending_approval).count()
+    pending_lead_qualifications = db.query(Lead).filter(
+        Lead.tenant_id == tenant_id, Lead.status == LeadStatus.pending_qualification
+    ).count()
     active_orders_list = db.query(Order).filter(
         Order.tenant_id == tenant_id, Order.status.in_([OrderStatus.active, OrderStatus.changed])
     ).all()
@@ -473,6 +476,7 @@ def dashboard_summary(db: Session = Depends(get_db), tenant_id: int = Depends(ge
         open_opportunities=open_opportunities,
         pipeline_value=round(pipeline_value, 2),
         pending_approvals=pending_approvals,
+        pending_lead_qualifications=pending_lead_qualifications,
         active_orders=active_orders,
         monthly_recurring_revenue=round(mrr, 2),
         open_tickets_by_severity=open_tickets_by_severity,

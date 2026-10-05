@@ -55,6 +55,14 @@ export default function OrdersPage({ onRequestIntent }: { onRequestIntent: (text
                 <span className="text-xs text-slate-500">{o.service_account_name}</span>
                 <span className="text-slate-300">₹{o.monthly_price.toLocaleString()}/mo</span>
                 <span className={`rounded-md border px-2 py-0.5 text-xs font-bold ${ORDER_STATUS_STYLES[o.status]}`}>{o.status}</span>
+                {(o.status === "created" || o.status === "activating") && (
+                  <button
+                    onClick={() => onRequestIntent(`Revise this order. order_id: ${o.id}, new_price: `)}
+                    className="ml-auto rounded-md border border-sky-500/40 bg-sky-500/10 px-2.5 py-1 text-xs font-bold text-sky-400 hover:bg-sky-500/20"
+                  >
+                    Revise
+                  </button>
+                )}
                 {(o.status === "active" || o.status === "changed") && (
                   <div className="ml-auto flex gap-2">
                     <button

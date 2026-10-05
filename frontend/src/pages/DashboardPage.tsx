@@ -36,6 +36,11 @@ export default function DashboardPage() {
         <Tile label="Open Opportunities" value={summary.open_opportunities} />
         <Tile label="Pipeline Value" value={`₹${summary.pipeline_value.toLocaleString()}`} accent="text-sky-400" />
         <Tile label="Pending Approvals" value={summary.pending_approvals} accent={summary.pending_approvals > 0 ? "text-amber-400" : undefined} />
+        <Tile
+          label="Leads Awaiting Qualification"
+          value={summary.pending_lead_qualifications}
+          accent={summary.pending_lead_qualifications > 0 ? "text-amber-400" : undefined}
+        />
         <Tile label="Active Orders" value={summary.active_orders} />
         <Tile label="Monthly Recurring Revenue" value={`₹${summary.monthly_recurring_revenue.toLocaleString()}`} accent="text-emerald-400" />
         <Tile label="Open Work Orders" value={summary.open_work_orders} />

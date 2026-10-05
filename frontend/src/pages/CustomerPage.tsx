@@ -46,9 +46,12 @@ export default function CustomerPage({ onRequestIntent }: { onRequestIntent: (te
 
   return (
     <div className="mx-auto max-w-6xl space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-slate-100">Customer 360</h1>
-        <p className="mt-1 text-sm text-slate-400">Every lead, quote, order, bill, and ticket for one customer, in one view.</p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-100">Customer 360</h1>
+          <p className="mt-1 text-sm text-slate-400">Every lead, quote, order, bill, and ticket for one customer, in one view.</p>
+        </div>
+        <ActionButton label="+ Add Prospect" onClick={() => onRequestIntent("Add this prospect. name: , email: ")} />
       </div>
 
       <input
@@ -112,12 +115,39 @@ export default function CustomerPage({ onRequestIntent }: { onRequestIntent: (te
                 />
               </Section>
 
+              <Section title={`Leads (${detail.leads.length})`}>
+                {detail.leads.map((l) => (
+                  <div key={l.id} className="rounded-lg bg-slate-950 px-3 py-2 text-sm mb-2">
+                    <div className="flex items-center gap-3">
+                      <span className="font-mono text-xs text-slate-500">#{l.id}</span>
+                      <span className="text-slate-200">{l.interested_offering_name || "no product yet"}</span>
+                      <span className="rounded-md bg-slate-800 px-2 py-0.5 text-xs text-slate-300">{l.status}</span>
+                      {l.status === "pending_qualification" && (
+                        <>
+                          <ActionButton label="Add Product" onClick={() => onRequestIntent(`Add this product to the lead. lead_id: ${l.id}, offering_name: `)} />
+                          <ActionButton label="Approve/Reject" onClick={() => onRequestIntent(`Approve this lead. lead_id: ${l.id}, reasoning: `)} />
+                        </>
+                      )}
+                    </div>
+                  </div>
+                ))}
+                {detail.leads.length === 0 && <p className="text-sm text-slate-500">None.</p>}
+              </Section>
+
               <Section title={`Opportunities (${detail.opportunities.length})`}>
                 {detail.opportunities.map((o) => (
-                  <div key={o.id} className="flex items-center gap-3 rounded-lg bg-slate-950 px-3 py-2 text-sm mb-2">
-                    <span className="font-mono text-xs text-slate-500">#{o.id}</span>
-                    <span className="text-slate-200">{o.name}</span>
-                    <span className="ml-auto rounded-md bg-slate-800 px-2 py-0.5 text-xs text-slate-300">{o.stage}</span>
+                  <div key={o.id} className="rounded-lg bg-slate-950 px-3 py-2 text-sm mb-2">
+                    <div className="flex items-center gap-3">
+                      <span className="font-mono text-xs text-slate-500">#{o.id}</span>
+                      <span className="text-slate-200">{o.name}</span>
+                      <span className="rounded-md bg-slate-800 px-2 py-0.5 text-xs text-slate-300">{o.stage}</span>
+                      <ActionButton label="Check Feasibility" onClick={() => onRequestIntent(`Run feasibility assessment. opportunity_id: ${o.id}, address: `)} />
+                    </div>
+                    {o.feasibility_assessments.length > 0 && (
+                      <div className="mt-2 pl-3 text-xs text-slate-500">
+                        Latest feasibility: {o.feasibility_assessments[0].outcome}
+                      </div>
+                    )}
                   </div>
                 ))}
                 {detail.opportunities.length === 0 && <p className="text-sm text-slate-500">None.</p>}
@@ -132,6 +162,12 @@ export default function CustomerPage({ onRequestIntent }: { onRequestIntent: (te
                       <span className="rounded-md bg-slate-800 px-2 py-0.5 text-xs text-slate-300">{q.status}</span>
                       {q.status === "draft" && (
                         <ActionButton label="Approve" onClick={() => onRequestIntent(`Approve this quote. quote_id: ${q.id}`)} />
+                      )}
+                      {(q.status === "draft" || q.status === "pending_approval") && (
+                        <>
+                          <ActionButton label="Revise" onClick={() => onRequestIntent(`Revise this quote. quote_id: ${q.id}, discount: `)} />
+                          <ActionButton label="Cancel" onClick={() => onRequestIntent(`Cancel this quote. quote_id: ${q.id}, reasoning: `)} />
+                        </>
                       )}
                       {q.status === "approved" && (
                         <ActionButton label="Activate" onClick={() => onRequestIntent(`Activate this order end-to-end. quote_id: ${q.id}`)} />
@@ -164,6 +200,9 @@ export default function CustomerPage({ onRequestIntent }: { onRequestIntent: (te
                           <span className="font-mono text-xs text-slate-500">#{o.id}</span>
                           <span className="text-slate-200">₹{o.monthly_price.toLocaleString()}/mo</span>
                           <span className="rounded-md bg-slate-800 px-2 py-0.5 text-xs text-slate-300">{o.status}</span>
+                          {(o.status === "created" || o.status === "activating") && (
+                            <ActionButton label="Revise" onClick={() => onRequestIntent(`Revise this order. order_id: ${o.id}, new_price: `)} />
+                          )}
                           {(o.status === "active" || o.status === "changed") && (
                             <>
                               <ActionButton label="Change" onClick={() => onRequestIntent(`Upgrade this service. order_id: ${o.id}, new_price: `)} />

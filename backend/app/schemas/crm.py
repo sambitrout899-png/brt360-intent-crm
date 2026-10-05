@@ -240,6 +240,7 @@ class DashboardSummaryOut(BaseModel):
     open_opportunities: int
     pipeline_value: float
     pending_approvals: int
+    pending_lead_qualifications: int
     active_orders: int
     monthly_recurring_revenue: float
     open_tickets_by_severity: dict[str, int]

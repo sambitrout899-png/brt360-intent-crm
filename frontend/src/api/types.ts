@@ -94,7 +94,24 @@ export interface Lead {
   region: string;
   owner_name: string;
   propensity_score: number;
+  status: "pending_qualification" | "qualified" | "rejected";
+  interested_offering_name: string | null;
   created_at: string;
+  approval_chain: ApprovalChain | null;
+}
+
+export interface FeasibilityCheckResult {
+  check_type_name: string;
+  outcome: "pending" | "passed" | "failed";
+  detail: string;
+}
+
+export interface FeasibilityAssessment {
+  id: number;
+  outcome: "pending" | "passed" | "failed";
+  created_at: string;
+  resolved_at: string | null;
+  results: FeasibilityCheckResult[];
 }
 
 export interface Opportunity {
@@ -104,6 +121,7 @@ export interface Opportunity {
   stage: "draft" | "qualified" | "quoted" | "won" | "lost";
   created_at: string;
   updated_at: string;
+  feasibility_assessments: FeasibilityAssessment[];
 }
 
 export interface QuoteItem {
@@ -131,7 +149,7 @@ export interface ApprovalChain {
 export interface Quote {
   id: number;
   opportunity_id: number;
-  status: "draft" | "pending_approval" | "approved" | "rejected";
+  status: "draft" | "pending_approval" | "approved" | "rejected" | "cancelled";
   total_price: number;
   requested_discount_pct: number;
   discount_justification: string | null;
@@ -228,6 +246,22 @@ export interface ApprovalChainTemplate {
   is_active: boolean;
   created_at: string;
   tiers: ApprovalChainTier[];
+}
+
+export interface PonrPolicy {
+  id: number;
+  entity_type: "quote" | "order";
+  ponr_statuses: string;
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface FeasibilityCheckType {
+  id: number;
+  name: string;
+  resource_type: string;
+  is_active: boolean;
+  created_at: string;
 }
 
 export interface Resource {
@@ -383,6 +417,7 @@ export interface DashboardSummary {
   open_opportunities: number;
   pipeline_value: number;
   pending_approvals: number;
+  pending_lead_qualifications: number;
   active_orders: number;
   monthly_recurring_revenue: number;
   open_tickets_by_severity: Record<string, number>;

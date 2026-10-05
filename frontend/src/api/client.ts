@@ -5,14 +5,17 @@ import type {
   AuditLogEntry,
   CurrentUser,
   DashboardSummary,
+  FeasibilityCheckType,
   IdentityProvider,
   IntentResponse,
+  Lead,
   Offering,
   Opportunity,
   Order,
   Party,
   Party360,
   BillingAccount,
+  PonrPolicy,
   ProductAttributeDefinition,
   ProductAttributeValue,
   ProductSpecification,
@@ -183,9 +186,21 @@ export function party360(id: number): Promise<Party360> {
   return request<Party360>(`/api/parties/${id}/360`);
 }
 
+export function listLeads(): Promise<Lead[]> {
+  return request<Lead[]>("/api/leads");
+}
+
+export function leadDetail(id: number): Promise<Lead> {
+  return request<Lead>(`/api/leads/${id}`);
+}
+
 export function listOpportunities(stage?: string): Promise<Opportunity[]> {
   const qs = stage ? `?stage=${encodeURIComponent(stage)}` : "";
   return request<Opportunity[]>(`/api/opportunities${qs}`);
+}
+
+export function opportunityDetail(id: number): Promise<Opportunity> {
+  return request<Opportunity>(`/api/opportunities/${id}`);
 }
 
 export function listQuotes(status?: string): Promise<Quote[]> {
@@ -352,4 +367,36 @@ export function deactivateIdentityProvider(id: number): Promise<IdentityProvider
 
 export function deleteIdentityProvider(id: number): Promise<void> {
   return request<void>(`/api/admin/identity-providers/${id}`, { method: "DELETE" });
+}
+
+export function listPonrPolicies(): Promise<PonrPolicy[]> {
+  return request<PonrPolicy[]>("/api/admin/ponr-policies");
+}
+
+export function createPonrPolicy(payload: { entity_type: string; ponr_statuses: string }): Promise<PonrPolicy> {
+  return request<PonrPolicy>("/api/admin/ponr-policies", { method: "POST", body: JSON.stringify(payload) });
+}
+
+export function deactivatePonrPolicy(id: number): Promise<PonrPolicy> {
+  return request<PonrPolicy>(`/api/admin/ponr-policies/${id}/deactivate`, { method: "PATCH" });
+}
+
+export function deletePonrPolicy(id: number): Promise<void> {
+  return request<void>(`/api/admin/ponr-policies/${id}`, { method: "DELETE" });
+}
+
+export function listFeasibilityCheckTypes(): Promise<FeasibilityCheckType[]> {
+  return request<FeasibilityCheckType[]>("/api/admin/feasibility-check-types");
+}
+
+export function createFeasibilityCheckType(payload: { name: string; resource_type: string }): Promise<FeasibilityCheckType> {
+  return request<FeasibilityCheckType>("/api/admin/feasibility-check-types", { method: "POST", body: JSON.stringify(payload) });
+}
+
+export function deactivateFeasibilityCheckType(id: number): Promise<FeasibilityCheckType> {
+  return request<FeasibilityCheckType>(`/api/admin/feasibility-check-types/${id}/deactivate`, { method: "PATCH" });
+}
+
+export function deleteFeasibilityCheckType(id: number): Promise<void> {
+  return request<void>(`/api/admin/feasibility-check-types/${id}`, { method: "DELETE" });
 }

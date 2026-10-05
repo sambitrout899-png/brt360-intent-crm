@@ -3,25 +3,33 @@ import {
   createApprovalChain,
   createAttributeConstraintRule,
   createAttributeDefinition,
+  createFeasibilityCheckType,
   createIdentityProvider,
+  createPonrPolicy,
   createSlaPolicy,
   createUser,
   deactivateApprovalChain,
   deactivateAttributeConstraintRule,
+  deactivateFeasibilityCheckType,
   deactivateIdentityProvider,
+  deactivatePonrPolicy,
   deactivateSlaPolicy,
   deactivateUser,
   deleteApprovalChain,
   deleteAttributeConstraintRule,
   deleteAttributeDefinition,
+  deleteFeasibilityCheckType,
   deleteIdentityProvider,
+  deletePonrPolicy,
   deleteSlaPolicy,
   getTestRun,
   listApprovalChains,
   listAttributeConstraintRules,
   listAttributeDefinitions,
   listAttributeValues,
+  listFeasibilityCheckTypes,
   listIdentityProviders,
+  listPonrPolicies,
   listProductSpecifications,
   listSlaClocks,
   listSlaPolicies,
@@ -35,7 +43,9 @@ import { ATTRIBUTE_DATA_TYPES, CONSTRAINT_OPERATORS, CONSTRAINT_RULE_TYPES, SLA_
 import type {
   ApprovalChainTemplate,
   AttributeConstraintRule,
+  FeasibilityCheckType,
   IdentityProvider,
+  PonrPolicy,
   ProductAttributeDefinition,
   ProductAttributeValue,
   ProductSpecification,
@@ -46,7 +56,7 @@ import type {
   User,
 } from "../api/types";
 
-type Section = "approvals" | "sla" | "attributes" | "identity" | "users" | "tests";
+type Section = "approvals" | "sla" | "attributes" | "identity" | "ponr" | "feasibility" | "users" | "tests";
 
 function emptyChainForm() {
   return { name: "", segment: "", minPct: "0", maxPct: "100", tiers: [""] };
@@ -738,6 +748,199 @@ function IdentityProvidersSection() {
   );
 }
 
+function emptyPonrForm() {
+  return { entityType: "quote", ponrStatuses: "" };
+}
+
+function PonrPoliciesSection() {
+  const [policies, setPolicies] = useState<PonrPolicy[]>([]);
+  const [form, setForm] = useState(emptyPonrForm());
+  const [error, setError] = useState<string | null>(null);
+
+  function load() {
+    listPonrPolicies().then(setPolicies);
+  }
+
+  useEffect(load, []);
+
+  async function submit() {
+    setError(null);
+    if (!form.ponrStatuses.trim()) {
+      setError("At least one PONR status is required (comma-separated).");
+      return;
+    }
+    try {
+      await createPonrPolicy({ entity_type: form.entityType, ponr_statuses: form.ponrStatuses.trim() });
+      setForm(emptyPonrForm());
+      load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to create policy.");
+    }
+  }
+
+  async function deactivate(id: number) {
+    await deactivatePonrPolicy(id);
+    load();
+  }
+
+  async function remove(id: number) {
+    await deletePonrPolicy(id);
+    load();
+  }
+
+  return (
+    <div className="space-y-6">
+      <p className="text-sm text-slate-400">
+        The Point of No Return: once a quote or order reaches one of these statuses, "Revise this quote"/"Revise this
+        order" and "Cancel this quote" are blocked - use "Change this live service" or "Suspend, cancel or terminate"
+        instead. Unconfigured defaults: a quote's PONR is "approved"; an order's PONR is anything past
+        created/activating.
+      </p>
+
+      <div className="space-y-2">
+        {policies.map((p) => (
+          <div key={p.id} className={`flex flex-wrap items-center gap-3 rounded-lg border px-4 py-3 text-sm ${p.is_active ? "border-slate-700 bg-slate-900/60" : "border-slate-800 bg-slate-950/60 opacity-60"}`}>
+            <span className="rounded-md bg-slate-800 px-2 py-0.5 text-xs font-bold text-slate-300">{p.entity_type}</span>
+            <span className="font-mono text-xs text-slate-400">{p.ponr_statuses}</span>
+            {!p.is_active && <span className="rounded-md border border-slate-700 px-2 py-0.5 text-xs text-slate-500">inactive</span>}
+            <div className="ml-auto flex gap-2">
+              {p.is_active && (
+                <button onClick={() => deactivate(p.id)} className="rounded-md border border-slate-700 px-2.5 py-1 text-xs font-bold text-slate-300 hover:border-amber-500 hover:text-amber-400">
+                  Deactivate
+                </button>
+              )}
+              <button onClick={() => remove(p.id)} className="rounded-md border border-slate-700 px-2.5 py-1 text-xs font-bold text-slate-300 hover:border-red-500 hover:text-red-400">
+                Delete
+              </button>
+            </div>
+          </div>
+        ))}
+        {policies.length === 0 && <p className="text-sm text-slate-500">No PONR policies configured yet - defaults apply.</p>}
+      </div>
+
+      <div className="rounded-xl border border-slate-700 bg-slate-900/60 p-5">
+        <h3 className="mb-4 text-base font-bold text-slate-100">New PONR Policy</h3>
+        <div className="grid gap-3 md:grid-cols-2">
+          <label className="text-xs text-slate-400">
+            Entity type
+            <select
+              value={form.entityType}
+              onChange={(e) => setForm((f) => ({ ...f, entityType: e.target.value }))}
+              className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200"
+            >
+              <option value="quote">quote</option>
+              <option value="order">order</option>
+            </select>
+          </label>
+          <label className="text-xs text-slate-400">
+            PONR statuses (comma-separated)
+            <input
+              value={form.ponrStatuses}
+              onChange={(e) => setForm((f) => ({ ...f, ponrStatuses: e.target.value }))}
+              className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200"
+              placeholder="e.g. approved,rejected"
+            />
+          </label>
+        </div>
+        {error && <p className="mt-3 text-xs text-red-400">{error}</p>}
+        <button onClick={submit} className="mt-4 rounded-lg bg-sky-600 px-4 py-2 text-sm font-bold text-white hover:bg-sky-500">
+          Create PONR Policy
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function FeasibilityCheckTypesSection() {
+  const [checkTypes, setCheckTypes] = useState<FeasibilityCheckType[]>([]);
+  const [name, setName] = useState("");
+  const [resourceType, setResourceType] = useState("fiber");
+  const [error, setError] = useState<string | null>(null);
+
+  function load() {
+    listFeasibilityCheckTypes().then(setCheckTypes);
+  }
+
+  useEffect(load, []);
+
+  async function submit() {
+    setError(null);
+    if (!name.trim()) {
+      setError("Name is required.");
+      return;
+    }
+    try {
+      await createFeasibilityCheckType({ name: name.trim(), resource_type: resourceType });
+      setName("");
+      load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to create check type.");
+    }
+  }
+
+  async function deactivate(id: number) {
+    await deactivateFeasibilityCheckType(id);
+    load();
+  }
+
+  async function remove(id: number) {
+    await deleteFeasibilityCheckType(id);
+    load();
+  }
+
+  return (
+    <div className="space-y-6">
+      <p className="text-sm text-slate-400">
+        Which resource checks "Run feasibility assessment" (B2B, at the Opportunity level) actually runs - fiber
+        route availability, port/switch capacity, inventory on hand. With none configured, the intent still runs a
+        single address-validation check so it does something meaningful even for an unconfigured tenant.
+      </p>
+
+      <div className="space-y-2">
+        {checkTypes.map((c) => (
+          <div key={c.id} className={`flex flex-wrap items-center gap-3 rounded-lg border px-4 py-3 text-sm ${c.is_active ? "border-slate-700 bg-slate-900/60" : "border-slate-800 bg-slate-950/60 opacity-60"}`}>
+            <span className="font-semibold text-slate-200">{c.name}</span>
+            <span className="rounded-md bg-slate-800 px-2 py-0.5 text-xs text-slate-300">{c.resource_type}</span>
+            {!c.is_active && <span className="rounded-md border border-slate-700 px-2 py-0.5 text-xs text-slate-500">inactive</span>}
+            <div className="ml-auto flex gap-2">
+              {c.is_active && (
+                <button onClick={() => deactivate(c.id)} className="rounded-md border border-slate-700 px-2.5 py-1 text-xs font-bold text-slate-300 hover:border-amber-500 hover:text-amber-400">
+                  Deactivate
+                </button>
+              )}
+              <button onClick={() => remove(c.id)} className="rounded-md border border-slate-700 px-2.5 py-1 text-xs font-bold text-slate-300 hover:border-red-500 hover:text-red-400">
+                Delete
+              </button>
+            </div>
+          </div>
+        ))}
+        {checkTypes.length === 0 && <p className="text-sm text-slate-500">No feasibility check types configured yet - address validation only.</p>}
+      </div>
+
+      <div className="flex flex-wrap items-end gap-2 rounded-xl border border-slate-700 bg-slate-900/60 p-4">
+        <label className="text-xs text-slate-400">
+          Check name
+          <input value={name} onChange={(e) => setName(e.target.value)} className="mt-1 w-56 rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200" placeholder="e.g. Fiber Route Availability" />
+        </label>
+        <label className="text-xs text-slate-400">
+          Resource type
+          <select value={resourceType} onChange={(e) => setResourceType(e.target.value)} className="mt-1 w-36 rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200">
+            <option value="fiber">fiber</option>
+            <option value="port">port</option>
+            <option value="switch">switch</option>
+            <option value="inventory">inventory</option>
+          </select>
+        </label>
+        <button onClick={submit} className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-bold text-white hover:bg-sky-500">
+          Add Check Type
+        </button>
+      </div>
+
+      {error && <p className="text-xs text-red-400">{error}</p>}
+    </div>
+  );
+}
+
 function emptyUserForm() {
   return { email: "", password: "", name: "", role: USER_ROLES[1] as string };
 }
@@ -931,6 +1134,8 @@ export default function AdminPage() {
           ["sla", "SLA Policies"],
           ["attributes", "Product Attributes"],
           ["identity", "Identity Providers"],
+          ["ponr", "PONR Policies"],
+          ["feasibility", "Feasibility Checks"],
           ["users", "Users"],
           ["tests", "Test Suite"],
         ] as [Section, string][]).map(([id, label]) => (
@@ -950,6 +1155,8 @@ export default function AdminPage() {
       {section === "sla" && <SlaPoliciesSection />}
       {section === "attributes" && <ProductAttributesSection />}
       {section === "identity" && <IdentityProvidersSection />}
+      {section === "ponr" && <PonrPoliciesSection />}
+      {section === "feasibility" && <FeasibilityCheckTypesSection />}
       {section === "users" && <UsersSection />}
       {section === "tests" && <TestSuiteSection />}
     </div>
