@@ -60,22 +60,30 @@ def resolve_template(db: Session, tenant_id: int, discount_pct: float, segment: 
     return min(pool, key=lambda t: t.max_discount_pct - t.min_discount_pct)
 
 
-def resolve_lead_qualification_template(db: Session, tenant_id: int) -> ApprovalChainTemplate | None:
-    """The B2B sales journey's Sales-Director-approves-lead gate: unlike
-    quote templates, there's no discount band to match on - a tenant
-    either has one active "lead" chain configured (opt-in) or none, in
-    which case INT-04 keeps qualifying leads immediately with no gate,
-    exactly as it always has.
+def resolve_simple_template(db: Session, tenant_id: int, entity_type: str) -> ApprovalChainTemplate | None:
+    """A chain gate with no discount band to match on - a tenant either
+    has one active chain of this entity_type configured (opt-in) or
+    none, in which case the caller auto-approves immediately with no
+    gate, exactly as it always has. Used for "lead" (Sales Director
+    qualification) and "order" (Order Control Unit, Phase 5) gates.
     """
     return (
         db.query(ApprovalChainTemplate)
         .filter(
             ApprovalChainTemplate.tenant_id == tenant_id,
-            ApprovalChainTemplate.entity_type == "lead",
+            ApprovalChainTemplate.entity_type == entity_type,
             ApprovalChainTemplate.is_active.is_(True),
         )
         .first()
     )
+
+
+def resolve_lead_qualification_template(db: Session, tenant_id: int) -> ApprovalChainTemplate | None:
+    return resolve_simple_template(db, tenant_id, "lead")
+
+
+def resolve_order_control_template(db: Session, tenant_id: int) -> ApprovalChainTemplate | None:
+    return resolve_simple_template(db, tenant_id, "order")
 
 
 def get_chain_instance(db: Session, entity_type: str, entity_id: int) -> ApprovalChainInstance | None:

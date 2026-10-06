@@ -12,6 +12,8 @@ directly.
 
 from __future__ import annotations
 
+import uuid
+
 
 def check_resource_availability(resource_type: str, locator: str) -> tuple[bool, str]:
     """Returns (available, detail). locator is whatever identifies the
@@ -28,3 +30,15 @@ def check_resource_availability(resource_type: str, locator: str) -> tuple[bool,
     if resource_type == "inventory" and "OUTOFSTOCK" in upper:
         return False, f"No inventory on hand for '{locator}'."
     return True, f"{resource_type.capitalize()} available at '{locator}'."
+
+
+def sync_asset_to_inventory(asset_type: str, identifier: str) -> str:
+    """Phase 5: pushes a newly-created Asset (app/models/fulfillment.py)
+    to the primary external inventory/CMDB system - this platform keeps
+    its own lightweight copy (the Asset row) for CRM-side querying, same
+    relationship a ServiceNow CRM app has to ServiceNow's own CMDB, but
+    the external system stays the system of record for physical/logical
+    inventory. Deterministic stand-in: confirms the sync synchronously
+    with a fabricated reference.
+    """
+    return f"INV-{uuid.uuid4().hex[:10].upper()}"

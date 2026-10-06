@@ -18,6 +18,7 @@ from app.models.auth import User, UserRole
 from app.models.catalog import ProductSpecification
 from app.models.feasibility import FeasibilityCheckType
 from app.models.identity import IdentityVerificationProvider
+from app.models.orchestration_policy import OrchestrationMode, OrchestrationPolicy
 from app.models.ponr import PonrPolicy
 from app.models.sla import SlaClock, SlaPolicy
 from app.models.testing import TestRun
@@ -30,6 +31,8 @@ from app.schemas.admin import (
     FeasibilityCheckTypeOut,
     IdentityProviderCreate,
     IdentityProviderOut,
+    OrchestrationPolicyCreate,
+    OrchestrationPolicyOut,
     PonrPolicyCreate,
     PonrPolicyOut,
     ProductAttributeDefinitionCreate,
@@ -520,6 +523,55 @@ def delete_feasibility_check_type(
     if check_type is None or check_type.tenant_id != tenant_id:
         raise HTTPException(404, "Feasibility check type not found")
     db.delete(check_type)
+    db.commit()
+
+
+@router.get("/orchestration-policies", response_model=list[OrchestrationPolicyOut])
+def list_orchestration_policies(
+    db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)
+) -> list[OrchestrationPolicy]:
+    return (
+        db.query(OrchestrationPolicy)
+        .filter(OrchestrationPolicy.tenant_id == tenant_id)
+        .order_by(OrchestrationPolicy.intent_type)
+        .all()
+    )
+
+
+@router.post("/orchestration-policies", response_model=OrchestrationPolicyOut, status_code=201)
+def create_orchestration_policy(
+    payload: OrchestrationPolicyCreate, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)
+) -> OrchestrationPolicy:
+    if payload.mode not in (OrchestrationMode.deterministic.value, OrchestrationMode.llm_planned.value):
+        raise HTTPException(400, "mode must be 'deterministic' or 'llm_planned'")
+    policy = OrchestrationPolicy(tenant_id=tenant_id, intent_type=payload.intent_type, mode=OrchestrationMode(payload.mode))
+    db.add(policy)
+    db.commit()
+    db.refresh(policy)
+    return policy
+
+
+@router.patch("/orchestration-policies/{policy_id}/deactivate", response_model=OrchestrationPolicyOut)
+def deactivate_orchestration_policy(
+    policy_id: int, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)
+) -> OrchestrationPolicy:
+    policy = db.get(OrchestrationPolicy, policy_id)
+    if policy is None or policy.tenant_id != tenant_id:
+        raise HTTPException(404, "Orchestration policy not found")
+    policy.is_active = False
+    db.commit()
+    db.refresh(policy)
+    return policy
+
+
+@router.delete("/orchestration-policies/{policy_id}", status_code=204)
+def delete_orchestration_policy(
+    policy_id: int, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)
+) -> None:
+    policy = db.get(OrchestrationPolicy, policy_id)
+    if policy is None or policy.tenant_id != tenant_id:
+        raise HTTPException(404, "Orchestration policy not found")
+    db.delete(policy)
     db.commit()
 
 

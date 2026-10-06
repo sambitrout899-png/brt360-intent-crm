@@ -20,6 +20,7 @@ from app.models.auth import UserRole
 from app.orchestration import (
     actions,
     actions_feasibility,
+    actions_fulfillment,
     actions_identity,
     actions_l2q,
     actions_o2a,
@@ -58,6 +59,13 @@ _STEP_BUILDERS = {
     "INT-18": actions_feasibility.build_int18_steps,
     "INT-19": actions_l2q.build_int19_steps,
     "INT-20": actions_l2q.build_int20_steps,
+    "INT-22": actions_fulfillment.build_int22_steps,
+    "INT-23": actions_fulfillment.build_int23_steps,
+    "INT-24": actions_fulfillment.build_int24_steps,
+    "INT-25": actions_fulfillment.build_int25_steps,
+    "INT-26": actions_fulfillment.build_int26_steps,
+    "INT-27": actions_fulfillment.build_int27_steps,
+    "INT-28": actions_fulfillment.build_int28_steps,
     "INT-21": actions_o2a.build_int21_steps,
 }
 

@@ -26,6 +26,7 @@ from app.integration import tmf620_adapter
 from app.models.assurance import TroubleTicket, WorkOrder
 from app.models.catalog import BundleCompatibilityRule, ProductOffering
 from app.models.crm import Lead, Opportunity, Party, Quote, TerritoryRule
+from app.models.fulfillment import Proposal, ProposalStatus
 from app.models.orders import Order, ServiceOrder
 from app.models.tenant import Tenant, TenantVertical
 
@@ -164,6 +165,39 @@ def assemble_context(db: Session, tenant_id: int, intent_type: str, entities: di
     elif intent_type == "INT-18":
         opportunity = _get_owned(db, Opportunity, tenant_id, entities.get("opportunity_id"))
         context["opportunity"] = {"id": opportunity.id, "stage": opportunity.stage.value} if opportunity else None
+
+    elif intent_type == "INT-22":
+        quote = _get_owned(db, Quote, tenant_id, entities.get("quote_id"))
+        context["quote"] = {"id": quote.id, "status": quote.status.value} if quote else None
+
+    elif intent_type == "INT-23":
+        proposal = _get_owned(db, Proposal, tenant_id, entities.get("proposal_id"))
+        context["proposal"] = {"id": proposal.id, "status": proposal.status.value} if proposal else None
+
+    elif intent_type == "INT-24":
+        quote = _get_owned(db, Quote, tenant_id, entities.get("quote_id"))
+        context["quote"] = {"id": quote.id, "status": quote.status.value} if quote else None
+        if quote is not None:
+            approved_proposal = (
+                db.query(Proposal)
+                .filter(Proposal.quote_id == quote.id, Proposal.status == ProposalStatus.customer_approved)
+                .first()
+            )
+            context["customer_approved_proposal"] = {"id": approved_proposal.id} if approved_proposal else None
+
+    elif intent_type == "INT-25":
+        order = _get_owned(db, Order, tenant_id, entities.get("order_id"))
+        context["order"] = {"id": order.id, "status": order.status.value} if order else None
+        if order is not None and order.chain_instance is not None:
+            context["chain_status"] = order.chain_instance.status.value
+
+    elif intent_type in ("INT-26", "INT-27", "INT-28"):
+        work_order = _get_owned(db, WorkOrder, tenant_id, entities.get("work_order_id"))
+        context["work_order"] = (
+            {"id": work_order.id, "kind": work_order.kind, "status": work_order.status, "order_id": work_order.order_id}
+            if work_order
+            else None
+        )
 
     elif intent_type == "INT-11":
         ticket = _get_owned(db, TroubleTicket, tenant_id, entities.get("ticket_id"))

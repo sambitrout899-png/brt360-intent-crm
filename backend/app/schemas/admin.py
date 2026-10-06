@@ -207,6 +207,21 @@ class FeasibilityCheckTypeOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class OrchestrationPolicyCreate(BaseModel):
+    intent_type: str = Field(min_length=1, max_length=20)  # e.g. "INT-25", or "ALL"
+    mode: str = Field(min_length=1, max_length=20)  # "deterministic" | "llm_planned"
+
+
+class OrchestrationPolicyOut(BaseModel):
+    id: int
+    intent_type: str
+    mode: str
+    is_active: bool
+    created_at: dt.datetime
+
+    model_config = {"from_attributes": True}
+
+
 class TestRunSummaryOut(BaseModel):
     id: int
     status: str

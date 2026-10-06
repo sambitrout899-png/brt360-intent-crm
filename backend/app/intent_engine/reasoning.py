@@ -50,6 +50,13 @@ _REQUIRED_FIELDS: dict[str, list[str]] = {
     "INT-19": ["quote_id"],
     "INT-20": ["quote_id"],
     "INT-21": ["order_id"],
+    "INT-22": ["quote_id"],
+    "INT-23": ["proposal_id", "decision"],
+    "INT-24": ["quote_id"],
+    "INT-25": ["order_id", "decision"],
+    "INT-26": ["work_order_id"],
+    "INT-27": ["work_order_id"],
+    "INT-28": ["work_order_id"],
 }
 
 
@@ -120,6 +127,24 @@ def _context_missing(intent_type: str, context: dict[str, Any], entities: dict[s
         missing.append("lead (not found)")
     if intent_type == "INT-18" and context.get("opportunity") is None:
         missing.append("opportunity (not found)")
+    if intent_type == "INT-22":
+        if context.get("quote") is None:
+            missing.append("quote (not found)")
+        elif context["quote"]["status"] != "approved":
+            missing.append(f"quote is not approved (status={context['quote']['status']}) - cannot propose it")
+    if intent_type == "INT-23" and context.get("proposal") is None:
+        missing.append("proposal (not found)")
+    if intent_type == "INT-24":
+        if context.get("quote") is None:
+            missing.append("quote (not found)")
+        elif context["quote"]["status"] != "approved":
+            missing.append(f"quote is not approved (status={context['quote']['status']})")
+        elif context.get("customer_approved_proposal") is None:
+            missing.append("quote has no customer-approved proposal on file (see INT-22/23)")
+    if intent_type == "INT-25" and context.get("order") is None:
+        missing.append("order (not found)")
+    if intent_type in ("INT-26", "INT-27", "INT-28") and context.get("work_order") is None:
+        missing.append("work order (not found)")
     return missing
 
 

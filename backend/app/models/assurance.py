@@ -74,12 +74,27 @@ class RootCauseAnalysis(Base):
 
 
 class WorkOrder(Base):
+    """Two distinct uses share this table: a field-dispatch work order
+    against a trouble ticket (ticket_id set, kind "field_dispatch" - the
+    original INT-12 use), and the Phase 5 order-fulfillment chain
+    (order_id set, kind "installation" -> "connectivity_test" ->
+    "acceptance_letter", one created automatically when the previous one
+    closes - see actions_fulfillment.py). completion_evidence doubles as
+    the signed connectivity-acceptance note (kind "connectivity_test")
+    and the attached acceptance letter (kind "acceptance_letter").
+    """
+
     __tablename__ = "work_orders"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id"))
     ticket_id: Mapped[int | None] = mapped_column(ForeignKey("trouble_tickets.id"), nullable=True)
     order_id: Mapped[int | None] = mapped_column(ForeignKey("orders.id"), nullable=True)
+    order_item_id: Mapped[int | None] = mapped_column(ForeignKey("order_items.id"), nullable=True)
+    # "field_dispatch" (default, pre-existing INT-12 behavior) |
+    # "installation" | "connectivity_test" | "acceptance_letter"
+    kind: Mapped[str] = mapped_column(String(30), default="field_dispatch")
+    technical_parameters: Mapped[str] = mapped_column(Text, default="")
     scheduled_window: Mapped[str] = mapped_column(String(100), default="")
     status: Mapped[str] = mapped_column(String(20), default="scheduled")  # scheduled/en_route/on_site/complete
     created_at: Mapped[dt.datetime] = mapped_column(default=utcnow)

@@ -28,6 +28,7 @@ SUPPORTED_INTENTS = (
     "INT-10", "INT-11", "INT-12",
     "INT-13", "INT-14",
     "INT-15", "INT-16", "INT-17", "INT-18", "INT-19", "INT-20", "INT-21",
+    "INT-22", "INT-23", "INT-24", "INT-25", "INT-26", "INT-27", "INT-28",
 )
 
 _SYSTEM_PROMPT = """You are the NLU classifier for BRT 360, a telecom Intent CRM.
@@ -128,8 +129,35 @@ INT-21 "Revise this order" - entities: order_id (int),
   order has passed its configured PONR (default: anything past
   "created"/"activating").
 
+INT-22 "Generate proposal for this quote" - entities: quote_id (int, must
+  be an approved quote).
+
+INT-23 "Record customer approval of the proposal" - the customer's
+  decision over email, recorded by a human. Entities: proposal_id (int),
+  decision ("approve"|"reject", default "approve").
+
+INT-24 "Generate order from quote" - entities: quote_id (int). Requires
+  the quote approved AND a customer-approved proposal on file (INT-22/23).
+
+INT-25 "Approve this order" - the Order Control Unit gate, only
+  reachable once an order has been generated (INT-24). Entities:
+  order_id (int), decision ("approve"|"reject", default "approve"),
+  reasoning (str, optional).
+
+INT-26 "Close Work Order 1 (Installation)" - entities: work_order_id
+  (int), technical_parameters (str, optional - the finalized
+  field/core-network parameters).
+
+INT-27 "Close Work Order 2 (Connectivity Test & Acceptance)" -
+  entities: work_order_id (int), signature (str, optional - the
+  customer's signed acceptance).
+
+INT-28 "Close Work Order 3 (Acceptance Letter)" - entities:
+  work_order_id (int), document_ref (str, optional - defaults to a
+  fabricated document-store reference if omitted).
+
 Respond with strict JSON only:
-{"intent_type": "INT-01".."INT-21"|"UNKNOWN", "entities": {...},
+{"intent_type": "INT-01".."INT-28"|"UNKNOWN", "entities": {...},
  "confidence": 0.0-1.0, "rationale": "one sentence explaining the classification"}
 """
 
@@ -272,6 +300,60 @@ def _classify_with_rules(text: str) -> ClassificationResult:
         }
         confidence = 0.9 if entities["lead_id"] else 0.4
         return ClassificationResult("INT-17", entities, confidence, "Matched keyword 'approve'/'reject' + 'lead' + parsed fields")
+
+    if "proposal" in lowered and "quote_id" in fields:
+        entities = {"quote_id": _as_int(fields, "quote_id")}
+        confidence = 0.85 if entities["quote_id"] else 0.4
+        return ClassificationResult("INT-22", entities, confidence, "Matched keyword 'proposal' + 'quote_id' field")
+
+    if "proposal" in lowered and "proposal_id" in fields:
+        decision = "approve" if "approve" in lowered and "reject" not in lowered else (
+            "reject" if "reject" in lowered else fields.get("decision", "approve")
+        )
+        entities = {"proposal_id": _as_int(fields, "proposal_id"), "decision": fields.get("decision", decision)}
+        confidence = 0.85 if entities["proposal_id"] else 0.4
+        return ClassificationResult("INT-23", entities, confidence, "Matched keyword 'proposal' + 'proposal_id' field")
+
+    if "generate" in lowered and "order" in lowered and "quote_id" in fields:
+        entities = {"quote_id": _as_int(fields, "quote_id")}
+        confidence = 0.85 if entities["quote_id"] else 0.4
+        return ClassificationResult("INT-24", entities, confidence, "Matched keyword 'generate'/'order' + 'quote_id' field")
+
+    if ("approve" in lowered or "reject" in lowered) and "order_id" in fields:
+        decision = "approve" if "approve" in lowered and "reject" not in lowered else (
+            "reject" if "reject" in lowered else fields.get("decision", "approve")
+        )
+        entities = {
+            "order_id": _as_int(fields, "order_id"),
+            "decision": fields.get("decision", decision),
+            "reasoning": fields.get("reasoning"),
+        }
+        confidence = 0.9 if entities["order_id"] else 0.4
+        return ClassificationResult("INT-25", entities, confidence, "Matched keyword 'approve'/'reject' + 'order_id' field")
+
+    if "installation" in lowered and "work_order_id" in fields:
+        entities = {
+            "work_order_id": _as_int(fields, "work_order_id"),
+            "technical_parameters": fields.get("technical_parameters", ""),
+        }
+        confidence = 0.85 if entities["work_order_id"] else 0.4
+        return ClassificationResult("INT-26", entities, confidence, "Matched keyword 'installation' + 'work_order_id' field")
+
+    if "connectivity" in lowered and "work_order_id" in fields:
+        entities = {
+            "work_order_id": _as_int(fields, "work_order_id"),
+            "signature": fields.get("signature", ""),
+        }
+        confidence = 0.85 if entities["work_order_id"] else 0.4
+        return ClassificationResult("INT-27", entities, confidence, "Matched keyword 'connectivity' + 'work_order_id' field")
+
+    if "letter" in lowered and "work_order_id" in fields:
+        entities = {
+            "work_order_id": _as_int(fields, "work_order_id"),
+            "document_ref": fields.get("document_ref"),
+        }
+        confidence = 0.85 if entities["work_order_id"] else 0.4
+        return ClassificationResult("INT-28", entities, confidence, "Matched keyword 'letter' + 'work_order_id' field")
 
     if "feasibility" in lowered and "opportunity_id" in fields:
         entities = {

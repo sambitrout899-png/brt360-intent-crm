@@ -43,8 +43,10 @@ from app.models.feasibility import (
     FeasibilityCheckType,
     FeasibilityOutcome,
 )
+from app.models.fulfillment import Asset, AssetStatus, Proposal, ProposalStatus
 from app.models.identity import IdentityVerification, IdentityVerificationProvider, VerificationStatus
 from app.models.intent_log import DomainEvent, IntentExecutionLog
+from app.models.orchestration_policy import OrchestrationMode, OrchestrationPolicy
 from app.models.orders import (
     BillingAccount,
     BillingAdjustment,
@@ -85,6 +87,12 @@ __all__ = [
     "FeasibilityCheckType",
     "FeasibilityOutcome",
     "PonrPolicy",
+    "Proposal",
+    "ProposalStatus",
+    "Asset",
+    "AssetStatus",
+    "OrchestrationPolicy",
+    "OrchestrationMode",
     "Order",
     "OrderItem",
     "ServiceOrder",

@@ -68,6 +68,18 @@ class Order(Base):
 
     items: Mapped[list["OrderItem"]] = relationship(back_populates="order", cascade="all, delete-orphan")
     service_orders: Mapped[list["ServiceOrder"]] = relationship(back_populates="order", cascade="all, delete-orphan")
+    # Order Control Unit approval (Phase 5, INT-25) - polymorphic, same
+    # pattern as Lead.chain_instance/Quote.chain_instance; opt-in, so an
+    # Order whose tenant has no "order" approval chain template configured
+    # simply has no instance here and INT-25 auto-approves immediately.
+    chain_instance: Mapped["ApprovalChainInstance"] = relationship(
+        viewonly=True,
+        uselist=False,
+        primaryjoin=(
+            "and_(foreign(ApprovalChainInstance.entity_id) == Order.id, "
+            "ApprovalChainInstance.entity_type == 'order')"
+        ),
+    )
 
 
 class OrderItem(Base):

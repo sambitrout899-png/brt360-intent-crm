@@ -20,6 +20,7 @@ from app.models.assurance import TroubleTicket, WorkOrder
 from app.models.catalog import OfferingStatus, ProductOffering
 from app.models.crm import Lead, Opportunity, Party, Quote, QuoteStatus
 from app.models.feasibility import FeasibilityAssessment
+from app.models.fulfillment import Proposal
 from app.models.identity import IdentityVerification
 from app.models.orders import Order, OrderStatus
 
@@ -194,5 +195,47 @@ def verify(db: Session, intent_type: str, result: dict[str, Any] | None) -> Veri
         if order is None:
             return VerificationResult(False, "No order found after revision.")
         return VerificationResult(True, f"Order {order.id} revised, monthly_price now {order.monthly_price}.")
+
+    if intent_type == "INT-22":
+        proposal_id = _require(result, "proposal_id")
+        proposal = db.get(Proposal, proposal_id) if proposal_id else None
+        if proposal is None:
+            return VerificationResult(False, "No proposal created.")
+        return VerificationResult(True, f"Proposal {proposal.id} generated for quote {proposal.quote_id}.")
+
+    if intent_type == "INT-23":
+        proposal_id = _require(result, "proposal_id")
+        proposal = db.get(Proposal, proposal_id) if proposal_id else None
+        if proposal is None:
+            return VerificationResult(False, "Proposal not found after recording the customer's decision.")
+        return VerificationResult(True, f"Proposal {proposal.id} customer decision recorded: {proposal.status.value}.")
+
+    if intent_type == "INT-24":
+        order_id = _require(result, "order_id")
+        order = db.get(Order, order_id) if order_id else None
+        if order is None:
+            return VerificationResult(False, "No order generated from the quote.")
+        if not order.items:
+            return VerificationResult(False, f"Order {order.id} has no order items.")
+        return VerificationResult(True, f"Order {order.id} generated with {len(order.items)} item(s).")
+
+    if intent_type == "INT-25":
+        order_id = _require(result, "order_id")
+        order = db.get(Order, order_id) if order_id else None
+        if order is None:
+            return VerificationResult(False, "Order not found after Order Control Unit decision.")
+        chain_status = _require(result, "chain_status")
+        if chain_status == "approved" and _require(result, "work_order_id") is None:
+            return VerificationResult(False, f"Order {order.id} approved but no installation work order was raised.")
+        return VerificationResult(True, f"Order {order.id} Order Control Unit decision recorded: {chain_status}.")
+
+    if intent_type in ("INT-26", "INT-27", "INT-28"):
+        closed_work_order_id = _require(result, "closed_work_order_id")
+        work_order = db.get(WorkOrder, closed_work_order_id) if closed_work_order_id else None
+        if work_order is None:
+            return VerificationResult(False, "Closed work order not found after execution.")
+        if work_order.status != "complete":
+            return VerificationResult(False, f"Expected work order status 'complete', found '{work_order.status}'.")
+        return VerificationResult(True, f"Work order {work_order.id} ('{work_order.kind}') confirmed closed.")
 
     return VerificationResult(True, "No verification rule defined for this intent type; passing through.")
