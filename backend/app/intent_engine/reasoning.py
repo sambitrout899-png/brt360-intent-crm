@@ -141,8 +141,11 @@ def _context_missing(intent_type: str, context: dict[str, Any], entities: dict[s
             missing.append(f"quote is not approved (status={context['quote']['status']})")
         elif context.get("customer_approved_proposal") is None:
             missing.append("quote has no customer-approved proposal on file (see INT-22/23)")
-    if intent_type == "INT-25" and context.get("order") is None:
-        missing.append("order (not found)")
+    if intent_type == "INT-25":
+        if context.get("order") is None:
+            missing.append("order (not found)")
+        elif context["order"]["status"] != "created":
+            missing.append(f"order has already been submitted for fulfillment (status={context['order']['status']})")
     if intent_type in ("INT-26", "INT-27", "INT-28") and context.get("work_order") is None:
         missing.append("work order (not found)")
     return missing

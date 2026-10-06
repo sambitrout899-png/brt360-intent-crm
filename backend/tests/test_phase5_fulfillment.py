@@ -167,6 +167,30 @@ def test_full_fulfillment_chain_without_order_control_gate(client):
         db.close()
 
 
+def test_reapproving_already_submitted_order_needs_review(client):
+    """Regression: INT-25 used to be callable repeatedly with no guard,
+    silently resubmitting to orchestration and raising a second,
+    duplicate Installation work order each time.
+    """
+    order_id = _generated_order(client, "DoubleApproveCo", "Fiber 703", price=1000)
+    first = client.post("/api/intents", json={"text": f"Approve this order. order_id: {order_id}"}).json()
+    assert first["status"] == "executed"
+
+    second = client.post("/api/intents", json={"text": f"Approve this order. order_id: {order_id}"})
+    assert second.json()["status"] == "needs_review"
+
+    db = client.TestSessionLocal()
+    try:
+        from app.models.assurance import WorkOrder
+
+        installation_work_orders = (
+            db.query(WorkOrder).filter(WorkOrder.order_id == order_id, WorkOrder.kind == "installation").all()
+        )
+        assert len(installation_work_orders) == 1
+    finally:
+        db.close()
+
+
 def test_order_control_unit_gate_blocks_until_approved(client):
     db = client.TestSessionLocal()
     try:

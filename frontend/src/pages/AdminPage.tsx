@@ -5,6 +5,7 @@ import {
   createAttributeDefinition,
   createFeasibilityCheckType,
   createIdentityProvider,
+  createOrchestrationPolicy,
   createPonrPolicy,
   createSlaPolicy,
   createUser,
@@ -12,6 +13,7 @@ import {
   deactivateAttributeConstraintRule,
   deactivateFeasibilityCheckType,
   deactivateIdentityProvider,
+  deactivateOrchestrationPolicy,
   deactivatePonrPolicy,
   deactivateSlaPolicy,
   deactivateUser,
@@ -20,6 +22,7 @@ import {
   deleteAttributeDefinition,
   deleteFeasibilityCheckType,
   deleteIdentityProvider,
+  deleteOrchestrationPolicy,
   deletePonrPolicy,
   deleteSlaPolicy,
   getTestRun,
@@ -29,6 +32,7 @@ import {
   listAttributeValues,
   listFeasibilityCheckTypes,
   listIdentityProviders,
+  listOrchestrationPolicies,
   listPonrPolicies,
   listProductSpecifications,
   listSlaClocks,
@@ -39,12 +43,13 @@ import {
   setAttributeValue,
   triggerTestRun,
 } from "../api/client";
-import { ATTRIBUTE_DATA_TYPES, CONSTRAINT_OPERATORS, CONSTRAINT_RULE_TYPES, SLA_BREACH_ACTIONS, USER_ROLES } from "../api/types";
+import { ATTRIBUTE_DATA_TYPES, CONSTRAINT_OPERATORS, CONSTRAINT_RULE_TYPES, ORCHESTRATION_MODES, SLA_BREACH_ACTIONS, USER_ROLES } from "../api/types";
 import type {
   ApprovalChainTemplate,
   AttributeConstraintRule,
   FeasibilityCheckType,
   IdentityProvider,
+  OrchestrationPolicy,
   PonrPolicy,
   ProductAttributeDefinition,
   ProductAttributeValue,
@@ -56,7 +61,7 @@ import type {
   User,
 } from "../api/types";
 
-type Section = "approvals" | "sla" | "attributes" | "identity" | "ponr" | "feasibility" | "users" | "tests";
+type Section = "approvals" | "sla" | "attributes" | "identity" | "ponr" | "feasibility" | "orchestration" | "users" | "tests";
 
 function emptyChainForm() {
   return { name: "", segment: "", minPct: "0", maxPct: "100", tiers: [""] };
@@ -941,6 +946,120 @@ function FeasibilityCheckTypesSection() {
   );
 }
 
+function emptyOrchestrationForm() {
+  return { intentType: "INT-25", mode: ORCHESTRATION_MODES[0] as string };
+}
+
+function OrchestrationPoliciesSection() {
+  const [policies, setPolicies] = useState<OrchestrationPolicy[]>([]);
+  const [form, setForm] = useState(emptyOrchestrationForm());
+  const [error, setError] = useState<string | null>(null);
+
+  function load() {
+    listOrchestrationPolicies().then(setPolicies);
+  }
+
+  useEffect(load, []);
+
+  async function submit() {
+    setError(null);
+    if (!form.intentType.trim()) {
+      setError("Intent type is required (e.g. INT-25, or ALL).");
+      return;
+    }
+    try {
+      await createOrchestrationPolicy({ intent_type: form.intentType.trim(), mode: form.mode });
+      setForm(emptyOrchestrationForm());
+      load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to create policy.");
+    }
+  }
+
+  async function deactivate(id: number) {
+    await deactivateOrchestrationPolicy(id);
+    load();
+  }
+
+  async function remove(id: number) {
+    await deleteOrchestrationPolicy(id);
+    load();
+  }
+
+  return (
+    <div className="space-y-6">
+      <p className="text-sm text-slate-400">
+        Which flavor orchestrates the Phase 5 order-fulfillment intents (INT-22 through INT-28): "deterministic"
+        (default - a fixed, tested step sequence) or "llm_planned" (an LLM chooses which pre-vetted operation runs
+        next, only from a short explicit allow-list - never arbitrary code). llm_planned silently falls back to
+        deterministic whenever no OPENAI_API_KEY is configured or the LLM's plan doesn't validate, so this is always
+        safe to turn on. Use "ALL" as the intent type to cover every fulfillment intent at once; a row for a
+        specific intent type (e.g. "INT-25") wins over an "ALL" row.
+      </p>
+
+      <div className="space-y-2">
+        {policies.map((p) => (
+          <div key={p.id} className={`flex flex-wrap items-center gap-3 rounded-lg border px-4 py-3 text-sm ${p.is_active ? "border-slate-700 bg-slate-900/60" : "border-slate-800 bg-slate-950/60 opacity-60"}`}>
+            <span className="rounded-md bg-slate-800 px-2 py-0.5 text-xs font-bold text-slate-300">{p.intent_type}</span>
+            <span
+              className={`rounded-md border px-2 py-0.5 text-xs font-bold ${
+                p.mode === "llm_planned" ? "bg-violet-500/15 text-violet-400 border-violet-500/30" : "bg-slate-500/15 text-slate-400 border-slate-500/30"
+              }`}
+            >
+              {p.mode}
+            </span>
+            {!p.is_active && <span className="rounded-md border border-slate-700 px-2 py-0.5 text-xs text-slate-500">inactive</span>}
+            <div className="ml-auto flex gap-2">
+              {p.is_active && (
+                <button onClick={() => deactivate(p.id)} className="rounded-md border border-slate-700 px-2.5 py-1 text-xs font-bold text-slate-300 hover:border-amber-500 hover:text-amber-400">
+                  Deactivate
+                </button>
+              )}
+              <button onClick={() => remove(p.id)} className="rounded-md border border-slate-700 px-2.5 py-1 text-xs font-bold text-slate-300 hover:border-red-500 hover:text-red-400">
+                Delete
+              </button>
+            </div>
+          </div>
+        ))}
+        {policies.length === 0 && <p className="text-sm text-slate-500">No orchestration policies configured yet - every fulfillment intent runs deterministically.</p>}
+      </div>
+
+      <div className="rounded-xl border border-slate-700 bg-slate-900/60 p-5">
+        <h3 className="mb-4 text-base font-bold text-slate-100">New Orchestration Policy</h3>
+        <div className="grid gap-3 md:grid-cols-2">
+          <label className="text-xs text-slate-400">
+            Intent type
+            <input
+              value={form.intentType}
+              onChange={(e) => setForm((f) => ({ ...f, intentType: e.target.value }))}
+              className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200"
+              placeholder="e.g. INT-25, or ALL"
+            />
+          </label>
+          <label className="text-xs text-slate-400">
+            Mode
+            <select
+              value={form.mode}
+              onChange={(e) => setForm((f) => ({ ...f, mode: e.target.value }))}
+              className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200"
+            >
+              {ORCHESTRATION_MODES.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        {error && <p className="mt-3 text-xs text-red-400">{error}</p>}
+        <button onClick={submit} className="mt-4 rounded-lg bg-sky-600 px-4 py-2 text-sm font-bold text-white hover:bg-sky-500">
+          Create Policy
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function emptyUserForm() {
   return { email: "", password: "", name: "", role: USER_ROLES[1] as string };
 }
@@ -1136,6 +1255,7 @@ export default function AdminPage() {
           ["identity", "Identity Providers"],
           ["ponr", "PONR Policies"],
           ["feasibility", "Feasibility Checks"],
+          ["orchestration", "Orchestration Mode"],
           ["users", "Users"],
           ["tests", "Test Suite"],
         ] as [Section, string][]).map(([id, label]) => (
@@ -1157,6 +1277,7 @@ export default function AdminPage() {
       {section === "identity" && <IdentityProvidersSection />}
       {section === "ponr" && <PonrPoliciesSection />}
       {section === "feasibility" && <FeasibilityCheckTypesSection />}
+      {section === "orchestration" && <OrchestrationPoliciesSection />}
       {section === "users" && <UsersSection />}
       {section === "tests" && <TestSuiteSection />}
     </div>

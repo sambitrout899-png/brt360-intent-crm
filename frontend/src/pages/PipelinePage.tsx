@@ -154,12 +154,45 @@ export default function PipelinePage({ onRequestIntent }: { onRequestIntent: (te
                 </div>
               )}
               {q.status === "approved" && (
-                <button
-                  onClick={() => onRequestIntent(`Activate this order end-to-end. quote_id: ${q.id}`)}
-                  className="ml-auto rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-xs font-bold text-emerald-400 hover:bg-emerald-500/20"
-                >
-                  Activate Order
-                </button>
+                <div className="ml-auto flex flex-wrap items-center gap-2">
+                  {q.proposals.length > 0 && (
+                    <span className="text-xs text-slate-500">proposal: {q.proposals[0].status}</span>
+                  )}
+                  <button
+                    onClick={() => onRequestIntent(`Activate this order end-to-end. quote_id: ${q.id}`)}
+                    className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-xs font-bold text-emerald-400 hover:bg-emerald-500/20"
+                  >
+                    Activate Order (direct)
+                  </button>
+                  {q.proposals.length === 0 && (
+                    <button
+                      onClick={() => onRequestIntent(`Generate proposal for this quote. quote_id: ${q.id}`)}
+                      className="rounded-md border border-slate-700 px-2.5 py-1 text-xs font-bold text-slate-300 hover:border-sky-500 hover:text-sky-400"
+                    >
+                      Generate Proposal
+                    </button>
+                  )}
+                  {q.proposals[0]?.status === "sent" && (
+                    <button
+                      onClick={() =>
+                        onRequestIntent(
+                          `Record customer approval of the proposal. proposal_id: ${q.proposals[0].id}, decision: approve`
+                        )
+                      }
+                      className="rounded-md border border-sky-500/40 bg-sky-500/10 px-2.5 py-1 text-xs font-bold text-sky-400 hover:bg-sky-500/20"
+                    >
+                      Record Customer Decision
+                    </button>
+                  )}
+                  {q.proposals[0]?.status === "customer_approved" && (
+                    <button
+                      onClick={() => onRequestIntent(`Generate order from quote. quote_id: ${q.id}`)}
+                      className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-xs font-bold text-emerald-400 hover:bg-emerald-500/20"
+                    >
+                      Generate Order (B2B)
+                    </button>
+                  )}
+                </div>
               )}
             </div>
           ))}

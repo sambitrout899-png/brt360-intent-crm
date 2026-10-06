@@ -146,6 +146,15 @@ export interface ApprovalChain {
   steps: ApprovalStep[];
 }
 
+export interface Proposal {
+  id: number;
+  quote_id: number;
+  status: "sent" | "customer_approved" | "customer_rejected";
+  document_ref: string;
+  sent_at: string;
+  decided_at: string | null;
+}
+
 export interface Quote {
   id: number;
   opportunity_id: number;
@@ -157,6 +166,7 @@ export interface Quote {
   items: QuoteItem[];
   approval_chain: ApprovalChain | null;
   feasible: boolean | null;
+  proposals: Proposal[];
 }
 
 export const ATTRIBUTE_DATA_TYPES = ["number", "string", "boolean", "enum"] as const;
@@ -278,6 +288,19 @@ export interface ServiceOrder {
   resources: Resource[];
 }
 
+export interface FulfillmentWorkOrder {
+  id: number;
+  ticket_id: number | null;
+  order_id: number | null;
+  order_item_id: number | null;
+  kind: "field_dispatch" | "installation" | "connectivity_test" | "acceptance_letter";
+  technical_parameters: string;
+  scheduled_window: string;
+  status: string;
+  technician_name: string | null;
+  completion_evidence: { checklist: string; signature: string; completed_at: string } | null;
+}
+
 export interface Order {
   id: number;
   party_id: number;
@@ -291,6 +314,19 @@ export interface Order {
   contract_months: number;
   created_at: string;
   service_orders: ServiceOrder[];
+  order_control_chain: ApprovalChain | null;
+  fulfillment_work_orders: FulfillmentWorkOrder[];
+}
+
+export interface Asset {
+  id: number;
+  service_account_id: number;
+  order_item_id: number | null;
+  asset_type: string;
+  identifier: string;
+  status: "active" | "decommissioned";
+  inventory_system_ref: string | null;
+  created_at: string;
 }
 
 export interface ServiceAccount {
@@ -300,6 +336,17 @@ export interface ServiceAccount {
   status: string;
   created_at: string;
   orders: Order[];
+  assets: Asset[];
+}
+
+export const ORCHESTRATION_MODES = ["deterministic", "llm_planned"] as const;
+
+export interface OrchestrationPolicy {
+  id: number;
+  intent_type: string;
+  mode: "deterministic" | "llm_planned";
+  is_active: boolean;
+  created_at: string;
 }
 
 export interface BillingAdjustment {

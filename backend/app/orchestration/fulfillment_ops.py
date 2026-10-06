@@ -114,10 +114,22 @@ def op_approve_order(db: Session, tenant_id: int, order_id: int, decision: str =
     """Order Control Unit gate - opt-in, same two-phase shape as the
     lead-qualification gate (INT-04/17): no "order" chain template
     configured means this auto-approves on the spot.
+
+    Guarded on order.status == "created": that status never changes
+    until the order is actually submitted to orchestration (which only
+    happens once the chain is fully approved - see
+    actions_fulfillment.py's build_int25_steps), including through every
+    intermediate tier of a multi-tier chain, so this guard admits every
+    legitimate call and only rejects calling INT-25 again on an order
+    that has already been submitted - without it, a repeat call would
+    silently resubmit to orchestration and raise a second, duplicate
+    Installation work order.
     """
     order = db.get(Order, order_id)
     if order is None or order.tenant_id != tenant_id:
         raise ValueError(f"Order {order_id} not found")
+    if order.status.value != "created":
+        raise ValueError(f"Order {order_id} has already been submitted for fulfillment (status={order.status.value})")
 
     instance = approval_service.get_chain_instance(db, "order", order.id)
     if instance is None:

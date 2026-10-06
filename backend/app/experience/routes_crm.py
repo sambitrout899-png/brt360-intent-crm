@@ -17,9 +17,11 @@ from app.models.accounts import ServiceAccount
 from app.models.assurance import Technician, TroubleTicket, WorkOrder
 from app.models.catalog import ProductOffering
 from app.models.crm import Lead, Opportunity, Party, Quote
+from app.models.fulfillment import Asset, Proposal
 from app.models.identity import IdentityVerification
 from app.models.orders import BillingAccount, Order
 from app.schemas.crm import (
+    AssetOut,
     BillingAccountOut,
     BillingAdjustmentOut,
     DashboardSummaryOut,
@@ -29,6 +31,7 @@ from app.schemas.crm import (
     OrderOut,
     Party360Out,
     PartyOut,
+    ProposalOut,
     QuoteItemOut,
     QuoteOut,
     ResourceOut,
@@ -47,7 +50,29 @@ router = APIRouter(prefix="/api", tags=["crm"])
 # ---------- converters (handle the fields that need a join/lookup) ----------
 
 
-def _quote_out(quote: Quote, offering_names: dict[int, str]) -> QuoteOut:
+def _approval_chain_dict(instance) -> dict | None:
+    """Shared by quotes, leads and orders - every polymorphic
+    ApprovalChainInstance (entity_type "quote"/"lead"/"order") renders
+    the same way."""
+    if instance is None:
+        return None
+    current_tier = (
+        instance.steps[instance.current_sequence - 1].approver_tier
+        if instance.status.value == "pending" and instance.current_sequence <= len(instance.steps)
+        else None
+    )
+    return {
+        "template_name": instance.template.name,
+        "status": instance.status.value,
+        "current_tier": current_tier,
+        "steps": [
+            {"sequence": s.sequence, "approver_tier": s.approver_tier, "status": s.status.value, "reasoning": s.reasoning or None}
+            for s in instance.steps
+        ],
+    }
+
+
+def _quote_out(db: Session, quote: Quote, offering_names: dict[int, str]) -> QuoteOut:
     items = [
         QuoteItemOut(
             id=i.id,
@@ -58,23 +83,9 @@ def _quote_out(quote: Quote, offering_names: dict[int, str]) -> QuoteOut:
         )
         for i in quote.items
     ]
-    approval_chain = None
-    if quote.chain_instance:
-        instance = quote.chain_instance
-        current_tier = (
-            instance.steps[instance.current_sequence - 1].approver_tier
-            if instance.status.value == "pending" and instance.current_sequence <= len(instance.steps)
-            else None
-        )
-        approval_chain = {
-            "template_name": instance.template.name,
-            "status": instance.status.value,
-            "current_tier": current_tier,
-            "steps": [
-                {"sequence": s.sequence, "approver_tier": s.approver_tier, "status": s.status.value, "reasoning": s.reasoning or None}
-                for s in instance.steps
-            ],
-        }
+    proposals = (
+        db.query(Proposal).filter(Proposal.quote_id == quote.id).order_by(Proposal.sent_at.desc()).all()
+    )
     return QuoteOut(
         id=quote.id,
         opportunity_id=quote.opportunity_id,
@@ -84,29 +95,13 @@ def _quote_out(quote: Quote, offering_names: dict[int, str]) -> QuoteOut:
         discount_justification=quote.discount_justification,
         created_at=quote.created_at,
         items=items,
-        approval_chain=approval_chain,
+        approval_chain=_approval_chain_dict(quote.chain_instance),
         feasible=quote.feasibility_result.feasible if quote.feasibility_result else None,
+        proposals=[ProposalOut.model_validate(p) for p in proposals],
     )
 
 
 def _lead_out(lead: Lead) -> LeadOut:
-    approval_chain = None
-    if lead.chain_instance:
-        instance = lead.chain_instance
-        current_tier = (
-            instance.steps[instance.current_sequence - 1].approver_tier
-            if instance.status.value == "pending" and instance.current_sequence <= len(instance.steps)
-            else None
-        )
-        approval_chain = {
-            "template_name": instance.template.name,
-            "status": instance.status.value,
-            "current_tier": current_tier,
-            "steps": [
-                {"sequence": s.sequence, "approver_tier": s.approver_tier, "status": s.status.value, "reasoning": s.reasoning or None}
-                for s in instance.steps
-            ],
-        }
     return LeadOut(
         id=lead.id,
         party_id=lead.party_id,
@@ -117,11 +112,11 @@ def _lead_out(lead: Lead) -> LeadOut:
         status=lead.status.value,
         interested_offering_name=lead.interested_offering_name,
         created_at=lead.created_at,
-        approval_chain=approval_chain,
+        approval_chain=_approval_chain_dict(lead.chain_instance),
     )
 
 
-def _order_out(order: Order, party_name: str, service_account_name: str) -> OrderOut:
+def _order_out(db: Session, order: Order, party_name: str, service_account_name: str) -> OrderOut:
     service_orders = [
         ServiceOrderOut(
             id=so.id,
@@ -131,6 +126,12 @@ def _order_out(order: Order, party_name: str, service_account_name: str) -> Orde
         )
         for so in order.service_orders
     ]
+    fulfillment_work_orders = (
+        db.query(WorkOrder)
+        .filter(WorkOrder.order_id == order.id, WorkOrder.kind != "field_dispatch")
+        .order_by(WorkOrder.created_at)
+        .all()
+    )
     return OrderOut(
         id=order.id,
         party_id=order.party_id,
@@ -144,6 +145,8 @@ def _order_out(order: Order, party_name: str, service_account_name: str) -> Orde
         contract_months=order.contract_months,
         created_at=order.created_at,
         service_orders=service_orders,
+        order_control_chain=_approval_chain_dict(order.chain_instance),
+        fulfillment_work_orders=[WorkOrderOut.model_validate(w) for w in fulfillment_work_orders],
     )
 
 
@@ -260,8 +263,8 @@ def party_360(party_id: int, db: Session = Depends(get_db), tenant_id: int = Dep
         party=PartyOut.model_validate(party),
         leads=[_lead_out(l) for l in leads],
         opportunities=[_opportunity_out(o) for o in opportunities],
-        quotes=[_quote_out(q, offering_names) for q in quotes],
-        orders=[_order_out(o, party.name, service_account_names.get(o.service_account_id, "?")) for o in orders],
+        quotes=[_quote_out(db, q, offering_names) for q in quotes],
+        orders=[_order_out(db, o, party.name, service_account_names.get(o.service_account_id, "?")) for o in orders],
         service_accounts=[
             ServiceAccountOut(
                 id=sa.id,
@@ -269,7 +272,11 @@ def party_360(party_id: int, db: Session = Depends(get_db), tenant_id: int = Dep
                 name=sa.name,
                 status=sa.status,
                 created_at=sa.created_at,
-                orders=[_order_out(o, party.name, sa.name) for o in orders_by_service_account.get(sa.id, [])],
+                orders=[_order_out(db, o, party.name, sa.name) for o in orders_by_service_account.get(sa.id, [])],
+                assets=[
+                    AssetOut.model_validate(a)
+                    for a in db.query(Asset).filter(Asset.service_account_id == sa.id).order_by(Asset.created_at).all()
+                ],
             )
             for sa in service_accounts
         ],
@@ -347,7 +354,7 @@ def list_quotes(status: str | None = None, db: Session = Depends(get_db), tenant
     query = db.query(Quote).filter(Quote.tenant_id == tenant_id)
     if status:
         query = query.filter(Quote.status == status)
-    return [_quote_out(q, offering_names) for q in query.order_by(Quote.created_at.desc()).all()]
+    return [_quote_out(db, q, offering_names) for q in query.order_by(Quote.created_at.desc()).all()]
 
 
 @router.get("/quotes/{quote_id}", response_model=QuoteOut)
@@ -356,7 +363,7 @@ def quote_detail(quote_id: int, db: Session = Depends(get_db), tenant_id: int = 
     quote = db.get(Quote, quote_id)
     if quote is None or quote.tenant_id != tenant_id:
         raise HTTPException(404, "Quote not found")
-    return _quote_out(quote, offering_names)
+    return _quote_out(db, quote, offering_names)
 
 
 # ---------- Orders / Billing ----------
@@ -372,7 +379,7 @@ def list_orders(status: str | None = None, db: Session = Depends(get_db), tenant
     service_account_names = {
         sa.id: sa.name for sa in db.query(ServiceAccount.id, ServiceAccount.name).filter(ServiceAccount.tenant_id == tenant_id).all()
     }
-    return [_order_out(o, party_names.get(o.party_id, "?"), service_account_names.get(o.service_account_id, "?")) for o in orders]
+    return [_order_out(db, o, party_names.get(o.party_id, "?"), service_account_names.get(o.service_account_id, "?")) for o in orders]
 
 
 @router.get("/orders/{order_id}", response_model=OrderOut)
@@ -382,7 +389,7 @@ def order_detail(order_id: int, db: Session = Depends(get_db), tenant_id: int = 
         raise HTTPException(404, "Order not found")
     party = db.get(Party, order.party_id)
     service_account = db.get(ServiceAccount, order.service_account_id)
-    return _order_out(order, party.name if party else "?", service_account.name if service_account else "?")
+    return _order_out(db, order, party.name if party else "?", service_account.name if service_account else "?")
 
 
 @router.get("/billing-accounts", response_model=list[BillingAccountOut])

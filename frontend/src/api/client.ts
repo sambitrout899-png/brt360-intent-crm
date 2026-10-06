@@ -10,6 +10,7 @@ import type {
   IntentResponse,
   Lead,
   Offering,
+  OrchestrationPolicy,
   Opportunity,
   Order,
   Party,
@@ -399,4 +400,20 @@ export function deactivateFeasibilityCheckType(id: number): Promise<FeasibilityC
 
 export function deleteFeasibilityCheckType(id: number): Promise<void> {
   return request<void>(`/api/admin/feasibility-check-types/${id}`, { method: "DELETE" });
+}
+
+export function listOrchestrationPolicies(): Promise<OrchestrationPolicy[]> {
+  return request<OrchestrationPolicy[]>("/api/admin/orchestration-policies");
+}
+
+export function createOrchestrationPolicy(payload: { intent_type: string; mode: string }): Promise<OrchestrationPolicy> {
+  return request<OrchestrationPolicy>("/api/admin/orchestration-policies", { method: "POST", body: JSON.stringify(payload) });
+}
+
+export function deactivateOrchestrationPolicy(id: number): Promise<OrchestrationPolicy> {
+  return request<OrchestrationPolicy>(`/api/admin/orchestration-policies/${id}/deactivate`, { method: "PATCH" });
+}
+
+export function deleteOrchestrationPolicy(id: number): Promise<void> {
+  return request<void>(`/api/admin/orchestration-policies/${id}`, { method: "DELETE" });
 }

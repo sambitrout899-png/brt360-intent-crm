@@ -170,7 +170,23 @@ export default function CustomerPage({ onRequestIntent }: { onRequestIntent: (te
                         </>
                       )}
                       {q.status === "approved" && (
-                        <ActionButton label="Activate" onClick={() => onRequestIntent(`Activate this order end-to-end. quote_id: ${q.id}`)} />
+                        <>
+                          <ActionButton label="Activate (direct)" onClick={() => onRequestIntent(`Activate this order end-to-end. quote_id: ${q.id}`)} />
+                          {q.proposals.length === 0 && (
+                            <ActionButton label="Generate Proposal" onClick={() => onRequestIntent(`Generate proposal for this quote. quote_id: ${q.id}`)} />
+                          )}
+                          {q.proposals[0]?.status === "sent" && (
+                            <ActionButton
+                              label="Record Customer Decision"
+                              onClick={() =>
+                                onRequestIntent(`Record customer approval of the proposal. proposal_id: ${q.proposals[0].id}, decision: approve`)
+                              }
+                            />
+                          )}
+                          {q.proposals[0]?.status === "customer_approved" && (
+                            <ActionButton label="Generate Order (B2B)" onClick={() => onRequestIntent(`Generate order from quote. quote_id: ${q.id}`)} />
+                          )}
+                        </>
                       )}
                     </div>
                   </div>
@@ -203,6 +219,9 @@ export default function CustomerPage({ onRequestIntent }: { onRequestIntent: (te
                           {(o.status === "created" || o.status === "activating") && (
                             <ActionButton label="Revise" onClick={() => onRequestIntent(`Revise this order. order_id: ${o.id}, new_price: `)} />
                           )}
+                          {o.status === "created" && (
+                            <ActionButton label="Approve Order" onClick={() => onRequestIntent(`Approve this order. order_id: ${o.id}, reasoning: `)} />
+                          )}
                           {(o.status === "active" || o.status === "changed") && (
                             <>
                               <ActionButton label="Change" onClick={() => onRequestIntent(`Upgrade this service. order_id: ${o.id}, new_price: `)} />
@@ -215,6 +234,18 @@ export default function CustomerPage({ onRequestIntent }: { onRequestIntent: (te
                         </div>
                       ))}
                       {sa.orders.length === 0 && <p className="text-xs text-slate-500">No orders under this service account.</p>}
+                      {sa.assets.length > 0 && (
+                        <div className="mt-2 space-y-1">
+                          {sa.assets.map((a) => (
+                            <div key={a.id} className="flex items-center gap-3 rounded-lg bg-slate-900/40 px-3 py-1.5 text-xs text-slate-400">
+                              <span className="font-semibold text-slate-300">{a.asset_type}</span>
+                              <span>{a.identifier}</span>
+                              <span className="rounded-md bg-slate-800 px-2 py-0.5 text-slate-300">{a.status}</span>
+                              {a.inventory_system_ref && <span className="text-slate-500">inv: {a.inventory_system_ref}</span>}
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   </div>
                 ))}

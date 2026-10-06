@@ -71,6 +71,17 @@ class ApprovalChainOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class ProposalOut(BaseModel):
+    id: int
+    quote_id: int
+    status: str
+    document_ref: str
+    sent_at: dt.datetime
+    decided_at: dt.datetime | None
+
+    model_config = {"from_attributes": True}
+
+
 class QuoteOut(BaseModel):
     id: int
     opportunity_id: int
@@ -82,6 +93,7 @@ class QuoteOut(BaseModel):
     items: list[QuoteItemOut] = []
     approval_chain: ApprovalChainOut | None = None
     feasible: bool | None = None
+    proposals: list[ProposalOut] = []
 
     model_config = {"from_attributes": True}
 
@@ -104,6 +116,42 @@ class ServiceOrderOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class CompletionEvidenceOut(BaseModel):
+    checklist: str
+    signature: str
+    completed_at: dt.datetime
+
+    model_config = {"from_attributes": True}
+
+
+class WorkOrderOut(BaseModel):
+    id: int
+    ticket_id: int | None
+    order_id: int | None
+    order_item_id: int | None = None
+    kind: str = "field_dispatch"
+    technical_parameters: str = ""
+    scheduled_window: str
+    status: str
+    technician_name: str | None = None
+    completion_evidence: CompletionEvidenceOut | None = None
+
+    model_config = {"from_attributes": True}
+
+
+class AssetOut(BaseModel):
+    id: int
+    service_account_id: int
+    order_item_id: int | None
+    asset_type: str
+    identifier: str
+    status: str
+    inventory_system_ref: str | None
+    created_at: dt.datetime
+
+    model_config = {"from_attributes": True}
+
+
 class OrderOut(BaseModel):
     id: int
     party_id: int
@@ -117,6 +165,14 @@ class OrderOut(BaseModel):
     contract_months: int
     created_at: dt.datetime
     service_orders: list[ServiceOrderOut] = []
+    # Phase 5 fulfillment chain - order_control_chain is the Order Control
+    # Unit's polymorphic approval chain (None if auto-approved/unconfigured
+    # or not yet approved), fulfillment_work_orders is the
+    # Installation/Connectivity Test/Acceptance Letter chain (kept
+    # separate from the ticket-driven field_dispatch work orders a
+    # TroubleTicket raises).
+    order_control_chain: ApprovalChainOut | None = None
+    fulfillment_work_orders: list[WorkOrderOut] = []
 
     model_config = {"from_attributes": True}
 
@@ -128,6 +184,7 @@ class ServiceAccountOut(BaseModel):
     status: str
     created_at: dt.datetime
     orders: list[OrderOut] = []
+    assets: list[AssetOut] = []
 
     model_config = {"from_attributes": True}
 
@@ -176,26 +233,6 @@ class TroubleTicketOut(BaseModel):
     description: str
     created_at: dt.datetime
     root_cause: RootCauseOut | None = None
-
-    model_config = {"from_attributes": True}
-
-
-class CompletionEvidenceOut(BaseModel):
-    checklist: str
-    signature: str
-    completed_at: dt.datetime
-
-    model_config = {"from_attributes": True}
-
-
-class WorkOrderOut(BaseModel):
-    id: int
-    ticket_id: int | None
-    order_id: int | None
-    scheduled_window: str
-    status: str
-    technician_name: str | None = None
-    completion_evidence: CompletionEvidenceOut | None = None
 
     model_config = {"from_attributes": True}
 

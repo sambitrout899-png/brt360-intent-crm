@@ -13,6 +13,18 @@ const ORDER_STATUS_STYLES: Record<string, string> = {
   terminated: "bg-red-500/15 text-red-400 border-red-500/30",
 };
 
+const WORK_ORDER_LABELS: Record<string, string> = {
+  installation: "WO1: Installation",
+  connectivity_test: "WO2: Connectivity Test & Acceptance",
+  acceptance_letter: "WO3: Acceptance Letter",
+};
+
+const WORK_ORDER_CLOSE_ACTIONS: Record<string, (id: number) => string> = {
+  installation: (id) => `Close Work Order 1 (Installation). work_order_id: ${id}, technical_parameters: `,
+  connectivity_test: (id) => `Close Work Order 2 (Connectivity Test & Acceptance). work_order_id: ${id}, signature: `,
+  acceptance_letter: (id) => `Close Work Order 3 (Acceptance Letter). work_order_id: ${id}`,
+};
+
 export default function OrdersPage({ onRequestIntent }: { onRequestIntent: (text: string) => void }) {
   const [orders, setOrders] = useState<Order[]>([]);
   const [billingAccounts, setBillingAccounts] = useState<BillingAccount[]>([]);
@@ -55,7 +67,28 @@ export default function OrdersPage({ onRequestIntent }: { onRequestIntent: (text
                 <span className="text-xs text-slate-500">{o.service_account_name}</span>
                 <span className="text-slate-300">₹{o.monthly_price.toLocaleString()}/mo</span>
                 <span className={`rounded-md border px-2 py-0.5 text-xs font-bold ${ORDER_STATUS_STYLES[o.status]}`}>{o.status}</span>
-                {(o.status === "created" || o.status === "activating") && (
+                {o.order_control_chain && (
+                  <span className="text-xs text-slate-500">
+                    Order Control Unit: {o.order_control_chain.current_tier ? `awaiting ${o.order_control_chain.current_tier}` : o.order_control_chain.status}
+                  </span>
+                )}
+                {o.status === "created" && (
+                  <div className="ml-auto flex gap-2">
+                    <button
+                      onClick={() => onRequestIntent(`Revise this order. order_id: ${o.id}, new_price: `)}
+                      className="rounded-md border border-slate-700 px-2.5 py-1 text-xs font-bold text-slate-300 hover:border-sky-500 hover:text-sky-400"
+                    >
+                      Revise
+                    </button>
+                    <button
+                      onClick={() => onRequestIntent(`Approve this order. order_id: ${o.id}, reasoning: `)}
+                      className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-xs font-bold text-emerald-400 hover:bg-emerald-500/20"
+                    >
+                      Approve Order {o.order_control_chain?.current_tier ? `(${o.order_control_chain.current_tier})` : ""}
+                    </button>
+                  </div>
+                )}
+                {o.status === "activating" && (
                   <button
                     onClick={() => onRequestIntent(`Revise this order. order_id: ${o.id}, new_price: `)}
                     className="ml-auto rounded-md border border-sky-500/40 bg-sky-500/10 px-2.5 py-1 text-xs font-bold text-sky-400 hover:bg-sky-500/20"
@@ -106,6 +139,21 @@ export default function OrdersPage({ onRequestIntent }: { onRequestIntent: (text
                       className="ml-auto rounded-md border border-sky-500/40 bg-sky-500/10 px-2 py-0.5 text-xs font-bold text-sky-400 hover:bg-sky-500/20"
                     >
                       Provision
+                    </button>
+                  )}
+                </div>
+              ))}
+              {o.fulfillment_work_orders.map((wo) => (
+                <div key={wo.id} className="mt-3 flex flex-wrap items-center gap-2 rounded-lg bg-slate-950 px-3 py-2 text-xs text-slate-400">
+                  <span className="font-semibold text-slate-300">{WORK_ORDER_LABELS[wo.kind] ?? wo.kind}</span>
+                  <span>#{wo.id}</span>
+                  <span>· {wo.status}</span>
+                  {wo.status !== "complete" && WORK_ORDER_CLOSE_ACTIONS[wo.kind] && (
+                    <button
+                      onClick={() => onRequestIntent(WORK_ORDER_CLOSE_ACTIONS[wo.kind](wo.id))}
+                      className="ml-auto rounded-md border border-sky-500/40 bg-sky-500/10 px-2 py-0.5 text-xs font-bold text-sky-400 hover:bg-sky-500/20"
+                    >
+                      Close
                     </button>
                   )}
                 </div>
