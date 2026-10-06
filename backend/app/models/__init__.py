@@ -7,6 +7,7 @@ from app.models.assurance import (
     TroubleTicket,
     WorkOrder,
 )
+from app.models.ai_settings import AiSettings
 from app.models.attributes import (
     AttributeConstraintRule,
     ProductAttributeDefinition,
@@ -61,6 +62,7 @@ from app.models.tenant import Tenant, TenantVertical
 from app.models.testing import TestRun, TestRunStatus
 
 __all__ = [
+    "AiSettings",
     "Tenant",
     "TenantVertical",
     "ProductSpecification",

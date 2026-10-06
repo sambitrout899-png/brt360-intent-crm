@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.auth import hash_password, require_roles
-from app.crm_core import attribute_service, sla_service, test_runner_service
+from app.crm_core import ai_settings_service, attribute_service, sla_service, test_runner_service
 from app.db import get_db
 from app.models.approval import ApprovalChainTemplate, ApprovalChainTier
 from app.models.attributes import AttributeConstraintRule, ProductAttributeDefinition, ProductAttributeValue
@@ -23,6 +23,8 @@ from app.models.ponr import PonrPolicy
 from app.models.sla import SlaClock, SlaPolicy
 from app.models.testing import TestRun
 from app.schemas.admin import (
+    AiSettingsOut,
+    AiSettingsUpdate,
     ApprovalChainTemplateCreate,
     ApprovalChainTemplateOut,
     AttributeConstraintRuleCreate,
@@ -572,6 +574,49 @@ def delete_orchestration_policy(
     if policy is None or policy.tenant_id != tenant_id:
         raise HTTPException(404, "Orchestration policy not found")
     db.delete(policy)
+    db.commit()
+
+
+@router.get("/ai-settings", response_model=AiSettingsOut)
+def get_ai_settings(db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> AiSettingsOut:
+    row = ai_settings_service.get_or_create(db, tenant_id)
+    db.commit()
+    return AiSettingsOut(
+        configured=bool(row.api_key),
+        masked_api_key=ai_settings_service.mask_key(row.api_key),
+        model=row.model,
+        is_active=row.is_active,
+        using_global_fallback=not bool(row.api_key),
+    )
+
+
+@router.put("/ai-settings", response_model=AiSettingsOut)
+def update_ai_settings(
+    payload: AiSettingsUpdate, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)
+) -> AiSettingsOut:
+    row = ai_settings_service.get_or_create(db, tenant_id)
+    if payload.api_key:
+        row.api_key = payload.api_key
+    row.model = payload.model
+    row.is_active = payload.is_active
+    db.commit()
+    db.refresh(row)
+    return AiSettingsOut(
+        configured=bool(row.api_key),
+        masked_api_key=ai_settings_service.mask_key(row.api_key),
+        model=row.model,
+        is_active=row.is_active,
+        using_global_fallback=not bool(row.api_key),
+    )
+
+
+@router.delete("/ai-settings", status_code=204)
+def clear_ai_settings(db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> None:
+    """Clears this tenant's own key - falls back to the global
+    OPENAI_API_KEY (or, if that's unset too, the deterministic parser).
+    """
+    row = ai_settings_service.get_or_create(db, tenant_id)
+    row.api_key = None
     db.commit()
 
 

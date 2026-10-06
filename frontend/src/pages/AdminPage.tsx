@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import {
+  clearAiSettings,
   createApprovalChain,
   createAttributeConstraintRule,
   createAttributeDefinition,
@@ -25,6 +26,7 @@ import {
   deleteOrchestrationPolicy,
   deletePonrPolicy,
   deleteSlaPolicy,
+  getAiSettings,
   getTestRun,
   listApprovalChains,
   listAttributeConstraintRules,
@@ -42,9 +44,11 @@ import {
   processDueSlaClocks,
   setAttributeValue,
   triggerTestRun,
+  updateAiSettings,
 } from "../api/client";
 import { ATTRIBUTE_DATA_TYPES, CONSTRAINT_OPERATORS, CONSTRAINT_RULE_TYPES, ORCHESTRATION_MODES, SLA_BREACH_ACTIONS, USER_ROLES } from "../api/types";
 import type {
+  AiSettings,
   ApprovalChainTemplate,
   AttributeConstraintRule,
   FeasibilityCheckType,
@@ -61,7 +65,7 @@ import type {
   User,
 } from "../api/types";
 
-type Section = "approvals" | "sla" | "attributes" | "identity" | "ponr" | "feasibility" | "orchestration" | "users" | "tests";
+type Section = "approvals" | "sla" | "attributes" | "identity" | "ponr" | "feasibility" | "orchestration" | "ai" | "users" | "tests";
 
 function emptyChainForm() {
   return { name: "", segment: "", minPct: "0", maxPct: "100", tiers: [""] };
@@ -1060,6 +1064,109 @@ function OrchestrationPoliciesSection() {
   );
 }
 
+function AiSettingsSection() {
+  const [settings, setSettings] = useState<AiSettings | null>(null);
+  const [apiKeyInput, setApiKeyInput] = useState("");
+  const [model, setModel] = useState("gpt-4o-mini");
+  const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+
+  function load() {
+    getAiSettings().then((s) => {
+      setSettings(s);
+      setModel(s.model);
+    });
+  }
+
+  useEffect(load, []);
+
+  async function save() {
+    setError(null);
+    setMessage(null);
+    try {
+      await updateAiSettings({ api_key: apiKeyInput.trim() || null, model: model.trim() || "gpt-4o-mini", is_active: true });
+      setApiKeyInput("");
+      setMessage("Saved.");
+      load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to save AI settings.");
+    }
+  }
+
+  async function clearKey() {
+    setError(null);
+    setMessage(null);
+    try {
+      await clearAiSettings();
+      setMessage("Cleared - falling back to the platform default key.");
+      load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to clear the key.");
+    }
+  }
+
+  return (
+    <div className="space-y-6">
+      <p className="text-sm text-slate-400">
+        The API key that powers the Expression Builder's free-English understanding and live suggestions
+        (Intent Command Bar). Bring your own key now; swap in a production-grade key later by saving over it -
+        nothing else changes. Leave this unconfigured and the platform's own default key is used instead; with
+        no key anywhere, free text still works but must follow the plain <span className="font-mono text-slate-300">field: value</span> format.
+      </p>
+
+      {settings && (
+        <div className="flex flex-wrap items-center gap-3 rounded-lg border border-slate-700 bg-slate-900/60 px-4 py-3 text-sm">
+          <span
+            className={`rounded-md border px-2.5 py-1 text-xs font-bold ${
+              settings.configured ? "bg-emerald-500/15 text-emerald-400 border-emerald-500/30" : "bg-slate-500/15 text-slate-400 border-slate-500/30"
+            }`}
+          >
+            {settings.configured ? "Tenant key configured" : "Using platform default"}
+          </span>
+          {settings.masked_api_key && <span className="font-mono text-xs text-slate-400">{settings.masked_api_key}</span>}
+          <span className="text-xs text-slate-500">model: {settings.model}</span>
+          {settings.configured && (
+            <button onClick={clearKey} className="ml-auto rounded-md border border-slate-700 px-2.5 py-1 text-xs font-bold text-slate-300 hover:border-red-500 hover:text-red-400">
+              Clear key
+            </button>
+          )}
+        </div>
+      )}
+
+      <div className="rounded-xl border border-slate-700 bg-slate-900/60 p-5">
+        <h3 className="mb-4 text-base font-bold text-slate-100">Update API Key</h3>
+        <div className="grid gap-3 md:grid-cols-2">
+          <label className="text-xs text-slate-400">
+            OpenAI API key
+            <input
+              type="password"
+              value={apiKeyInput}
+              onChange={(e) => setApiKeyInput(e.target.value)}
+              className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200"
+              placeholder="sk-... (leave blank to keep the current key)"
+              autoComplete="off"
+            />
+          </label>
+          <label className="text-xs text-slate-400">
+            Model
+            <input
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+              className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200"
+              placeholder="gpt-4o-mini"
+            />
+          </label>
+        </div>
+        {error && <p className="mt-3 text-xs text-red-400">{error}</p>}
+        {message && <p className="mt-3 text-xs text-emerald-400">{message}</p>}
+        <button onClick={save} className="mt-4 rounded-lg bg-sky-600 px-4 py-2 text-sm font-bold text-white hover:bg-sky-500">
+          Save
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function emptyUserForm() {
   return { email: "", password: "", name: "", role: USER_ROLES[1] as string };
 }
@@ -1256,6 +1363,7 @@ export default function AdminPage() {
           ["ponr", "PONR Policies"],
           ["feasibility", "Feasibility Checks"],
           ["orchestration", "Orchestration Mode"],
+          ["ai", "AI Settings"],
           ["users", "Users"],
           ["tests", "Test Suite"],
         ] as [Section, string][]).map(([id, label]) => (
@@ -1278,6 +1386,7 @@ export default function AdminPage() {
       {section === "ponr" && <PonrPoliciesSection />}
       {section === "feasibility" && <FeasibilityCheckTypesSection />}
       {section === "orchestration" && <OrchestrationPoliciesSection />}
+      {section === "ai" && <AiSettingsSection />}
       {section === "users" && <UsersSection />}
       {section === "tests" && <TestSuiteSection />}
     </div>

@@ -1,4 +1,5 @@
 import type {
+  AiSettings,
   ApprovalChainTemplate,
   AttributeConstraintRule,
   AuditLogDetail,
@@ -7,6 +8,7 @@ import type {
   DashboardSummary,
   FeasibilityCheckType,
   IdentityProvider,
+  IntentAssist,
   IntentResponse,
   Lead,
   Offering,
@@ -153,6 +155,13 @@ export function getTestRun(id: number): Promise<TestRun> {
 
 export function submitIntent(text: string): Promise<IntentResponse> {
   return request<IntentResponse>("/api/intents", {
+    method: "POST",
+    body: JSON.stringify({ text }),
+  });
+}
+
+export function assistIntent(text: string): Promise<IntentAssist> {
+  return request<IntentAssist>("/api/intents/assist", {
     method: "POST",
     body: JSON.stringify({ text }),
   });
@@ -416,4 +425,16 @@ export function deactivateOrchestrationPolicy(id: number): Promise<Orchestration
 
 export function deleteOrchestrationPolicy(id: number): Promise<void> {
   return request<void>(`/api/admin/orchestration-policies/${id}`, { method: "DELETE" });
+}
+
+export function getAiSettings(): Promise<AiSettings> {
+  return request<AiSettings>("/api/admin/ai-settings");
+}
+
+export function updateAiSettings(payload: { api_key: string | null; model: string; is_active: boolean }): Promise<AiSettings> {
+  return request<AiSettings>("/api/admin/ai-settings", { method: "PUT", body: JSON.stringify(payload) });
+}
+
+export function clearAiSettings(): Promise<void> {
+  return request<void>("/api/admin/ai-settings", { method: "DELETE" });
 }

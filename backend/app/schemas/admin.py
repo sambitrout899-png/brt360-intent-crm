@@ -222,6 +222,23 @@ class OrchestrationPolicyOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class AiSettingsUpdate(BaseModel):
+    # Omitted or blank api_key leaves the currently-stored key unchanged -
+    # this endpoint never echoes a real key back, so "leave blank to keep"
+    # is the only way to update just the model without re-pasting the key.
+    api_key: str | None = None
+    model: str = Field(default="gpt-4o-mini", min_length=1, max_length=100)
+    is_active: bool = True
+
+
+class AiSettingsOut(BaseModel):
+    configured: bool  # whether this tenant has its own key on file
+    masked_api_key: str | None
+    model: str
+    is_active: bool
+    using_global_fallback: bool  # true if this tenant has no key of its own
+
+
 class TestRunSummaryOut(BaseModel):
     id: int
     status: str

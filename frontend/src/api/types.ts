@@ -45,6 +45,24 @@ export interface IntentResponse {
   events: string[];
 }
 
+export interface IntentAssist {
+  intent_type: string | null;
+  intent_label: string | null;
+  confidence: number;
+  rationale: string;
+  entities: Record<string, unknown>;
+  required_fields: string[];
+  missing_fields: string[];
+}
+
+export interface AiSettings {
+  configured: boolean;
+  masked_api_key: string | null;
+  model: string;
+  is_active: boolean;
+  using_global_fallback: boolean;
+}
+
 export interface Offering {
   id: number;
   name: string;

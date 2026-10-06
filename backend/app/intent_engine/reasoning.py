@@ -60,6 +60,14 @@ _REQUIRED_FIELDS: dict[str, list[str]] = {
 }
 
 
+def required_fields_for(intent_type: str) -> list[str]:
+    """Public accessor for the Expression Builder's live field checklist
+    (POST /api/intents/assist) - the same required-field list auto-
+    execution gates on, just surfaced before submission instead of after.
+    """
+    return list(_REQUIRED_FIELDS.get(intent_type, []))
+
+
 def _missing_fields(intent_type: str, entities: dict[str, Any]) -> list[str]:
     required = _REQUIRED_FIELDS.get(intent_type, [])
     missing = []

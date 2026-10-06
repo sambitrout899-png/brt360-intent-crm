@@ -28,3 +28,22 @@ class IntentResponse(BaseModel):
     plan: list[PlanStep]
     result: dict[str, Any] | None = None
     events: list[str] = []
+
+
+class IntentAssistRequest(BaseModel):
+    text: str
+
+
+class IntentAssistResponse(BaseModel):
+    """Live "Expression Builder" feedback while the user is still
+    typing - never executes anything, just runs the same classifier the
+    real submission will use and reports what it currently understands.
+    """
+
+    intent_type: str | None
+    intent_label: str | None
+    confidence: float
+    rationale: str
+    entities: dict[str, Any]
+    required_fields: list[str]
+    missing_fields: list[str]

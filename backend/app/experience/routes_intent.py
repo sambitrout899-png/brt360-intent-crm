@@ -29,7 +29,7 @@ from app.orchestration import (
     actions_t2r,
 )
 from app.orchestration.orchestrator import run_saga
-from app.schemas.intent import IntentRequest, IntentResponse, PlanStep
+from app.schemas.intent import IntentAssistRequest, IntentAssistResponse, IntentRequest, IntentResponse, PlanStep
 from app.tenancy import get_current_tenant_id
 
 # viewer is read-only - blocked from submitting intents (the only way
@@ -79,7 +79,7 @@ def submit_intent(
     log = audit.start_execution(db, tenant_id, request.text, channel=request.channel)
 
     # 1. Intent Capture (classification)
-    classification = classifier.classify(request.text)
+    classification = classifier.classify(request.text, db, tenant_id)
 
     # 2. Context Assembly
     context = (
@@ -160,4 +160,35 @@ def submit_intent(
         plan=plan_steps,
         result=saga_result.result,
         events=events,
+    )
+
+
+@router.post("/assist", response_model=IntentAssistResponse)
+def assist_intent(
+    request: IntentAssistRequest,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_current_tenant_id),
+) -> IntentAssistResponse:
+    """The Expression Builder's live intellisense - runs the exact same
+    classifier the real submission uses (same tenant-resolved AI key,
+    same prompt, same casual-English tolerance) against whatever the
+    user has typed so far, and reports what it currently understands:
+    which intent, which required fields are already filled, which are
+    still missing. Never executes anything, never writes an audit log
+    entry - purely advisory, called repeatedly (debounced) while typing.
+    """
+    classification = classifier.classify(request.text, db, tenant_id)
+    required = reasoning.required_fields_for(classification.intent_type) if classification.intent_type else []
+    missing = [
+        f for f in required
+        if classification.entities.get(f) is None or classification.entities.get(f) == "" or classification.entities.get(f) == []
+    ]
+    return IntentAssistResponse(
+        intent_type=classification.intent_type,
+        intent_label=classifier.INTENT_LABELS.get(classification.intent_type) if classification.intent_type else None,
+        confidence=classification.confidence,
+        rationale=classification.rationale,
+        entities=classification.entities,
+        required_fields=required,
+        missing_fields=missing,
     )

@@ -1,15 +1,22 @@
 """NLU/LLM Intent Classifier (HLD 4.1).
 
-Primary path: OpenAI structured-output classification (requires
-OPENAI_API_KEY). Fallback path: a deterministic, keyword + key:value field
-parser - fully functional for dev/test with zero external calls or cost, and
-exercised directly by the pytest suite so CI never needs a real API key.
+Primary path: OpenAI structured-output classification - casual,
+loosely-structured English, no field:value syntax required. The key
+used is resolved per-tenant first (app/models/ai_settings.py, admin-
+configurable - see /api/admin/ai-settings), falling back to the global
+OPENAI_API_KEY in app.config when a tenant hasn't configured its own.
+Fallback path (no key anywhere): a deterministic, keyword + key:value
+field parser - fully functional for dev/test with zero external calls
+or cost, and exercised directly by the pytest suite so CI never needs a
+real API key.
 
 Fallback phrasing convention (documented here, not a general NLP system):
 free text may contain `field: value` pairs (comma- or newline-separated,
 list-valued fields use `+` between items since `,` is the field separator),
 read in addition to a keyword that selects the intent type. See each
 INT-xx block in _classify_with_rules for its keyword + expected fields.
+This rigid format is ONLY the no-key fallback's contract - the LLM path
+needs no particular structure at all.
 """
 
 from __future__ import annotations
@@ -18,6 +25,8 @@ import json
 import re
 from dataclasses import dataclass, field
 from typing import Any
+
+from sqlalchemy.orm import Session
 
 from app.config import get_settings
 
@@ -32,7 +41,21 @@ SUPPORTED_INTENTS = (
 )
 
 _SYSTEM_PROMPT = """You are the NLU classifier for BRT 360, a telecom Intent CRM.
-Classify the user's free text into exactly one of these 14 intent types, or UNKNOWN:
+
+The user's input is ordinary, casual English - never require any particular
+sentence structure, keyword, or "field: value" syntax (that rigid format is
+only a fallback parser's contract when no AI is available, not yours). The
+input may be ungrammatical, loosely worded, missing punctuation, or contain
+typos and misspellings (of product names, company names, or anything else) -
+silently correct and normalize these when extracting entities; do not let a
+typo or awkward phrasing prevent a confident classification when the intent
+is otherwise clear. Infer entity values from context and common sense (e.g.
+"the Fiber 500 plan" -> offering_name "Fiber 500 Bundle" if that is the
+closest known name), and leave an entity out of your JSON only when the text
+truly gives no basis for it - never guess a numeric id that was not stated or
+clearly implied.
+
+Classify the user's free text into exactly one of these 28 intent types, or UNKNOWN:
 
 INT-01 "Launch a new bundle" - entities: name (str), composition (list[str] of
   product names, first is the primary connectivity line), segment (str, e.g.
@@ -162,6 +185,38 @@ Respond with strict JSON only:
 """
 
 
+INTENT_LABELS: dict[str, str] = {
+    "INT-01": "Launch a new bundle",
+    "INT-02": "Modify a live bundle",
+    "INT-03": "Retire a bundle",
+    "INT-04": "Qualify this lead",
+    "INT-05": "Configure & quote this bundle",
+    "INT-06": "Check feasibility & approve",
+    "INT-07": "Activate this order end-to-end",
+    "INT-08": "Change this live service",
+    "INT-09": "Suspend, cancel or terminate",
+    "INT-10": "Log & classify this complaint",
+    "INT-11": "Diagnose the root cause",
+    "INT-12": "Assign & track the field team",
+    "INT-13": "Verify customer identity",
+    "INT-14": "Provision this site",
+    "INT-15": "Add a prospect",
+    "INT-16": "Add a product to this lead",
+    "INT-17": "Approve this lead",
+    "INT-18": "Run feasibility assessment",
+    "INT-19": "Revise this quote",
+    "INT-20": "Cancel this quote",
+    "INT-21": "Revise this order",
+    "INT-22": "Generate proposal for this quote",
+    "INT-23": "Record customer approval of the proposal",
+    "INT-24": "Generate order from quote",
+    "INT-25": "Approve this order",
+    "INT-26": "Close Work Order 1 (Installation)",
+    "INT-27": "Close Work Order 2 (Connectivity Test & Acceptance)",
+    "INT-28": "Close Work Order 3 (Acceptance Letter)",
+}
+
+
 @dataclass
 class ClassificationResult:
     intent_type: str | None
@@ -170,10 +225,20 @@ class ClassificationResult:
     rationale: str = ""
 
 
-def classify(text: str) -> ClassificationResult:
+def classify(text: str, db: Session | None = None, tenant_id: int | None = None) -> ClassificationResult:
+    """db/tenant_id let the LLM path resolve a tenant's own configured
+    API key (app/crm_core/ai_settings_service.py) ahead of the global
+    one; both are optional so any existing call site that only has text
+    keeps working exactly as before, just always on the global key.
+    """
     settings = get_settings()
-    if settings.openai_api_key:
-        return _classify_with_openai(text, settings.openai_api_key, settings.openai_model)
+    api_key, model = settings.openai_api_key, settings.openai_model
+    if db is not None and tenant_id is not None:
+        from app.crm_core import ai_settings_service
+
+        api_key, model = ai_settings_service.resolve_api_key_and_model(db, tenant_id)
+    if api_key:
+        return _classify_with_openai(text, api_key, model)
     return _classify_with_rules(text)
 
 
