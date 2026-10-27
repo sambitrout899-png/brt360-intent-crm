@@ -1,0 +1,12 @@
+.venv
+**/__pycache__
+.pytest_cache
+.env
+.env.*
+!.env.example
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+# keys are mounted at run time, never baked into an image
+*.pem

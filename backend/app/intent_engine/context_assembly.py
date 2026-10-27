@@ -118,7 +118,7 @@ def assemble_context(db: Session, tenant_id: int, intent_type: str, entities: di
             else None
         )
 
-    elif intent_type in ("INT-19", "INT-20"):
+    elif intent_type in ("INT-19", "INT-20", "INT-116"):
         quote = _get_owned(db, Quote, tenant_id, entities.get("quote_id"))
         context["quote"] = (
             {"id": quote.id, "status": quote.status.value, "total_price": quote.total_price, "discount_pct": quote.requested_discount_pct}
@@ -184,6 +184,7 @@ def assemble_context(db: Session, tenant_id: int, intent_type: str, entities: di
                 .first()
             )
             context["customer_approved_proposal"] = {"id": approved_proposal.id} if approved_proposal else None
+            context["po_matched"] = quote.purchase_order is not None and quote.purchase_order.matched_at is not None
 
     elif intent_type == "INT-25":
         order = _get_owned(db, Order, tenant_id, entities.get("order_id"))
@@ -207,10 +208,16 @@ def assemble_context(db: Session, tenant_id: int, intent_type: str, entities: di
         party = _get_owned(db, Party, tenant_id, entities.get("party_id"))
         context["party"] = {"id": party.id, "name": party.name} if party else None
         tenant = db.get(Tenant, tenant_id)
-        if tenant is not None and tenant.vertical == TenantVertical.b2b:
+        # A B2B-only tenant verifies businesses - a commercial registration
+        # (checked with WATHQ) - not people's personal IDs.
+        business_id = str(entities.get("id_type") or "").strip().lower().replace(" ", "_") == "commercial_registration"
+        from app.crm_core.b2c_order_service import is_b2c
+        if party is not None and is_b2c(party) and (business_id or str(entities.get("provider") or "").upper() == "WATHQ"):
+            context["vertical_blocked"] = "B2C customers need a personal identity document and provider; commercial registration and WATHQ are for businesses."
+        if tenant is not None and tenant.vertical == TenantVertical.b2b and not business_id:
             context["vertical_blocked"] = (
-                f"INT-13 (identity verification) is a B2C process-pack feature; tenant '{tenant.slug}' is "
-                f"configured for B2B only."
+                "Personal ID checks (national ID, passport, iqama) are switched off - this company is set up for "
+                "B2B only. To verify a business customer, choose ID type “commercial registration”."
             )
 
     elif intent_type == "INT-14":
@@ -223,9 +230,109 @@ def assemble_context(db: Session, tenant_id: int, intent_type: str, entities: di
         tenant = db.get(Tenant, tenant_id)
         if tenant is not None and tenant.vertical == TenantVertical.b2c:
             context["vertical_blocked"] = (
-                f"INT-14 (multi-site provisioning) is a B2B process-pack feature; tenant '{tenant.slug}' is "
-                f"configured for B2C only."
+                "Provisioning an order site by site is for business customers - this company is set up for "
+                "B2C only, so its orders are provisioned in one go when they're activated."
             )
+
+    elif intent_type in ("INT-29", "INT-31", "INT-32"):
+        from app.crm_core import lifecycle_service
+
+        entity_type = lifecycle_service.normalize_entity_type(entities.get("entity_type"))
+        obj = lifecycle_service.get_record(db, tenant_id, entity_type, entities.get("entity_id")) if entity_type else None
+        if obj is None:
+            context["record"] = None
+        else:
+            editable, state = lifecycle_service.is_editable(db, tenant_id, entity_type, obj)
+            context["record"] = {"entity_type": entity_type, "id": obj.id, "state": state}
+            context["editable"] = editable
+            if intent_type == "INT-31":
+                transition, error = lifecycle_service.find_transition(
+                    db, tenant_id, entity_type, obj, entities.get("action"), entities.get("to_state"), entities.get("_actor_role"),
+                    entities.get("_actor_user_id"),
+                )
+                if transition is None:
+                    context["transition_error"] = error
+                elif transition.intent_type:
+                    context["transition_error"] = (
+                        f"'{transition.action}' is owned by {transition.intent_type} - use that intent instead"
+                    )
+            if intent_type == "INT-32":
+                lifecycle_service.normalize_assignee(db, tenant_id, entities)
+                if entities.get("to_department") and lifecycle_service.resolve_department(db, tenant_id, entities["to_department"]) is None \
+                        and lifecycle_service.department_named(db, tenant_id, entities["to_department"]) is None:
+                    context["unknown_position"] = entities["to_department"]
+                if entities.get("to_user") and lifecycle_service.resolve_user(db, tenant_id, entities["to_user"]) is None:
+                    context["unknown_user"] = entities["to_user"]
+                if entities.get("to_position") and lifecycle_service.resolve_position(db, tenant_id, entities["to_position"]) is None:
+                    context["unknown_position"] = entities["to_position"]
+
+    elif intent_type == "INT-30":
+        from app.crm_core import lifecycle_service
+
+        quote = _get_owned(db, Quote, tenant_id, entities.get("quote_id"))
+        context["quote"] = {"id": quote.id, "status": quote.status.value, "revision_number": quote.revision_number} if quote else None
+        if quote is not None:
+            context["quote_editable"] = lifecycle_service.is_editable(db, tenant_id, "quote", quote)[0]
+
+    elif intent_type == "INT-35":
+        party = _get_owned(db, Party, tenant_id, entities.get("party_id"))
+        context["party"] = {"id": party.id, "name": party.name} if party else None
+
+    elif intent_type in ("INT-37", "INT-38"):
+        opportunity = _get_owned(db, Opportunity, tenant_id, entities.get("opportunity_id"))
+        context["opportunity"] = {"id": opportunity.id, "stage": opportunity.stage.value} if opportunity else None
+
+    elif intent_type in ("INT-39", "INT-40", "INT-109"):
+        quote = _get_owned(db, Quote, tenant_id, entities.get("quote_id"))
+        context["quote"] = {"id": quote.id, "status": quote.status.value} if quote else None
+
+    elif intent_type in ("INT-42", "INT-43", "INT-44", "INT-45"):
+        from app.crm_core import lifecycle_service, process_service
+
+        if intent_type in ("INT-42", "INT-43"):
+            from app.crm_core import product_model_service
+            from app.models.catalog import OfferingStatus
+
+            # on sale, or a draft being designed / priced before launch
+            offering = tmf620_adapter.get_active_offering_by_name(db, tenant_id, entities.get("offering_name", "") or "") or \
+                product_model_service.offering_of(db, tenant_id, entities.get("offering_name", "") or "")
+            if offering is not None and offering.status == OfferingStatus.retired:
+                offering = None
+            context["offering"] = {"id": offering.id, "name": offering.name} if offering else None
+        if intent_type in ("INT-43", "INT-44"):
+            price_list = process_service.find_price_list(db, tenant_id, entities.get("price_list"))
+            context["price_list"] = {"id": price_list.id, "name": price_list.name} if price_list else None
+        if intent_type == "INT-44":
+            entity_type = lifecycle_service.normalize_entity_type(entities.get("entity_type"))
+            obj = lifecycle_service.get_record(db, tenant_id, entity_type, entities.get("entity_id")) if entity_type else None
+            context["record"] = {"entity_type": entity_type, "id": obj.id} if obj is not None else None
+        if intent_type == "INT-45":
+            order = _get_owned(db, Order, tenant_id, entities.get("order_id"))
+            context["order"] = {"id": order.id, "status": order.status.value} if order else None
+
+    elif intent_type == "INT-36":
+        from app.crm_core import approval_service, lifecycle_service
+        from app.models.crm import ApprovalStatus
+
+        entity_type = lifecycle_service.normalize_entity_type(entities.get("entity_type"))
+        obj = lifecycle_service.get_record(db, tenant_id, entity_type, entities.get("entity_id")) if entity_type else None
+        context["record"] = {"entity_type": entity_type, "id": obj.id} if obj is not None else None
+        embedded = {rt: et for rt, (et, _, _) in approval_service.EMBEDDED.items() if et not in lifecycle_service.ENTITY_MODELS}
+        raw_type = str(entities.get("entity_type") or "").strip().lower()
+        if obj is None and raw_type in embedded:
+            # bill adjustments / payment arrangements: known through their approval
+            try:
+                rows = [i for i in approval_service.latest_for(db, raw_type, int(entities.get("entity_id")))
+                        if i.template and i.template.tenant_id == tenant_id]
+            except (TypeError, ValueError):
+                rows = []
+            if rows:
+                context["record"] = {"entity_type": raw_type, "id": rows[0].entity_id}
+                context["approval_pending"] = any(i.status == ApprovalStatus.pending for i in rows)
+        if obj is not None:
+            context["approval_pending"] = any(
+                i.status == ApprovalStatus.pending for i in approval_service.latest_for(db, entity_type, obj.id)
+            ) or approval_service.classic_waiting(db, tenant_id, entity_type, obj.id) is not None
 
     elif intent_type == "INT-12":
         if entities.get("work_order_id"):

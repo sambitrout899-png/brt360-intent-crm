@@ -244,14 +244,17 @@ def _active_order(client, offering_name="Fiber 400", price=1000, company="OrderC
     ).json()["result"]["order_id"]
 
 
-def test_int21_revise_order_blocked_once_active(client):
+def test_int21_revise_order_blocked_once_completed(client):
     order_id = _active_order(client, company="ReviseActiveBlockedCo")
 
     resp = client.post(
         "/api/intents",
         json={"text": f"Revise this order. order_id: {order_id}, new_price: 1200"},
     )
-    assert resp.json()["status"] == "needs_review"
+    # a completed order is read-only - the change goes through its installed asset
+    body = resp.json()
+    assert body["status"] == "failed"
+    assert "change order from the installed asset" in body["error"]["message"]
 
 
 def test_ponr_defaults_allow_pre_activation_order_statuses(client):

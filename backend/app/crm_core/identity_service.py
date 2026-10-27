@@ -33,6 +33,18 @@ def _stub_check(id_number: str) -> str:
 def submit_verification(
     db: Session, tenant_id: int, party_id: int, provider_name: str, id_type: str, id_number: str
 ) -> IdentityVerification:
+    from app.models.crm import Party
+    from app.crm_core.b2c_order_service import is_b2c
+    party = db.get(Party, party_id)
+    if party is None or party.tenant_id != tenant_id:
+        raise ValueError("Customer not found in this workspace")
+    id_type = str(id_type).strip().lower().replace(" ", "_")
+    if id_type not in ("national_id", "passport", "iqama", "commercial_registration"):
+        raise ValueError("Unsupported identity document type")
+    if is_b2c(party) and id_type == "commercial_registration":
+        raise ValueError("Commercial registration is for businesses. Select a personal identity document for this B2C customer.")
+    if is_b2c(party) and provider_name.upper() == "WATHQ":
+        raise ValueError("WATHQ is the business registration provider. Select a personal identity verification provider for this B2C customer.")
     outcome = _stub_check(id_number)
     detail = {
         "verified": "",

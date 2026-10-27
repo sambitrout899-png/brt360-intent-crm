@@ -1,0 +1,63 @@
+{
+  "uid": "brt360-api",
+  "title": "BRT 360 - API",
+  "schemaVersion": 39,
+  "refresh": "30s",
+  "time": {"from": "now-6h", "to": "now"},
+  "tags": ["brt360"],
+  "panels": [
+    {
+      "id": 1, "type": "stat", "title": "API up",
+      "gridPos": {"x": 0, "y": 0, "w": 6, "h": 5},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "up{job=\"brt360-api\"}"}],
+      "fieldConfig": {"defaults": {"mappings": [{"type": "value", "options": {"0": {"text": "DOWN", "color": "red"}, "1": {"text": "UP", "color": "green"}}}]}, "overrides": []},
+      "options": {"colorMode": "background", "reduceOptions": {"calcs": ["lastNotNull"]}}
+    },
+    {
+      "id": 2, "type": "stat", "title": "Server errors (5xx), last 15 min",
+      "gridPos": {"x": 6, "y": 0, "w": 6, "h": 5},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "100 * sum(rate(brt360_http_requests_total{status=~\"5..\"}[15m])) / clamp_min(sum(rate(brt360_http_requests_total[15m])), 1e-9)"}],
+      "fieldConfig": {"defaults": {"unit": "percent", "decimals": 2, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 1}, {"color": "red", "value": 5}]}}, "overrides": []},
+      "options": {"colorMode": "value", "reduceOptions": {"calcs": ["lastNotNull"]}}
+    },
+    {
+      "id": 3, "type": "stat", "title": "p95 response time, last 15 min",
+      "gridPos": {"x": 12, "y": 0, "w": 6, "h": 5},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "histogram_quantile(0.95, sum by (le) (rate(brt360_http_request_duration_seconds_bucket[15m])))"}],
+      "fieldConfig": {"defaults": {"unit": "s", "decimals": 2, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 0.3}, {"color": "red", "value": 1}]}}, "overrides": []},
+      "options": {"colorMode": "value", "reduceOptions": {"calcs": ["lastNotNull"]}}
+    },
+    {
+      "id": 4, "type": "stat", "title": "Requests per second",
+      "gridPos": {"x": 18, "y": 0, "w": 6, "h": 5},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "sum(rate(brt360_http_requests_total[5m]))"}],
+      "fieldConfig": {"defaults": {"unit": "reqps", "decimals": 2}, "overrides": []},
+      "options": {"colorMode": "none", "reduceOptions": {"calcs": ["lastNotNull"]}}
+    },
+    {
+      "id": 5, "type": "timeseries", "title": "Requests per second by outcome",
+      "gridPos": {"x": 0, "y": 5, "w": 12, "h": 9},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "sum by (class) (label_replace(rate(brt360_http_requests_total[5m]), \"class\", \"${1}xx\", \"status\", \"(.).*\"))", "legendFormat": "{{class}}"}],
+      "fieldConfig": {"defaults": {"unit": "reqps"}, "overrides": []}
+    },
+    {
+      "id": 6, "type": "timeseries", "title": "p95 response time - 8 slowest routes",
+      "gridPos": {"x": 12, "y": 5, "w": 12, "h": 9},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "topk(8, histogram_quantile(0.95, sum by (le, route) (rate(brt360_http_request_duration_seconds_bucket[5m]))))", "legendFormat": "{{route}}"}],
+      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []}
+    },
+    {
+      "id": 7, "type": "table", "title": "Routes answering with server errors (5xx), last hour",
+      "gridPos": {"x": 0, "y": 14, "w": 24, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "sort_desc(sum by (method, route, status) (increase(brt360_http_requests_total{status=~\"5..\"}[1h])) > 0)", "format": "table", "instant": true}],
+      "fieldConfig": {"defaults": {}, "overrides": []}
+    }
+  ]
+}

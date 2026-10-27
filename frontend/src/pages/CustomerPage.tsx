@@ -1,276 +1,106 @@
-import { useEffect, useState } from "react";
-import { listParties, party360 } from "../api/client";
-import type { Party, Party360 } from "../api/types";
+import { useCallback, useEffect, useState } from "react";
+import { customersList, type CustomerRow } from "../api/client";
+import type { C360View } from "../api/c360Types";
+import { useIntentRefresh, useWorkspace } from "../workspace";
+import AccountWorkspace from "./customer360/AccountWorkspace";
+import { formatValue, initials } from "./customer360/format";
+import { workspaceFrame, type PageTabId } from "./customer360/workspacePresentation";
+import "./customer360/accountSummary.css";
 
-function ActionButton({ label, onClick }: { label: string; onClick: () => void }) {
-  return (
-    <button
-      onClick={onClick}
-      className="rounded-md border border-sky-500/40 bg-sky-500/10 px-2.5 py-1 text-xs font-bold text-sky-400 hover:bg-sky-500/20"
-    >
-      {label}
-    </button>
-  );
-}
-
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div className="rounded-xl border border-slate-700 bg-slate-900/60 p-4">
-      <h3 className="mb-3 font-bold text-slate-100">{title}</h3>
-      {children}
-    </div>
-  );
-}
-
+/** Customer 360: the account list and one customer's workspace. The
+ * workspace itself (header, tabs, content) is the shared AccountWorkspace,
+ * which the Configure 360 studio previews unchanged. */
 export default function CustomerPage({ onRequestIntent }: { onRequestIntent: (text: string) => void }) {
-  const [parties, setParties] = useState<Party[]>([]);
+  const ws = useWorkspace();
+  const [rows, setRows] = useState<CustomerRow[]>([]);
   const [search, setSearch] = useState("");
+  const [filter, setFilter] = useState<"all" | "account" | "prospect" | "attention">("all");
+  const [segment, setSegment] = useState<"all" | "B2B" | "B2C">("all");
   const [selectedId, setSelectedId] = useState<number | null>(null);
-  const [detail, setDetail] = useState<Party360 | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [tab, setTab] = useState<PageTabId>("overview");
+  const [view, setView] = useState<C360View | null>(null);
+  const [phoneView, setPhoneView] = useState<"list" | "customer">("list");
+  const [error, setError] = useState("");
 
-  useEffect(() => {
-    const handle = setTimeout(() => {
-      listParties(search || undefined).then(setParties);
-    }, 250);
-    return () => clearTimeout(handle);
+  const loadList = useCallback(() => {
+    customersList(search || undefined).then(list => {
+      setRows(list);
+      setError("");
+      setSelectedId(cur => cur ?? list[0]?.id ?? null);
+    }).catch(() => setError("Could not load customers"));
   }, [search]);
+  useEffect(() => { const timer = setTimeout(loadList, 250); return () => clearTimeout(timer); }, [loadList]);
+  useIntentRefresh(loadList);
 
-  useEffect(() => {
-    if (selectedId === null) return;
-    setLoading(true);
-    party360(selectedId)
-      .then(setDetail)
-      .finally(() => setLoading(false));
-  }, [selectedId]);
+  const selectCustomer = (id: number) => {
+    setSelectedId(id);
+    setTab("overview");
+    setPhoneView("customer");
+  };
+  const selectedName = rows.find(r => r.id === selectedId)?.name;
+  const { setCurrentRecord } = ws;
+  useEffect(() => { setCurrentRecord?.(selectedId !== null ? { entityType: "party", entityId: selectedId, title: selectedName } : null); }, [selectedId, selectedName, setCurrentRecord]);
+
+  const shown = rows.filter(r => (filter === "all" || (filter === "attention" ? r.urgent_tickets > 0 || r.open_deals > 0 : r.status === filter)) && (segment === "all" || r.segment === segment));
 
   return (
-    <div className="mx-auto max-w-6xl space-y-6">
-      <div className="flex items-start justify-between gap-4">
+    <div className="page account-workspace" {...workspaceFrame(view)}>
+      <div className="account-page-heading">
         <div>
-          <h1 className="text-2xl font-bold text-slate-100">Customer 360</h1>
-          <p className="mt-1 text-sm text-slate-400">Every lead, quote, order, bill, and ticket for one customer, in one view.</p>
+          <h1>Customer 360</h1>
+          <p>Accounts, services, orders, billing and service requests in one place.</p>
         </div>
-        <ActionButton label="+ Add Prospect" onClick={() => onRequestIntent("Add this prospect. name: , email: ")} />
-      </div>
-
-      <input
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-        placeholder="Search customers by name…"
-        className="w-full max-w-sm rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-sky-500"
-      />
-
-      <div className="grid gap-6 lg:grid-cols-[260px_1fr]">
-        <div className="space-y-1">
-          {parties.map((p) => (
-            <button
-              key={p.id}
-              onClick={() => setSelectedId(p.id)}
-              className={`block w-full rounded-lg px-3 py-2 text-left text-sm ${
-                selectedId === p.id ? "bg-sky-600 text-white" : "bg-slate-900/60 text-slate-300 hover:bg-slate-800"
-              }`}
-            >
-              {p.name}
+        <div className="account-page-actions">
+          {ws.canRun("INT-15") && <button type="button" className="account-button" onClick={() => ws.runIntent("INT-15")}>Add prospect</button>}
+          {ws.openConfigure360 && (
+            <button type="button" className="account-button" onClick={() => ws.openConfigure360?.({ partyId: selectedId ?? undefined })} title="Design this page in Configure 360">
+              Configure page{view?.version !== undefined && <span className="account-version">v{view.version}</span>}
             </button>
-          ))}
-          {parties.length === 0 && <p className="text-sm text-slate-500">No customers yet — qualify a lead first.</p>}
-        </div>
-
-        <div className="space-y-4">
-          {loading && <p className="text-sm text-slate-500">Loading…</p>}
-          {!loading && !detail && <p className="text-sm text-slate-500">Select a customer.</p>}
-          {!loading && detail && (
-            <>
-              <Section title={detail.party.name}>
-                <div className="flex flex-wrap gap-4 text-sm text-slate-400">
-                  <span>Type: {detail.party.party_type}</span>
-                  {detail.party.email && <span>Email: {detail.party.email}</span>}
-                  {detail.party.phone && <span>Phone: {detail.party.phone}</span>}
-                </div>
-              </Section>
-
-              <Section title={`Identity Verification (${detail.identity_verifications.length})`}>
-                {detail.identity_verifications.map((v) => (
-                  <div key={v.id} className="flex items-center gap-3 rounded-lg bg-slate-950 px-3 py-2 text-sm mb-2">
-                    <span className="text-slate-200">{v.provider_name}</span>
-                    <span className="text-xs text-slate-500">{v.id_type} ····{v.id_last4}</span>
-                    <span
-                      className={`ml-auto rounded-md px-2 py-0.5 text-xs font-bold ${
-                        v.status === "verified"
-                          ? "bg-emerald-500/15 text-emerald-400"
-                          : v.status === "rejected"
-                            ? "bg-red-500/15 text-red-400"
-                            : "bg-amber-500/15 text-amber-400"
-                      }`}
-                    >
-                      {v.status}
-                    </span>
-                  </div>
-                ))}
-                {detail.identity_verifications.length === 0 && <p className="text-sm text-slate-500 mb-2">None yet.</p>}
-                <ActionButton
-                  label="Verify Identity"
-                  onClick={() => onRequestIntent(`Verify customer identity. party_id: ${detail.party.id}, id_number: `)}
-                />
-              </Section>
-
-              <Section title={`Leads (${detail.leads.length})`}>
-                {detail.leads.map((l) => (
-                  <div key={l.id} className="rounded-lg bg-slate-950 px-3 py-2 text-sm mb-2">
-                    <div className="flex items-center gap-3">
-                      <span className="font-mono text-xs text-slate-500">#{l.id}</span>
-                      <span className="text-slate-200">{l.interested_offering_name || "no product yet"}</span>
-                      <span className="rounded-md bg-slate-800 px-2 py-0.5 text-xs text-slate-300">{l.status}</span>
-                      {l.status === "pending_qualification" && (
-                        <>
-                          <ActionButton label="Add Product" onClick={() => onRequestIntent(`Add this product to the lead. lead_id: ${l.id}, offering_name: `)} />
-                          <ActionButton label="Approve/Reject" onClick={() => onRequestIntent(`Approve this lead. lead_id: ${l.id}, reasoning: `)} />
-                        </>
-                      )}
-                    </div>
-                  </div>
-                ))}
-                {detail.leads.length === 0 && <p className="text-sm text-slate-500">None.</p>}
-              </Section>
-
-              <Section title={`Opportunities (${detail.opportunities.length})`}>
-                {detail.opportunities.map((o) => (
-                  <div key={o.id} className="rounded-lg bg-slate-950 px-3 py-2 text-sm mb-2">
-                    <div className="flex items-center gap-3">
-                      <span className="font-mono text-xs text-slate-500">#{o.id}</span>
-                      <span className="text-slate-200">{o.name}</span>
-                      <span className="rounded-md bg-slate-800 px-2 py-0.5 text-xs text-slate-300">{o.stage}</span>
-                      <ActionButton label="Check Feasibility" onClick={() => onRequestIntent(`Run feasibility assessment. opportunity_id: ${o.id}, address: `)} />
-                    </div>
-                    {o.feasibility_assessments.length > 0 && (
-                      <div className="mt-2 pl-3 text-xs text-slate-500">
-                        Latest feasibility: {o.feasibility_assessments[0].outcome}
-                      </div>
-                    )}
-                  </div>
-                ))}
-                {detail.opportunities.length === 0 && <p className="text-sm text-slate-500">None.</p>}
-              </Section>
-
-              <Section title={`Quotes (${detail.quotes.length})`}>
-                {detail.quotes.map((q) => (
-                  <div key={q.id} className="rounded-lg bg-slate-950 px-3 py-2 text-sm mb-2">
-                    <div className="flex items-center gap-3">
-                      <span className="font-mono text-xs text-slate-500">#{q.id}</span>
-                      <span className="text-slate-200">₹{q.total_price.toLocaleString()}</span>
-                      <span className="rounded-md bg-slate-800 px-2 py-0.5 text-xs text-slate-300">{q.status}</span>
-                      {q.status === "draft" && (
-                        <ActionButton label="Approve" onClick={() => onRequestIntent(`Approve this quote. quote_id: ${q.id}`)} />
-                      )}
-                      {(q.status === "draft" || q.status === "pending_approval") && (
-                        <>
-                          <ActionButton label="Revise" onClick={() => onRequestIntent(`Revise this quote. quote_id: ${q.id}, discount: `)} />
-                          <ActionButton label="Cancel" onClick={() => onRequestIntent(`Cancel this quote. quote_id: ${q.id}, reasoning: `)} />
-                        </>
-                      )}
-                      {q.status === "approved" && (
-                        <>
-                          <ActionButton label="Activate (direct)" onClick={() => onRequestIntent(`Activate this order end-to-end. quote_id: ${q.id}`)} />
-                          {q.proposals.length === 0 && (
-                            <ActionButton label="Generate Proposal" onClick={() => onRequestIntent(`Generate proposal for this quote. quote_id: ${q.id}`)} />
-                          )}
-                          {q.proposals[0]?.status === "sent" && (
-                            <ActionButton
-                              label="Record Customer Decision"
-                              onClick={() =>
-                                onRequestIntent(`Record customer approval of the proposal. proposal_id: ${q.proposals[0].id}, decision: approve`)
-                              }
-                            />
-                          )}
-                          {q.proposals[0]?.status === "customer_approved" && (
-                            <ActionButton label="Generate Order (B2B)" onClick={() => onRequestIntent(`Generate order from quote. quote_id: ${q.id}`)} />
-                          )}
-                        </>
-                      )}
-                    </div>
-                  </div>
-                ))}
-                {detail.quotes.length === 0 && <p className="text-sm text-slate-500">None.</p>}
-              </Section>
-
-              {detail.billing_account && (
-                <Section title="Billing">
-                  <div className="text-sm text-slate-300">
-                    Status: {detail.billing_account.status} · Rate plan: {detail.billing_account.rate_plan} · Balance: ₹
-                    {detail.billing_account.balance.toLocaleString()}
-                  </div>
-                </Section>
-              )}
-
-              <Section title={`Service Accounts (${detail.service_accounts.length})`}>
-                {detail.service_accounts.map((sa) => (
-                  <div key={sa.id} className="mb-3 rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-sm">
-                    <div className="mb-2 flex items-center gap-3">
-                      <span className="font-semibold text-slate-200">{sa.name}</span>
-                      <span className="rounded-md bg-slate-800 px-2 py-0.5 text-xs text-slate-300">{sa.status}</span>
-                    </div>
-                    <div className="space-y-2 pl-3">
-                      {sa.orders.map((o) => (
-                        <div key={o.id} className="flex items-center gap-3 rounded-lg bg-slate-900/60 px-3 py-2">
-                          <span className="font-mono text-xs text-slate-500">#{o.id}</span>
-                          <span className="text-slate-200">₹{o.monthly_price.toLocaleString()}/mo</span>
-                          <span className="rounded-md bg-slate-800 px-2 py-0.5 text-xs text-slate-300">{o.status}</span>
-                          {(o.status === "created" || o.status === "activating") && (
-                            <ActionButton label="Revise" onClick={() => onRequestIntent(`Revise this order. order_id: ${o.id}, new_price: `)} />
-                          )}
-                          {o.status === "created" && (
-                            <ActionButton label="Approve Order" onClick={() => onRequestIntent(`Approve this order. order_id: ${o.id}, reasoning: `)} />
-                          )}
-                          {(o.status === "active" || o.status === "changed") && (
-                            <>
-                              <ActionButton label="Change" onClick={() => onRequestIntent(`Upgrade this service. order_id: ${o.id}, new_price: `)} />
-                              <ActionButton label="Cancel" onClick={() => onRequestIntent(`Cancel this service. order_id: ${o.id}`)} />
-                            </>
-                          )}
-                          {o.status === "pending_cancellation" && (
-                            <ActionButton label="Retain Customer" onClick={() => onRequestIntent(`Cancel this service. order_id: ${o.id}, decision: retain`)} />
-                          )}
-                        </div>
-                      ))}
-                      {sa.orders.length === 0 && <p className="text-xs text-slate-500">No orders under this service account.</p>}
-                      {sa.assets.length > 0 && (
-                        <div className="mt-2 space-y-1">
-                          {sa.assets.map((a) => (
-                            <div key={a.id} className="flex items-center gap-3 rounded-lg bg-slate-900/40 px-3 py-1.5 text-xs text-slate-400">
-                              <span className="font-semibold text-slate-300">{a.asset_type}</span>
-                              <span>{a.identifier}</span>
-                              <span className="rounded-md bg-slate-800 px-2 py-0.5 text-slate-300">{a.status}</span>
-                              {a.inventory_system_ref && <span className="text-slate-500">inv: {a.inventory_system_ref}</span>}
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                ))}
-                {detail.service_accounts.length === 0 && <p className="text-sm text-slate-500">None yet - created automatically on first order activation.</p>}
-              </Section>
-
-              <Section title={`Tickets (${detail.tickets.length})`}>
-                {detail.tickets.map((t) => (
-                  <div key={t.id} className="rounded-lg bg-slate-950 px-3 py-2 text-sm mb-2">
-                    <div className="flex items-center gap-3">
-                      <span className="font-mono text-xs text-slate-500">#{t.id}</span>
-                      <span className="text-slate-200">{t.category}</span>
-                      <span className="rounded-md bg-slate-800 px-2 py-0.5 text-xs text-slate-300">{t.priority}</span>
-                      <span className="text-xs text-slate-500">{t.status}</span>
-                      {!t.root_cause && (
-                        <ActionButton label="Diagnose" onClick={() => onRequestIntent(`Diagnose the root cause. ticket_id: ${t.id}`)} />
-                      )}
-                    </div>
-                  </div>
-                ))}
-                {detail.tickets.length === 0 && <p className="text-sm text-slate-500">None.</p>}
-              </Section>
-            </>
           )}
         </div>
+      </div>
+      <div className="account-workspace-grid">
+        <aside className={`account-customer-list ${phoneView === "customer" ? "account-list-mobile-hidden" : ""}`} aria-label="Accounts">
+          <div className="account-customer-search">
+            <div className="account-search-box">
+              <span aria-hidden="true">⌕</span>
+              <input aria-label="Search customers" value={search} onChange={e => setSearch(e.target.value)} placeholder="Search accounts" />
+            </div>
+            <div className="account-filter-row" role="group" aria-label="Account status">
+              {([["all", "All"], ["account", "Accounts"], ["prospect", "Prospects"], ["attention", "Attention"]] as const).map(([k, l]) => (
+                <button type="button" key={k} aria-pressed={filter === k} onClick={() => setFilter(k)}>{l}</button>
+              ))}
+            </div>
+            <div className="account-list-meta">
+              <span>{shown.length} {shown.length === 1 ? "account" : "accounts"}</span>
+              <select aria-label="Segment" value={segment} onChange={e => setSegment(e.target.value as typeof segment)}>
+                <option value="all">All segments</option><option value="B2B">B2B</option><option value="B2C">B2C</option>
+              </select>
+            </div>
+          </div>
+          <div className="account-customer-rows">
+            {shown.map(r => (
+              <button type="button" key={r.id} aria-current={selectedId === r.id ? "true" : undefined} onClick={() => selectCustomer(r.id)}>
+                <span className={`account-avatar ${r.status === "account" ? "account-avatar-active" : ""}`}>{initials(r.name)}</span>
+                <span className="account-row-text">
+                  <strong>{r.name}</strong>
+                  <small>{r.segment || "Unclassified"} · {r.status === "account" ? "Account" : "Prospect"}{r.services > 0 && ` · ${r.services} service${r.services === 1 ? "" : "s"}`}</small>
+                </span>
+                <span className="account-row-side">
+                  {r.mrr > 0 && <span className="account-row-mrr" title="Monthly recurring revenue">{formatValue(r.mrr, "money", true)}</span>}
+                  {r.urgent_tickets > 0 && <span className="account-alert-count" title={`${r.urgent_tickets} urgent service requests`}>{r.urgent_tickets}</span>}
+                </span>
+              </button>
+            ))}
+            {!shown.length && <p className="account-empty">{error || "No matching accounts."}</p>}
+          </div>
+        </aside>
+        <main className={`account-main ${phoneView === "list" ? "account-main-mobile-hidden" : ""}`}>
+          {selectedId === null
+            ? <p className="account-empty">{error || "Select an account to view its summary."}</p>
+            : <AccountWorkspace key={selectedId} partyId={selectedId} tab={tab} onTabChange={setTab} onRequestIntent={onRequestIntent}
+                onViewLoaded={setView} onBack={() => setPhoneView("list")} />}
+        </main>
       </div>
     </div>
   );

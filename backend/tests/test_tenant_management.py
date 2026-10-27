@@ -113,3 +113,17 @@ def test_new_tenant_user_is_fully_isolated_from_default(client):
 
     isolated_parties = client.get("/api/parties", headers={"X-Test-User-Id": str(isolated_admin_id)}).json()
     assert all(p["name"] != "DefaultTenantParty" for p in isolated_parties)
+
+
+def test_uppercase_slug_is_normalized_before_duplicate_check(client):
+    payload = {'name': 'CWMA Training', 'slug': ' CWMA-TRAINING ',
+               'admin_email': 'cwma@example.test', 'admin_password': 'password123',
+               'licensed_modules': ['training_management']}
+    headers = _as_platform_admin(client)
+    response = client.post('/api/platform/tenants', json=payload, headers=headers)
+    assert response.status_code == 201, response.text
+    assert response.json()['slug'] == 'cwma-training'
+    payload.update(slug='CWMA-TRAINING', admin_email='second@example.test')
+    assert client.post('/api/platform/tenants', json=payload, headers=headers).status_code == 400
+    payload['slug'] = 'cwma training'
+    assert client.post('/api/platform/tenants', json=payload, headers=headers).status_code == 422

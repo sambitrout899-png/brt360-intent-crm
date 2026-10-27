@@ -79,7 +79,7 @@ def build_int14_steps(db: Session, tenant_id: int, execution_id: int, entities: 
             return {
                 "order_id": order.id,
                 "site_label": site_label,
-                "order_status": OrderStatus.active.value,
+                "order_status": order.status.value,
                 "all_sites_provisioned": True,
             }
 

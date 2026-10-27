@@ -1,0 +1,28 @@
+# Decisions - Training Module (BRD v1.0)
+
+Where the BRD was silent, or where it conflicted with the platform it is being
+built into, these are the choices made. Each keeps tenant isolation (NFR-001)
+intact. Newest last.
+
+| ID | Decision | Why |
+| --- | --- | --- |
+| D-01 | **Built inside BRT 360's existing stack** (FastAPI, SQLAlchemy, Alembic, React 19, Vite, Tailwind), not the TypeScript monorepo of BRD 12.1. | The BRD lists stack choice as an open question; the module already existed here (`training_management` licence), sharing login, tenants, users, departments, Flow Studio, Page Designer and the audit log. A second stack would duplicate all of that. |
+| D-02 | **Organization = tenant.** `org_id` is the existing `tenant_id`; every query is filtered by the caller's tenant from the auth token, never the URL. | Same isolation the rest of BRT 360 uses; the cross-tenant tests in `tests/test_training_brd.py` (NFR-001) check it. |
+| D-03 | **No PostgreSQL row-level security yet.** Isolation is enforced in one service layer (`training_policy.guard` + tenant filters) and tested. | Production runs SQLite, which has no RLS. RLS policies should be added when the deployment moves to PostgreSQL (`DATABASE_URL`). |
+| D-04 | **Additive data model.** The original training tables gained nullable columns; nothing was dropped. A program version with no assessment templates keeps the original single-form assessment (`/assessment/<token>`); a version with templates runs the BRD flow (`/p/a/<token>`). | Additive-only rule; existing sessions and links keep working. |
+| D-05 | **Integer ids + BRT_ID** instead of UUID v7. | Every BRT 360 table already carries a keyed, non-sequential BRT_ID for external reference; switching primary keys would break the platform's FKs. |
+| D-06 | **Objectives, modules, template questions and sections are JSON** on their parent rows, not separate tables. | They are always read and versioned with their parent; published parents are immutable, so the JSON is too. |
+| D-07 | **Rate limiting is per worker process** (30 requests/min/IP on `/api/p/*`). | No Redis in this deployment. With N gunicorn workers the ceiling is N x 30; put a shared limiter (nginx `limit_req` or Redis) in front for a hard limit. |
+| D-08 | **Assessment links are `HMAC(server key, random nonce)`**; only the SHA-256 of the link is stored. | Meets ASM-011 (≥ 128-bit, hashed at rest) and still lets the server re-send the same link in reminders (WFA-008) without keeping it. A new nonce regenerates the link. |
+| D-09 | **Anonymous responses** are written with a random id, a fresh BRT_ID, the hour only and blank system fields by a plain INSERT; the invitation only gets `has_submitted`. Opening an anonymous form leaves no timestamp. Drafts of anonymous forms stay on the device. | ASM-021/022, NFR-005. Application-level anonymity: someone with database and server logs could still correlate by request time - noted in the original module docs too. |
+| D-10 | **QR identification** is email + a one-time code sent by email, or email + last 4 digits of the phone on file. There is no roster pick-list. | A pick-list would show everyone's name to anyone holding the QR (ASM-013: "QR alone never reveals other participants' data"). |
+| D-11 | **BR-SES-04 wins over the 10.2 table**: a session can be completed only after its end time, even by the facilitator's "End session". | Section 10 is the source of truth for logic. |
+| D-12 | **Session outcome rate** = participants with a post submission who achieved *every* measured objective ÷ participants with a post submission. Per-objective achievement is shown too. | 10.3 defines achievement per objective but the session rate per participant; this reading needs no extra rule. |
+| D-13 | **Paired comparison** uses only items whose `item_key` and measure appear in both templates; the single-assessment score shown to a participant uses all of that template's Knowledge items. | 10.3 and ASM-004. |
+| D-14 | **Executive aggregates**: groups below the anonymity threshold are hidden from executives in comparisons; staff see them flagged "small group". | ANL-005 names executives; staff need the drill-down (ANL-004). |
+| D-15 | **The original training endpoints keep their earlier rights** (HR could create programs and revisions there). The new endpoints follow the BRD matrix (HR read-only on programs). | Additive-only: no existing behaviour removed. Retire the original program form once the workspace is adopted. |
+| D-16 | **Email channel**: an `outbox` adapter (default) keeps messages in the training outbox and users' in-app messages; `TRAINING_EMAIL_ADAPTER=smtp` sends real mail. SMS / WhatsApp are adapter slots without a provider. | Nothing leaves the server until someone configures it; the BRD leaves the SMS provider open. |
+| D-17 | **Manual "send now" ignores quiet hours**; OTP codes ignore them too. | A person asked for it to go now. |
+| D-18 | **People without a login** (external participants, CSV imports) live in a training directory (`training_participants`), not as platform users. Roles other than participant need a login. | SES-007: no password for externals; keeps the platform user list clean. |
+| D-19 | **Retention purge** (NFR-004) erases directory participants with no session inside the retention period and clears expired drafts; it does not delete responses (aggregates stay). | ORG-011 / NFR-004 keep aggregates. |
+| D-20 | **Platform-wide items were not changed**: MFA (TOTP), account lockout, idle timeout (ORG-007), SSO (ORG-008), organization suspend/reactivate (ORG-001). | They change login for every module and tenant, so they need an explicit go-ahead. See docs/training-brd.md, "Not yet built". |

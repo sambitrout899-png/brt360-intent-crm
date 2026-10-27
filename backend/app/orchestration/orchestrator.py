@@ -30,10 +30,19 @@ class SagaResult:
     steps: list[dict[str, Any]]
     result: dict[str, Any] | None
     error: str | None = None
+    # the failure, classified (code, category, message, flow/node/intent - see flow_errors)
+    error_detail: dict[str, Any] | None = None
 
 
 def run_saga(db: Session, steps: list[SagaStep]) -> SagaResult:
+    """Runs the steps under a savepoint: a failure undoes everything the
+    steps did - and only that, so the execution's own audit row (written
+    before the saga) survives to record the failure."""
+    from app.orchestration import flow_errors
+
     executed: list[dict[str, Any]] = []
+    savepoint = db.begin_nested()
+    current = ""
     try:
         # Accumulate across all steps (later steps override same-named keys)
         # rather than keeping only the last step's return value - a step late
@@ -42,11 +51,18 @@ def run_saga(db: Session, steps: list[SagaStep]) -> SagaResult:
         # all of them.
         accumulated: dict[str, Any] = {}
         for i, step in enumerate(steps, start=1):
+            current = step.name
             detail = step.action() or {}
             accumulated.update(detail)
             executed.append({"step": i, "action": step.name, "status": "ok", "detail": detail})
+        savepoint.commit()
         return SagaResult(ok=True, steps=executed, result=accumulated)
     except Exception as exc:  # noqa: BLE001 - deliberately broad: any step failure aborts the saga
-        executed.append({"step": len(executed) + 1, "action": "error", "status": "failed", "detail": {"error": str(exc)}})
-        db.rollback()
-        return SagaResult(ok=False, steps=executed, result=None, error=str(exc))
+        if savepoint.is_active:
+            savepoint.rollback()
+        # a system error is logged with a reference and never shown raw (see flow_errors.classify)
+        err = flow_errors.classify(exc)
+        detail = {**err.as_dict(), "step": current}
+        message = str(err)
+        executed.append({"step": len(executed) + 1, "action": "error", "status": "failed", "detail": {"error": message, "error_detail": detail}})
+        return SagaResult(ok=False, steps=executed, result=None, error=message, error_detail=detail)

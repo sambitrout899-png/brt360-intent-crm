@@ -8,6 +8,7 @@ from app.models.assurance import (
     WorkOrder,
 )
 from app.models.ai_settings import AiSettings
+from app.models.analytics import AnalyticsReport
 from app.models.attributes import (
     AttributeConstraintRule,
     ProductAttributeDefinition,
@@ -22,6 +23,8 @@ from app.models.catalog import (
     ProductSpecification,
 )
 from app.models.accounts import ServiceAccount
+from app.models.bim import BimInterface, BimJob
+from app.models.c360 import C360Layout, DataConnector
 from app.models.approval import (
     ApprovalChainInstance,
     ApprovalChainTemplate,
@@ -33,10 +36,52 @@ from app.models.crm import (
     Lead,
     LeadStatus,
     Opportunity,
+    OpportunityConfig,
     Party,
+    PartyProfile,
     Quote,
     QuoteItem,
+    QuotePriceOverride,
+    QuotePurchaseOrder,
     TerritoryRule,
+)
+from app.models.custom_fields import CustomFieldDefinition, CustomFieldValue
+from app.models.custom_records import CustomRecord, CustomRecordType
+from app.models.field_service import (
+    FsAbsence,
+    FsActivity,
+    FsActivityTemplate,
+    FsAssetDetail,
+    FsAssetWarranty,
+    FsCharge,
+    FsEngineer,
+    FsEntitlement,
+    FsExpense,
+    FsInventoryLevel,
+    FsInventoryLocation,
+    FsInventoryTransaction,
+    FsMeasurement,
+    FsPartMovement,
+    FsPmAction,
+    FsPmPlan,
+    FsReading,
+    FsRepair,
+    FsRequestDetail,
+    FsServiceRegion,
+    FsTimeEntry,
+    FsWarranty,
+)
+from app.models.flows import FlowDefinition
+from app.models.lifecycle import (
+    AssignmentRule,
+    EntityAssignmentHistory,
+    EntityRecordMeta,
+    EntityStateHistory,
+    Position,
+    PositionMember,
+    StateModel,
+    StateModelState,
+    StateModelTransition,
 )
 from app.models.feasibility import (
     FeasibilityAssessment,
@@ -46,23 +91,67 @@ from app.models.feasibility import (
 )
 from app.models.fulfillment import Asset, AssetStatus, Proposal, ProposalStatus
 from app.models.identity import IdentityVerification, IdentityVerificationProvider, VerificationStatus
+from app.models.intent_catalog import IntentSetting
 from app.models.intent_log import DomainEvent, IntentExecutionLog
+from app.models.org import AppRole, Department, UserAppRole
+from app.models.order_mgmt import (
+    OmAgreement,
+    OmCreditCheck,
+    OmCreditProfile,
+    OmFavorite,
+    OmLine,
+    OmLineChange,
+    OmOpportunityRevenue,
+    OmOrderDetail,
+    OmOrderRevision,
+    OmPayment,
+    OmPromotion,
+    OmQuoteDetail,
+    OmRecommendation,
+    OmShipment,
+    OmShipmentLine,
+    OmShippingMethod,
+    OmTaxRule,
+)
+from app.models import comms  # noqa: F401,E402  (Communications tables - see models/comms.py)
 from app.models.orchestration_policy import OrchestrationMode, OrchestrationPolicy
 from app.models.orders import (
     BillingAccount,
     BillingAdjustment,
     Order,
     OrderItem,
+    OrderMilestone,
+    OrderProfile,
     Resource,
     ServiceOrder,
 )
+from app.models.pages import LeadProduct, PageLayout, ValidationRule
 from app.models.ponr import PonrPolicy
+from app.models.product_model import (
+    ProductClass,
+    ProductComponent,
+    ProductInstance,
+    ProductModelTest,
+    ProductModelVersion,
+    ProductRule,
+    ProductSlotDomain,
+)
+from app.models.process import PriceList, PriceListItem, ProcessRole
+from app.models.product_config import (
+    AttributePriceImpact,
+    OfferingAttribute,
+    OfferingAttributeRule,
+    OrderItemConfig,
+    QuoteItemConfig,
+    QuoteTerms,
+)
 from app.models.sla import SlaClock, SlaClockStatus, SlaPolicy
 from app.models.tenant import Tenant, TenantVertical
 from app.models.testing import TestRun, TestRunStatus
 
 __all__ = [
     "AiSettings",
+    "AnalyticsReport",
     "Tenant",
     "TenantVertical",
     "ProductSpecification",
@@ -71,6 +160,7 @@ __all__ = [
     "BundleEligibilityRule",
     "BundleCompatibilityRule",
     "IntentExecutionLog",
+    "IntentSetting",
     "DomainEvent",
     "Party",
     "TerritoryRule",
@@ -97,6 +187,21 @@ __all__ = [
     "OrchestrationMode",
     "Order",
     "OrderItem",
+    "OrderMilestone",
+    "OrderProfile",
+    "PartyProfile",
+    "OpportunityConfig",
+    "QuotePurchaseOrder",
+    "QuotePriceOverride",
+    "OfferingAttribute",
+    "AttributePriceImpact",
+    "OfferingAttributeRule",
+    "QuoteTerms",
+    "QuoteItemConfig",
+    "OrderItemConfig",
+    "PriceList",
+    "PriceListItem",
+    "ProcessRole",
     "ServiceOrder",
     "Resource",
     "BillingAccount",
@@ -115,6 +220,8 @@ __all__ = [
     "ProductAttributeValue",
     "AttributeConstraintRule",
     "ServiceAccount",
+    "C360Layout",
+    "DataConnector",
     "IdentityVerificationProvider",
     "IdentityVerification",
     "VerificationStatus",
@@ -122,4 +229,60 @@ __all__ = [
     "TestRunStatus",
     "User",
     "UserRole",
+    "CustomFieldDefinition",
+    "CustomFieldValue",
+    "CustomRecordType",
+    "CustomRecord",
+    "FlowDefinition",
+    "StateModel",
+    "StateModelState",
+    "StateModelTransition",
+    "Position",
+    "PositionMember",
+    "AssignmentRule",
+    "EntityRecordMeta",
+    "EntityAssignmentHistory",
+    "EntityStateHistory",
+    "Department",
+    "AppRole",
+    "UserAppRole",
+    "BimInterface",
+    "BimJob",
+    "PageLayout",
+    "ValidationRule",
+    "LeadProduct",
+    "ProductComponent",
+    "ProductRule",
+    "ProductSlotDomain",
+    "ProductClass",
+    "ProductModelVersion",
+    "ProductModelTest",
+    "ProductInstance",
+    "FsServiceRegion",
+    "FsEngineer",
+    "FsAbsence",
+    "FsActivityTemplate",
+    "FsEntitlement",
+    "FsWarranty",
+    "FsAssetWarranty",
+    "FsAssetDetail",
+    "FsMeasurement",
+    "FsReading",
+    "FsRequestDetail",
+    "FsActivity",
+    "FsTimeEntry",
+    "FsExpense",
+    "FsPartMovement",
+    "FsInventoryLocation",
+    "FsInventoryLevel",
+    "FsInventoryTransaction",
+    "FsPmPlan",
+    "FsPmAction",
+    "FsRepair",
+    "FsCharge",
 ]
+from app.models import training  # noqa: F401
+from app.models import abo  # noqa: F401
+from app.models import quote_docs  # noqa: F401
+from app.models import fulfillment_orders  # noqa: F401
+from app.models import inventory  # noqa: F401

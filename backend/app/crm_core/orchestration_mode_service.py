@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
-from app.config import get_settings
+from app.crm_core import llm
 from app.models.orchestration_policy import OrchestrationMode, OrchestrationPolicy
 
 
@@ -37,6 +37,6 @@ def resolve_mode(db: Session, tenant_id: int, intent_type: str) -> Orchestration
         )
     if policy is None:
         return OrchestrationMode.deterministic
-    if policy.mode == OrchestrationMode.llm_planned and not get_settings().openai_api_key:
+    if policy.mode == OrchestrationMode.llm_planned and llm.resolve(db, tenant_id) is None:
         return OrchestrationMode.deterministic
     return policy.mode

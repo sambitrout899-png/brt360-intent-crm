@@ -23,6 +23,17 @@ def _active_order(client, offering_name="Fiber 500 Bundle", price=1000, company=
     ).json()["result"]["order_id"]
 
 
+def _service_status(client, order_id):
+    """A completed order is read-only: the service it installed lives on as an
+    asset, and suspend / cancel / terminate change that asset."""
+    from app.models.fulfillment import Asset
+    from app.models.orders import OrderItem
+
+    with client.TestSessionLocal() as db:
+        item_ids = [i.id for i in db.query(OrderItem).filter(OrderItem.order_id == order_id)]
+        return db.query(Asset).filter(Asset.order_item_id.in_(item_ids)).one().status.value
+
+
 def _add_policy(client, clock_type, duration_hours, on_breach_action="auto_cancel"):
     resp = client.post(
         "/api/admin/sla-policies",
@@ -49,8 +60,9 @@ def test_cancel_with_policy_opens_retention_window(client):
     assert "retention_window_deadline" in body["result"]
 
     order = client.get(f"/api/orders/{order_id}").json()
-    assert order["status"] == "pending_cancellation"
-    # Not deprovisioned yet - resources still active.
+    assert order["status"] == "completed"
+    # Not deprovisioned yet - the service is still live.
+    assert _service_status(client, order_id) == "active"
     assert order["service_orders"][0]["status"] == "active"
 
 
@@ -66,8 +78,7 @@ def test_retain_decision_restores_order_to_active(client):
     assert body["result"]["status"] == "active"
     assert body["result"]["retained"] is True
 
-    order = client.get(f"/api/orders/{order_id}").json()
-    assert order["status"] == "active"
+    assert _service_status(client, order_id) == "active"
 
     # The clock was completed, not left running - a sweep should find nothing due.
     sweep = client.post("/api/admin/sla/process-due").json()
@@ -84,9 +95,7 @@ def test_retention_window_lapse_cancels_order(client):
     assert sweep["checked"] == 1
     assert sweep["breached"][0]["outcome"] == "cancelled"
 
-    order = client.get(f"/api/orders/{order_id}").json()
-    assert order["status"] == "cancelled"
-    assert order["service_orders"][0]["status"] == "released"
+    assert _service_status(client, order_id) == "decommissioned"
 
     audit = client.get("/api/audit").json()
     assert audit[0]["intent_type"] == "SYS-SLA"
@@ -106,8 +115,7 @@ def test_suspend_starts_grace_clock_and_escalates_to_terminated(client):
     assert sweep["checked"] == 1
     assert sweep["breached"][0]["outcome"] == "terminated"
 
-    order = client.get(f"/api/orders/{order_id}").json()
-    assert order["status"] == "terminated"
+    assert _service_status(client, order_id) == "decommissioned"
 
 
 def test_repeated_suspend_does_not_start_duplicate_clocks(client):

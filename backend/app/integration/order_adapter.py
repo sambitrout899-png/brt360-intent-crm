@@ -36,6 +36,8 @@ def create_order(
     monthly_price: float,
     contract_months: int = 12,
 ) -> Order:
+    if order_type == OrderType.new:
+        _check_new_sale(db, tenant_id, party_id, quote_id)
     order = Order(
         tenant_id=tenant_id,
         party_id=party_id,
@@ -48,7 +50,30 @@ def create_order(
     )
     db.add(order)
     db.flush()
+    if quote_id:
+        # what Presales held in Inventory for the deal now belongs to its order - SOM uses exactly those items
+        from app.crm_core import inventory_service
+        from app.models.crm import Quote
+
+        quote = db.get(Quote, quote_id)
+        if quote is not None:
+            inventory_service.transfer_to_order(db, tenant_id, quote.opportunity_id, order.id)
     return order
+
+
+def _check_new_sale(db: Session, tenant_id: int, party_id: int, quote_id: int | None) -> None:
+    """Siebel's checks before a sales order exists: the account is in good
+    standing, and a quote is ordered only while it is still valid."""
+    from app.crm_core import account_service
+    from app.models.order_mgmt import OmQuoteDetail
+    from app.timeutils import utcnow
+
+    account_service.check_standing(db, tenant_id, party_id)
+    if quote_id:
+        detail = db.query(OmQuoteDetail).filter(OmQuoteDetail.quote_id == quote_id).first()
+        if detail is not None and detail.effective_through and detail.effective_through < utcnow().date():
+            raise ValueError(f"Quote {detail.quote_number or quote_id} expired on {detail.effective_through} - "
+                             "revise it (a new quote version) before ordering")
 
 
 def add_order_item(db: Session, order_id: int, product_offering_id: int, quantity: int = 1) -> OrderItem:
@@ -103,7 +128,13 @@ def set_order_status(db: Session, order_id: int, status: OrderStatus) -> Order:
     order = db.get(Order, order_id)
     if order is None:
         raise ValueError(f"Order {order_id} not found")
-    order.status = status
+    if status in (OrderStatus.active, OrderStatus.completed) and order.status != OrderStatus.completed:
+        from app.crm_core import abo_service
+        abo_service.complete(db, order)
+    elif order.status == OrderStatus.completed and status != OrderStatus.completed:
+        raise ValueError("Completed orders are immutable. Start a change order from the asset.")
+    else:
+        order.status = status
     db.flush()
     return order
 

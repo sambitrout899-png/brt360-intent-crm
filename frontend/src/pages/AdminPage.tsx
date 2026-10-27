@@ -1,7 +1,7 @@
+import { request } from "../api/client";
+import { getInventorySync, saveInventorySync, runInventorySync, type InventorySyncSettings } from "../api/client";
 import { useEffect, useState } from "react";
 import {
-  clearAiSettings,
-  createApprovalChain,
   createAttributeConstraintRule,
   createAttributeDefinition,
   createFeasibilityCheckType,
@@ -10,7 +10,6 @@ import {
   createPonrPolicy,
   createSlaPolicy,
   createUser,
-  deactivateApprovalChain,
   deactivateAttributeConstraintRule,
   deactivateFeasibilityCheckType,
   deactivateIdentityProvider,
@@ -18,17 +17,14 @@ import {
   deactivatePonrPolicy,
   deactivateSlaPolicy,
   deactivateUser,
-  deleteApprovalChain,
   deleteAttributeConstraintRule,
-  deleteAttributeDefinition,
   deleteFeasibilityCheckType,
   deleteIdentityProvider,
   deleteOrchestrationPolicy,
   deletePonrPolicy,
   deleteSlaPolicy,
-  getAiSettings,
   getTestRun,
-  listApprovalChains,
+  intentCatalog,
   listAttributeConstraintRules,
   listAttributeDefinitions,
   listAttributeValues,
@@ -44,12 +40,9 @@ import {
   processDueSlaClocks,
   setAttributeValue,
   triggerTestRun,
-  updateAiSettings,
 } from "../api/client";
 import { ATTRIBUTE_DATA_TYPES, CONSTRAINT_OPERATORS, CONSTRAINT_RULE_TYPES, ORCHESTRATION_MODES, SLA_BREACH_ACTIONS, USER_ROLES } from "../api/types";
 import type {
-  AiSettings,
-  ApprovalChainTemplate,
   AttributeConstraintRule,
   FeasibilityCheckType,
   IdentityProvider,
@@ -64,188 +57,25 @@ import type {
   TestRunSummary,
   User,
 } from "../api/types";
+import { AssignmentSection, CustomFieldsSection, StateModelsSection } from "./AdminLifecycleSections";
+import { OrgStructureSection, RolesAccessSection } from "./AdminOrgSections";
+import AdminAiSection from "./AdminAiSection";
+import AdminIntentsSection from "./AdminIntentsSection";
+import FlowStudioSection from "./FlowStudio";
+import AdminFunctionMap from "./AdminFunctionMap";
+import AdminConflictsSection from "./AdminConflictsSection";
+import { intentLabel } from "../intentLabels";
+import { ApprovalsSection, BroadcastsSection, PriceListsSection, ProcessRolesSection, QuoteDocumentsSection } from "./AdminProcessSections";
+import AdminPageDesignerSection from "./AdminPageDesignerSection";
+import AdminRecordTypesSection from "./AdminRecordTypesSection";
+import AdminBimSection from "./AdminBimSection";
+import AdminOrderMgmtSection from "./AdminOrderMgmtSection";
+import AdminFulfillmentSection from "./AdminFulfillmentSection";
+import AdminCommsSection from "./AdminCommsSection";
+import AdminProductModelSection from "./AdminProductModelSection";
+import AttributeLibrary from "./AdminAttributeLibrary";
 
-type Section = "approvals" | "sla" | "attributes" | "identity" | "ponr" | "feasibility" | "orchestration" | "ai" | "users" | "tests";
-
-function emptyChainForm() {
-  return { name: "", segment: "", minPct: "0", maxPct: "100", tiers: [""] };
-}
-
-function ApprovalChainsSection() {
-  const [templates, setTemplates] = useState<ApprovalChainTemplate[]>([]);
-  const [form, setForm] = useState(emptyChainForm());
-  const [error, setError] = useState<string | null>(null);
-
-  function load() {
-    listApprovalChains().then(setTemplates);
-  }
-
-  useEffect(load, []);
-
-  function updateTier(index: number, value: string) {
-    setForm((f) => ({ ...f, tiers: f.tiers.map((t, i) => (i === index ? value : t)) }));
-  }
-
-  function addTier() {
-    setForm((f) => ({ ...f, tiers: [...f.tiers, ""] }));
-  }
-
-  function removeTier(index: number) {
-    setForm((f) => ({ ...f, tiers: f.tiers.filter((_, i) => i !== index) }));
-  }
-
-  async function submit() {
-    setError(null);
-    const tiers = form.tiers.map((t) => t.trim()).filter(Boolean);
-    if (!form.name.trim() || tiers.length === 0) {
-      setError("Name and at least one tier are required.");
-      return;
-    }
-    try {
-      await createApprovalChain({
-        name: form.name.trim(),
-        segment: form.segment.trim() || null,
-        min_discount_pct: Number(form.minPct),
-        max_discount_pct: Number(form.maxPct),
-        tiers: tiers.map((approver_tier) => ({ approver_tier })),
-      });
-      setForm(emptyChainForm());
-      load();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to create template.");
-    }
-  }
-
-  async function deactivate(id: number) {
-    await deactivateApprovalChain(id);
-    load();
-  }
-
-  async function remove(id: number) {
-    try {
-      await deleteApprovalChain(id);
-      load();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to delete template - it may already be in use on a quote.");
-    }
-  }
-
-  return (
-    <div className="space-y-6">
-      <p className="text-sm text-slate-400">
-        Tenant-configurable discount approval chains. INT-06 ("Approve this quote") resolves one of these by discount
-        band and product segment, then walks its tiers in order - one decision per call.
-      </p>
-
-      <div className="space-y-2">
-        {templates.map((t) => (
-          <div key={t.id} className={`rounded-lg border px-4 py-3 text-sm ${t.is_active ? "border-slate-700 bg-slate-900/60" : "border-slate-800 bg-slate-950/60 opacity-60"}`}>
-            <div className="flex flex-wrap items-center gap-3">
-              <span className="font-semibold text-slate-200">{t.name}</span>
-              <span className="text-xs text-slate-500">
-                {t.min_discount_pct}%–{t.max_discount_pct}% discount
-              </span>
-              <span className="text-xs text-slate-500">segment: {t.segment ?? "any"}</span>
-              {!t.is_active && <span className="rounded-md border border-slate-700 px-2 py-0.5 text-xs text-slate-500">inactive</span>}
-              <div className="ml-auto flex gap-2">
-                {t.is_active && (
-                  <button onClick={() => deactivate(t.id)} className="rounded-md border border-slate-700 px-2.5 py-1 text-xs font-bold text-slate-300 hover:border-amber-500 hover:text-amber-400">
-                    Deactivate
-                  </button>
-                )}
-                <button onClick={() => remove(t.id)} className="rounded-md border border-slate-700 px-2.5 py-1 text-xs font-bold text-slate-300 hover:border-red-500 hover:text-red-400">
-                  Delete
-                </button>
-              </div>
-            </div>
-            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-400">
-              {t.tiers.map((tier, i) => (
-                <span key={tier.sequence} className="flex items-center gap-2">
-                  <span className="rounded-md bg-slate-800 px-2 py-0.5">{tier.sequence}. {tier.approver_tier}</span>
-                  {i < t.tiers.length - 1 && <span className="text-slate-600">→</span>}
-                </span>
-              ))}
-            </div>
-          </div>
-        ))}
-        {templates.length === 0 && <p className="text-sm text-slate-500">No approval chains configured yet.</p>}
-      </div>
-
-      <div className="rounded-xl border border-slate-700 bg-slate-900/60 p-5">
-        <h3 className="mb-4 text-base font-bold text-slate-100">New Approval Chain</h3>
-        <div className="grid gap-3 md:grid-cols-2">
-          <label className="text-xs text-slate-400">
-            Name
-            <input
-              value={form.name}
-              onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-              className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200"
-              placeholder="e.g. Wholesale Carrier Escalation"
-            />
-          </label>
-          <label className="text-xs text-slate-400">
-            Segment (blank = any)
-            <input
-              value={form.segment}
-              onChange={(e) => setForm((f) => ({ ...f, segment: e.target.value }))}
-              className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200"
-              placeholder="e.g. B2B-Wholesale"
-            />
-          </label>
-          <label className="text-xs text-slate-400">
-            Min discount %
-            <input
-              type="number"
-              value={form.minPct}
-              onChange={(e) => setForm((f) => ({ ...f, minPct: e.target.value }))}
-              className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200"
-            />
-          </label>
-          <label className="text-xs text-slate-400">
-            Max discount %
-            <input
-              type="number"
-              value={form.maxPct}
-              onChange={(e) => setForm((f) => ({ ...f, maxPct: e.target.value }))}
-              className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200"
-            />
-          </label>
-        </div>
-
-        <div className="mt-4">
-          <span className="text-xs text-slate-400">Tiers, in approval order</span>
-          <div className="mt-1 space-y-2">
-            {form.tiers.map((tier, i) => (
-              <div key={i} className="flex gap-2">
-                <span className="flex w-6 items-center justify-center text-xs text-slate-500">{i + 1}</span>
-                <input
-                  value={tier}
-                  onChange={(e) => updateTier(i, e.target.value)}
-                  className="flex-1 rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200"
-                  placeholder="e.g. Regional Sales Head"
-                />
-                {form.tiers.length > 1 && (
-                  <button onClick={() => removeTier(i)} className="rounded-md border border-slate-700 px-2.5 text-xs text-slate-400 hover:border-red-500 hover:text-red-400">
-                    ✕
-                  </button>
-                )}
-              </div>
-            ))}
-          </div>
-          <button onClick={addTier} className="mt-2 rounded-md border border-slate-700 px-2.5 py-1 text-xs font-bold text-slate-300 hover:border-sky-500 hover:text-sky-400">
-            + Add tier
-          </button>
-        </div>
-
-        {error && <p className="mt-3 text-xs text-red-400">{error}</p>}
-
-        <button onClick={submit} className="mt-4 rounded-lg bg-sky-600 px-4 py-2 text-sm font-bold text-white hover:bg-sky-500">
-          Create Approval Chain
-        </button>
-      </div>
-    </div>
-  );
-}
+type Section = "functionmap" | "conflicts" | "org" | "access" | "intents" | "pages" | "bim" | "productmodel" | "lifecycle" | "assignment" | "customfields" | "recordtypes" | "flows" | "approvals" | "broadcasts" | "roles" | "pricelists" | "productconfig" | "sla" | "attributes" | "identity" | "ponr" | "feasibility" | "orchestration" | "ai" | "users" | "tests" | "ordermgmt" | "fulfillment" | "comms" | "quotedocs";
 
 const CLOCK_STATUS_STYLES: Record<string, string> = {
   running: "bg-sky-500/15 text-sky-400 border-sky-500/30",
@@ -466,11 +296,6 @@ function ProductAttributesSection() {
     }
   }
 
-  async function removeDefinition(id: number) {
-    await deleteAttributeDefinition(id);
-    load();
-  }
-
   async function submitValue() {
     setError(null);
     if (!valueForm.value.trim() || !valueForm.specId || !valueForm.defId) {
@@ -526,28 +351,11 @@ function ProductAttributesSection() {
 
   return (
     <div className="space-y-6">
-      <p className="text-sm text-slate-400">
-        Typed attributes on atomic products (e.g. Fiber1000's Download Speed), and requires/excludes rules keyed off
-        those values - a second, finer-grained check that runs alongside the existing product-line compatibility
-        rules every time a bundle composition is validated (INT-01/02/05).
-      </p>
+      <AttributeLibrary onChanged={load} />
 
       <div>
-        <h3 className="mb-3 text-base font-bold text-slate-100">Attribute Definitions</h3>
-        <div className="space-y-2">
-          {definitions.map((d) => (
-            <div key={d.id} className="flex flex-wrap items-center gap-3 rounded-lg border border-slate-700 bg-slate-900/60 px-4 py-3 text-sm">
-              <span className="font-semibold text-slate-200">{d.name}</span>
-              <span className="rounded-md bg-slate-800 px-2 py-0.5 text-xs text-slate-300">{d.data_type}</span>
-              {d.unit && <span className="text-xs text-slate-500">{d.unit}</span>}
-              {d.allowed_values && <span className="text-xs text-slate-500">values: {d.allowed_values}</span>}
-              <button onClick={() => removeDefinition(d.id)} className="ml-auto rounded-md border border-slate-700 px-2.5 py-1 text-xs font-bold text-slate-300 hover:border-red-500 hover:text-red-400">
-                Delete
-              </button>
-            </div>
-          ))}
-          {definitions.length === 0 && <p className="text-sm text-slate-500">No attributes defined yet.</p>}
-        </div>
+        <h3 className="mb-1 text-base font-bold text-slate-100">Add an attribute to the library</h3>
+        <p className="text-xs text-slate-500">Products usually add their own from the Product Modeller or "Design attributes" - this is for library entries made up front.</p>
         <div className="mt-3 flex flex-wrap items-end gap-2 rounded-xl border border-slate-700 bg-slate-900/60 p-4">
           <label className="text-xs text-slate-400">
             Name
@@ -574,7 +382,8 @@ function ProductAttributesSection() {
       </div>
 
       <div>
-        <h3 className="mb-3 text-base font-bold text-slate-100">Attribute Values</h3>
+        <h3 className="mb-1 text-base font-bold text-slate-100">Atomic product values</h3>
+        <p className="mb-3 text-xs text-slate-500">Values on the atomic products bundles are composed of (e.g. Fiber1000's Download Speed) - checked with the composition rules below when a product is launched, changed or quoted.</p>
         <div className="space-y-2">
           {values.map((v) => (
             <div key={v.id} className="flex flex-wrap items-center gap-3 rounded-lg border border-slate-700 bg-slate-900/60 px-4 py-3 text-sm">
@@ -717,7 +526,7 @@ function IdentityProvidersSection() {
   return (
     <div className="space-y-6">
       <p className="text-sm text-slate-400">
-        B2C process pack: pluggable identity-verification providers for INT-13 ("Verify customer identity"), blocked
+        B2C process pack: pluggable identity-verification providers for "Verify customer identity", blocked
         outright for tenants configured B2B-only. "Yakeen", "WATHQ", "SIMAH" and "Abshir" are seeded by default,
         matching the providers named in the B2C BRD docs - add, deactivate or remove as needed.
       </p>
@@ -861,13 +670,33 @@ function PonrPoliciesSection() {
 }
 
 function FeasibilityCheckTypesSection() {
+  const [settings, setSettings] = useState<InventorySyncSettings | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  useEffect(() => { getInventorySync().then(setSettings).catch(e => setError(String(e))); }, []);
+  async function inventoryAction(action: "save" | "sample" | "sync") {
+    setBusy(true); setError(null); setMessage("");
+    try {
+      if (action === "save" && settings) {
+        setSettings(await saveInventorySync(settings.enabled, settings.interval_minutes));
+        setMessage("Schedule saved.");
+      } else {
+        const result = await runInventorySync(action === "sample");
+        setCheckTypes(await listFeasibilityCheckTypes());
+        setSettings(await getInventorySync());
+        setMessage(`${result.created} added, ${result.updated} updated, ${result.deactivated} deactivated.`);
+      }
+    } catch (e) { setError(e instanceof Error ? e.message : "Inventory sync failed."); }
+    finally { setBusy(false); }
+  }
+
   const [checkTypes, setCheckTypes] = useState<FeasibilityCheckType[]>([]);
   const [name, setName] = useState("");
   const [resourceType, setResourceType] = useState("fiber");
   const [error, setError] = useState<string | null>(null);
 
   function load() {
-    listFeasibilityCheckTypes().then(setCheckTypes);
+    listFeasibilityCheckTypes().then(setCheckTypes).catch(e => setError(String(e)));
   }
 
   useEffect(load, []);
@@ -905,10 +734,30 @@ function FeasibilityCheckTypesSection() {
         single address-validation check so it does something meaningful even for an unconfigured tenant.
       </p>
 
+      <div className="space-y-3 rounded-xl border border-slate-700 bg-slate-900/60 p-4 text-sm text-slate-300">
+        <h3 className="font-semibold">Inventory integration</h3>
+        <p>Refresh check types from the tenant inventory. Manual checks are preserved. Sample data is for testing and is not scheduled.</p>
+        {settings && <>
+          <p>{settings.connected ? "Inventory endpoint configured" : "Ask your operator to configure the tenant inventory API endpoint."}</p>
+          <div className="flex flex-wrap items-center gap-3">
+            <label><input type="checkbox" checked={settings.enabled} onChange={e => setSettings({...settings, enabled: e.target.checked})} /> Periodic refresh</label>
+            <label>Every <input aria-label="Refresh interval in minutes" type="number" min={5} max={10080} value={settings.interval_minutes} onChange={e => setSettings({...settings, interval_minutes: Number(e.target.value)})} className="w-20 rounded border border-slate-700 bg-slate-950 px-2 py-1" /> minutes</label>
+            <button disabled={busy} onClick={() => inventoryAction("save")} className="rounded border border-slate-600 px-3 py-2 disabled:opacity-50">Save schedule</button>
+          </div>
+          <p>Last inventory sync: {settings.last_success_at ? new Date(settings.last_success_at + "Z").toLocaleString() : "Never"}</p>
+          {settings.last_error && <p role="alert" className="text-red-400">{settings.last_error}</p>}
+        </>}
+        <div className="flex gap-3">
+          <button disabled={busy || !settings?.connected} onClick={() => inventoryAction("sync")} className="rounded-lg bg-sky-600 px-4 py-2 font-bold text-white disabled:opacity-50">Sync inventory now</button>
+          <button disabled={busy} onClick={() => inventoryAction("sample")} className="rounded-lg border border-sky-600 px-4 py-2 text-sky-300 disabled:opacity-50">{busy ? "Working…" : "Load sample check types"}</button>
+        </div>
+        {message && <p role="status" className="text-emerald-400">{message}</p>}
+      </div>
       <div className="space-y-2">
         {checkTypes.map((c) => (
           <div key={c.id} className={`flex flex-wrap items-center gap-3 rounded-lg border px-4 py-3 text-sm ${c.is_active ? "border-slate-700 bg-slate-900/60" : "border-slate-800 bg-slate-950/60 opacity-60"}`}>
             <span className="font-semibold text-slate-200">{c.name}</span>
+            {c.external_id && <span className="text-xs text-sky-400">{c.external_id.startsWith("sample:") ? "Sample" : "Inventory"}</span>}
             <span className="rounded-md bg-slate-800 px-2 py-0.5 text-xs text-slate-300">{c.resource_type}</span>
             {!c.is_active && <span className="rounded-md border border-slate-700 px-2 py-0.5 text-xs text-slate-500">inactive</span>}
             <div className="ml-auto flex gap-2">
@@ -950,6 +799,16 @@ function FeasibilityCheckTypesSection() {
   );
 }
 
+// The fulfilment decision points an orchestration mode can cover, by name.
+const DECISION_POINTS: [string, string][] = [
+  ["ALL", "Every fulfilment step"],
+  ["INT-25", "After an order is approved"],
+  ["INT-26", "After installation (WFM1)"],
+  ["INT-27", "After testing (WFM2)"],
+  ["INT-28", "After the ESAN / acceptance letter (WFM3)"],
+];
+const decisionPointLabel = (code: string) => DECISION_POINTS.find(([c]) => c === code)?.[1] ?? intentLabel(code);
+
 function emptyOrchestrationForm() {
   return { intentType: "INT-25", mode: ORCHESTRATION_MODES[0] as string };
 }
@@ -968,7 +827,7 @@ function OrchestrationPoliciesSection() {
   async function submit() {
     setError(null);
     if (!form.intentType.trim()) {
-      setError("Intent type is required (e.g. INT-25, or ALL).");
+      setError("Pick the step this mode applies to.");
       return;
     }
     try {
@@ -993,18 +852,17 @@ function OrchestrationPoliciesSection() {
   return (
     <div className="space-y-6">
       <p className="text-sm text-slate-400">
-        Which flavor orchestrates the Phase 5 order-fulfillment intents (INT-22 through INT-28): "deterministic"
+        How the order-fulfilment steps decide what happens next: "deterministic"
         (default - a fixed, tested step sequence) or "llm_planned" (an LLM chooses which pre-vetted operation runs
         next, only from a short explicit allow-list - never arbitrary code). llm_planned silently falls back to
         deterministic whenever no OPENAI_API_KEY is configured or the LLM's plan doesn't validate, so this is always
-        safe to turn on. Use "ALL" as the intent type to cover every fulfillment intent at once; a row for a
-        specific intent type (e.g. "INT-25") wins over an "ALL" row.
+        safe to turn on. "Every fulfilment step" covers them all at once; a row for one specific step wins over it.
       </p>
 
       <div className="space-y-2">
         {policies.map((p) => (
           <div key={p.id} className={`flex flex-wrap items-center gap-3 rounded-lg border px-4 py-3 text-sm ${p.is_active ? "border-slate-700 bg-slate-900/60" : "border-slate-800 bg-slate-950/60 opacity-60"}`}>
-            <span className="rounded-md bg-slate-800 px-2 py-0.5 text-xs font-bold text-slate-300">{p.intent_type}</span>
+            <span className="rounded-md bg-slate-800 px-2 py-0.5 text-xs font-bold text-slate-300">{decisionPointLabel(p.intent_type)}</span>
             <span
               className={`rounded-md border px-2 py-0.5 text-xs font-bold ${
                 p.mode === "llm_planned" ? "bg-violet-500/15 text-violet-400 border-violet-500/30" : "bg-slate-500/15 text-slate-400 border-slate-500/30"
@@ -1032,13 +890,18 @@ function OrchestrationPoliciesSection() {
         <h3 className="mb-4 text-base font-bold text-slate-100">New Orchestration Policy</h3>
         <div className="grid gap-3 md:grid-cols-2">
           <label className="text-xs text-slate-400">
-            Intent type
-            <input
+            Applies to
+            <select
               value={form.intentType}
               onChange={(e) => setForm((f) => ({ ...f, intentType: e.target.value }))}
               className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200"
-              placeholder="e.g. INT-25, or ALL"
-            />
+            >
+              {DECISION_POINTS.map(([code, label]) => (
+                <option key={code} value={code}>
+                  {label}
+                </option>
+              ))}
+            </select>
           </label>
           <label className="text-xs text-slate-400">
             Mode
@@ -1058,109 +921,6 @@ function OrchestrationPoliciesSection() {
         {error && <p className="mt-3 text-xs text-red-400">{error}</p>}
         <button onClick={submit} className="mt-4 rounded-lg bg-sky-600 px-4 py-2 text-sm font-bold text-white hover:bg-sky-500">
           Create Policy
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function AiSettingsSection() {
-  const [settings, setSettings] = useState<AiSettings | null>(null);
-  const [apiKeyInput, setApiKeyInput] = useState("");
-  const [model, setModel] = useState("gpt-4o-mini");
-  const [error, setError] = useState<string | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
-
-  function load() {
-    getAiSettings().then((s) => {
-      setSettings(s);
-      setModel(s.model);
-    });
-  }
-
-  useEffect(load, []);
-
-  async function save() {
-    setError(null);
-    setMessage(null);
-    try {
-      await updateAiSettings({ api_key: apiKeyInput.trim() || null, model: model.trim() || "gpt-4o-mini", is_active: true });
-      setApiKeyInput("");
-      setMessage("Saved.");
-      load();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to save AI settings.");
-    }
-  }
-
-  async function clearKey() {
-    setError(null);
-    setMessage(null);
-    try {
-      await clearAiSettings();
-      setMessage("Cleared - falling back to the platform default key.");
-      load();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to clear the key.");
-    }
-  }
-
-  return (
-    <div className="space-y-6">
-      <p className="text-sm text-slate-400">
-        The API key that powers the Expression Builder's free-English understanding and live suggestions
-        (Intent Command Bar). Bring your own key now; swap in a production-grade key later by saving over it -
-        nothing else changes. Leave this unconfigured and the platform's own default key is used instead; with
-        no key anywhere, free text still works but must follow the plain <span className="font-mono text-slate-300">field: value</span> format.
-      </p>
-
-      {settings && (
-        <div className="flex flex-wrap items-center gap-3 rounded-lg border border-slate-700 bg-slate-900/60 px-4 py-3 text-sm">
-          <span
-            className={`rounded-md border px-2.5 py-1 text-xs font-bold ${
-              settings.configured ? "bg-emerald-500/15 text-emerald-400 border-emerald-500/30" : "bg-slate-500/15 text-slate-400 border-slate-500/30"
-            }`}
-          >
-            {settings.configured ? "Tenant key configured" : "Using platform default"}
-          </span>
-          {settings.masked_api_key && <span className="font-mono text-xs text-slate-400">{settings.masked_api_key}</span>}
-          <span className="text-xs text-slate-500">model: {settings.model}</span>
-          {settings.configured && (
-            <button onClick={clearKey} className="ml-auto rounded-md border border-slate-700 px-2.5 py-1 text-xs font-bold text-slate-300 hover:border-red-500 hover:text-red-400">
-              Clear key
-            </button>
-          )}
-        </div>
-      )}
-
-      <div className="rounded-xl border border-slate-700 bg-slate-900/60 p-5">
-        <h3 className="mb-4 text-base font-bold text-slate-100">Update API Key</h3>
-        <div className="grid gap-3 md:grid-cols-2">
-          <label className="text-xs text-slate-400">
-            OpenAI API key
-            <input
-              type="password"
-              value={apiKeyInput}
-              onChange={(e) => setApiKeyInput(e.target.value)}
-              className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200"
-              placeholder="sk-... (leave blank to keep the current key)"
-              autoComplete="off"
-            />
-          </label>
-          <label className="text-xs text-slate-400">
-            Model
-            <input
-              value={model}
-              onChange={(e) => setModel(e.target.value)}
-              className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200"
-              placeholder="gpt-4o-mini"
-            />
-          </label>
-        </div>
-        {error && <p className="mt-3 text-xs text-red-400">{error}</p>}
-        {message && <p className="mt-3 text-xs text-emerald-400">{message}</p>}
-        <button onClick={save} className="mt-4 rounded-lg bg-sky-600 px-4 py-2 text-sm font-bold text-white hover:bg-sky-500">
-          Save
         </button>
       </div>
     </div>
@@ -1344,51 +1104,243 @@ function TestSuiteSection() {
   );
 }
 
-export default function AdminPage() {
-  const [section, setSection] = useState<Section>("approvals");
+type NavItem = { id: Section; label: string; icon: string; hint: string; wide?: "xl" | "lg" };
+type NavGroup = { title: string; icon: string; blurb: string; items: NavItem[] };
+
+// The admin areas, grouped by what an administrator is trying to do.
+const NAV: NavGroup[] = [
+  {
+    title: "People & Organization", icon: "🏢", blurb: "Who works here, what they see and which part of the process they own.",
+    items: [
+      { id: "org", label: "Org Structure", icon: "🌳", hint: "Departments, positions and who holds them", wide: "lg" },
+      { id: "users", label: "Users", icon: "👥", hint: "Sign-ins and their built-in role" },
+      { id: "access", label: "Roles & Access", icon: "🔐", hint: "Pages each role opens and data each position sees" },
+      { id: "roles", label: "Process Roles", icon: "🎭", hint: "Account Manager, Presales, Sales Ops, CPMO, BSD" },
+    ],
+  },
+  {
+    title: "Products & Pricing", icon: "📦", blurb: "What you sell, how it is configured, what it costs and who may buy it.",
+    items: [
+      { id: "productmodel", label: "Product Modeller", icon: "🧩", hint: "Each product's overview, attributes (by hand or AI), child products, rules, import/export, release", wide: "lg" },
+      { id: "attributes", label: "Product Attributes", icon: "🏷️", hint: "The shared attribute library - where each is used; atomic product values" },
+      { id: "pricelists", label: "Pricelists", icon: "💰", hint: "Standard, Enterprise, Strategic ... and their prices" },
+      { id: "feasibility", label: "Feasibility Checks", icon: "📡", hint: "Coverage and capacity checks Presales runs" },
+      { id: "ordermgmt", label: "Order Management", icon: "🛒", hint: "Tax, shipping, favorites, recommendations, promotions and credit limits", wide: "lg" },
+      { id: "fulfillment", label: "Fulfillment", icon: "🧭", hint: "Design COM / SOM / TOM fulfillment patterns on eTOM; monitor orders and fallout", wide: "lg" },
+      { id: "comms", label: "Communications", icon: "📡", hint: "Billing, collections and fraud policy, providers, solutions and allowances", wide: "lg" },
+    ],
+  },
+  {
+    title: "Processes & Automation", icon: "⚙️", blurb: "How work flows: intents, states, approvals, assignment and timers.",
+    items: [
+      { id: "functionmap", label: "Functional Map", icon: "🗺️", hint: "Every function point and process as a picture - rearrange it and the intents follow", wide: "xl" },
+      { id: "intents", label: "Intents", icon: "🎯", hint: "The actions people run, their names, fields and phrases", wide: "lg" },
+      { id: "conflicts", label: "Conflicts", icon: "⚖️", hint: "Automations and actions that pull against each other - set their priority and conditions", wide: "lg" },
+      { id: "flows", label: "Flow Studio", icon: "🔀", hint: "Visual flows around intents, states and validations", wide: "lg" },
+      { id: "lifecycle", label: "Lifecycle", icon: "🔄", hint: "States and transitions of each record type" },
+      { id: "approvals", label: "Approvals", icon: "✅", hint: "Discount and record approval rules, and the approval log" },
+      { id: "quotedocs", label: "Quote Documents", icon: "📄", hint: "The proposal and agreement PDFs a quote gets - wording, switch on / off" },
+      { id: "broadcasts", label: "Broadcasts", icon: "📣", hint: "Messages in the running bar on the Dashboard, My Work and Customer 360" },
+      { id: "assignment", label: "Assignment Rules", icon: "📌", hint: "Who records are handed to" },
+      { id: "sla", label: "SLA Policies", icon: "⏱️", hint: "Clocks and what happens on breach" },
+      { id: "ponr", label: "PONR Policies", icon: "🚧", hint: "Points of no return for orders" },
+      { id: "orchestration", label: "Orchestration Mode", icon: "🎼", hint: "Saga vs choreography per intent" },
+    ],
+  },
+  {
+    title: "Data & Pages", icon: "🗂️", blurb: "What each record holds, how its pages look, and how data gets in.",
+    items: [
+      { id: "pages", label: "Page Designer", icon: "🖼️", hint: "B2B/B2C pages, mandatory fields and rules", wide: "xl" },
+      { id: "customfields", label: "Custom Fields", icon: "➕", hint: "Extra fields on records" },
+      { id: "recordtypes", label: "Record Types", icon: "🗃️", hint: "Record types of your own (Site Survey, Contract ...) and their fields", wide: "lg" },
+      { id: "bim", label: "Integration (BIM)", icon: "🔌", hint: "BRT_IDs, batch loads and EAI interfaces", wide: "lg" },
+    ],
+  },
+  {
+    title: "Platform", icon: "🛠️", blurb: "AI, identity verification and quality.",
+    items: [
+      { id: "ai", label: "AI Settings", icon: "🤖", hint: "Which AI model the platform uses" },
+      { id: "identity", label: "Identity Providers", icon: "🪪", hint: "KYC / ID verification services" },
+      { id: "tests", label: "Test Suite", icon: "🧪", hint: "Run the platform's checks" },
+    ],
+  },
+];
+const ITEMS = NAV.flatMap((g) => g.items.map((i) => ({ ...i, group: g.title })));
+const REMEMBER = "brt360.admin.section";
+
+function remembered(): Section | "home" {
+  try {
+    const saved = localStorage.getItem(REMEMBER);
+    return saved && (saved === "home" || ITEMS.some((i) => i.id === saved)) ? (saved as Section | "home") : "home";
+  } catch {
+    return "home";
+  }
+}
+
+function AdminHome({ open, allowed }: { open: (id: Section) => void; allowed: (id: Section) => boolean }) {
+  return (
+    <div className="grid gap-4 md:grid-cols-2">
+      {NAV.map(g => ({ ...g, items: g.items.filter(i => allowed(i.id)) })).filter(g => g.items.length).map((g) => (
+        <section key={g.title} className="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+          <h2 className="text-base font-semibold text-slate-100">
+            {g.icon} {g.title}
+          </h2>
+          <p className="mb-3 mt-0.5 text-xs text-slate-400">{g.blurb}</p>
+          <div className="grid gap-1.5 sm:grid-cols-2">
+            {g.items.map((i) => (
+              <button
+                key={i.id}
+                type="button"
+                onClick={() => open(i.id)}
+                className="rounded-lg border border-slate-800 bg-slate-950/50 px-3 py-2 text-left transition hover:border-sky-600 hover:bg-slate-900"
+              >
+                <span className="block text-sm font-semibold text-slate-200">
+                  {i.icon} {i.label}
+                </span>
+                <span className="block text-[11px] leading-snug text-slate-500">{i.hint}</span>
+              </button>
+            ))}
+          </div>
+        </section>
+      ))}
+    </div>
+  );
+}
+
+export default function AdminPage({ onAccessChanged }: { onAccessChanged?: () => void }) {
+  const [selectedSection, setSectionState] = useState<Section | "home">(remembered);
+  const [modules, setModules] = useState<string[]>([]);
+  const [moduleError, setModuleError] = useState('');
+  useEffect(() => { request<{key:string; enabled:boolean}[]>('/api/modules').then(rows => setModules(rows.filter(r => r.enabled).map(r => r.key))).catch(e => setModuleError(String(e))); }, []);
+  const allowed = (id: Section) => {
+    if (['org','access','users','ai','broadcasts','approvals','roles','lifecycle','assignment'].includes(id)) return true;
+    const module = id==='flows' ? 'flow_studio' : id==='pages' ? 'page_designer' : ['intents','customfields','recordtypes','functionmap','conflicts'].includes(id) ? 'custom_development' : 'telecom_crm';
+    return modules.includes(module);
+  };
+  const section = selectedSection==='home' || allowed(selectedSection) ? selectedSection : 'home';
+  const [filter, setFilter] = useState("");
+  const setSection = (id: Section | "home") => {
+    setSectionState(id);
+    try {
+      localStorage.setItem(REMEMBER, id);
+    } catch {
+      /* private window - just don't remember */
+    }
+  };
+  // Action names for every admin screen (codes stay internal).
+  useEffect(() => {
+    intentCatalog().catch(() => null);
+  }, []);
+
+  const current = ITEMS.find((i) => i.id === section);
+  const q = filter.trim().toLowerCase();
+  const groups = NAV.map((g) => ({ ...g, items: g.items.filter((i) => allowed(i.id) && (!q || `${i.label} ${i.hint} ${g.title}`.toLowerCase().includes(q))) })).filter((g) => g.items.length);
+  const width = current?.wide === "xl" ? "max-w-[110rem]" : current?.wide === "lg" || section === "home" ? "max-w-[90rem]" : "max-w-[90rem]";
 
   return (
-    <div className="mx-auto max-w-4xl space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-slate-100">Admin</h1>
-        <p className="mt-1 text-sm text-slate-400">Tenant configuration - reference data admins edit without touching code.</p>
+    <div className={`mx-auto ${width}`}>
+      <div className="mb-5 flex flex-wrap items-end gap-3">
+        <div className="flex-1">
+          <h1 className="text-2xl font-bold text-slate-100">Admin</h1>
+          <p className="mt-1 text-sm text-slate-400">
+            {current ? (
+              <>
+                <button type="button" onClick={() => setSection("home")} className="text-sky-400 hover:text-sky-300">
+                  Admin
+                </button>{" "}
+                › {current.group} › <span className="text-slate-200">{current.label}</span> - {current.hint}
+              </>
+            ) : (
+              "Configure your organization, products and processes - without touching code."
+            )}
+          </p>
+        </div>
+        {/* phone / narrow screens: one picker instead of the side menu */}
+        <select value={section} onChange={(e) => setSection(e.target.value as Section | "home")} className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 lg:hidden">
+          <option value="home">Overview</option>
+          {NAV.map(g => ({ ...g, items: g.items.filter(i => allowed(i.id)) })).filter(g => g.items.length).map((g) => (
+            <optgroup key={g.title} label={g.title}>
+              {g.items.map((i) => (
+                <option key={i.id} value={i.id}>
+                  {i.label}
+                </option>
+              ))}
+            </optgroup>
+          ))}
+        </select>
       </div>
 
-      <div className="flex gap-1 border-b border-slate-800">
-        {([
-          ["approvals", "Approval Chains"],
-          ["sla", "SLA Policies"],
-          ["attributes", "Product Attributes"],
-          ["identity", "Identity Providers"],
-          ["ponr", "PONR Policies"],
-          ["feasibility", "Feasibility Checks"],
-          ["orchestration", "Orchestration Mode"],
-          ["ai", "AI Settings"],
-          ["users", "Users"],
-          ["tests", "Test Suite"],
-        ] as [Section, string][]).map(([id, label]) => (
+      <div className="flex gap-6">
+        <nav className="sticky top-4 hidden max-h-[calc(100vh-2rem)] w-60 shrink-0 self-start overflow-y-auto pr-1 lg:block">
+          <input
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            placeholder="Find a setting…"
+            className="mb-3 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-1.5 text-sm text-slate-100 outline-none focus:border-sky-500"
+          />
           <button
-            key={id}
-            onClick={() => setSection(id)}
-            className={`rounded-t-lg px-4 py-2 text-sm font-semibold transition ${
-              section === id ? "border-b-2 border-sky-500 text-sky-400" : "text-slate-400 hover:text-slate-200"
-            }`}
+            type="button"
+            onClick={() => setSection("home")}
+            className={`mb-3 flex w-full items-center gap-2 rounded-lg px-3 py-1.5 text-left text-sm ${section === "home" ? "bg-sky-500/15 font-semibold text-sky-300" : "text-slate-300 hover:bg-slate-800"}`}
           >
-            {label}
+            🏠 Overview
           </button>
-        ))}
-      </div>
+          {groups.map((g) => (
+            <div key={g.title} className="mb-3">
+              <p className="mb-1 px-3 text-[10px] font-bold uppercase tracking-wider text-slate-500">{g.title}</p>
+              {g.items.map((i) => (
+                <button
+                  key={i.id}
+                  type="button"
+                  onClick={() => setSection(i.id)}
+                  title={i.hint}
+                  className={`flex w-full items-center gap-2 rounded-lg px-3 py-1.5 text-left text-sm transition ${
+                    section === i.id ? "bg-sky-500/15 font-semibold text-sky-300" : "text-slate-300 hover:bg-slate-800 hover:text-slate-100"
+                  }`}
+                >
+                  <span className="w-5 text-center">{i.icon}</span>
+                  {i.label}
+                </button>
+              ))}
+            </div>
+          ))}
+          {groups.length === 0 && <p className="px-3 text-xs text-slate-500">Nothing matches.</p>}
+        </nav>
 
-      {section === "approvals" && <ApprovalChainsSection />}
-      {section === "sla" && <SlaPoliciesSection />}
-      {section === "attributes" && <ProductAttributesSection />}
-      {section === "identity" && <IdentityProvidersSection />}
-      {section === "ponr" && <PonrPoliciesSection />}
-      {section === "feasibility" && <FeasibilityCheckTypesSection />}
-      {section === "orchestration" && <OrchestrationPoliciesSection />}
-      {section === "ai" && <AiSettingsSection />}
-      {section === "users" && <UsersSection />}
-      {section === "tests" && <TestSuiteSection />}
+        <main className="min-w-0 flex-1 space-y-6">
+          {section === "home" && <><p className="text-red-300">{moduleError}</p><AdminHome open={setSection} allowed={allowed} /></>}
+          {section === "org" && <OrgStructureSection />}
+          {section === "access" && <RolesAccessSection onAccessChanged={onAccessChanged} />}
+          {section === "intents" && <AdminIntentsSection onOpenFlowStudio={() => setSection("flows")} />}
+          {section === "flows" && <FlowStudioSection />}
+          {section === "conflicts" && <AdminConflictsSection onOpenFlowStudio={() => setSection("flows")} />}
+          {section === "functionmap" && <AdminFunctionMap onOpenFlowStudio={() => setSection("flows")} onOpenIntents={() => setSection("intents")} />}
+          {section === "pages" && <AdminPageDesignerSection />}
+          {section === "bim" && <AdminBimSection />}
+      {section === "ordermgmt" && <AdminOrderMgmtSection />}
+      {section === "fulfillment" && <AdminFulfillmentSection />}
+      {section === "comms" && <AdminCommsSection />}
+          {section === "lifecycle" && <StateModelsSection />}
+          {section === "assignment" && <AssignmentSection />}
+          {section === "customfields" && <CustomFieldsSection />}
+          {section === "recordtypes" && <AdminRecordTypesSection />}
+          {section === "approvals" && <ApprovalsSection />}
+          {section === "broadcasts" && <BroadcastsSection />}
+          {section === "roles" && <ProcessRolesSection />}
+          {section === "pricelists" && <PriceListsSection />}
+          {section === "quotedocs" && <QuoteDocumentsSection />}
+          {section === "productmodel" && <AdminProductModelSection />}
+          {section === "sla" && <SlaPoliciesSection />}
+          {section === "attributes" && <ProductAttributesSection />}
+          {section === "identity" && <IdentityProvidersSection />}
+          {section === "ponr" && <PonrPoliciesSection />}
+          {section === "feasibility" && <FeasibilityCheckTypesSection />}
+          {section === "orchestration" && <OrchestrationPoliciesSection />}
+          {section === "ai" && <AdminAiSection />}
+          {section === "users" && <UsersSection />}
+          {section === "tests" && <TestSuiteSection />}
+        </main>
+      </div>
     </div>
   );
 }

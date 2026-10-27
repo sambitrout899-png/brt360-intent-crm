@@ -15,7 +15,7 @@ import datetime as dt
 import enum
 
 from sqlalchemy import DateTime, Enum, ForeignKey, Integer, String, Text
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
 from app.timeutils import utcnow
@@ -48,6 +48,7 @@ class Proposal(Base):
 
 class AssetStatus(str, enum.Enum):
     active = "active"
+    suspended = "suspended"
     decommissioned = "decommissioned"
 
 
@@ -72,4 +73,18 @@ class Asset(Base):
     status: Mapped[AssetStatus] = mapped_column(Enum(AssetStatus), default=AssetStatus.active)
     inventory_system_ref: Mapped[str | None] = mapped_column(String(200), nullable=True)
     attributes: Mapped[str] = mapped_column(Text, default="")
+    instance_json: Mapped[str] = mapped_column(Text, default="{}")
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    superseded_by_asset_id: Mapped[int | None] = mapped_column(ForeignKey("assets.id"), nullable=True, index=True)
+    revisions: Mapped[list["AssetRevision"]] = relationship(viewonly=True, order_by="AssetRevision.version")
+    changes: Mapped[list["AssetChange"]] = relationship(viewonly=True, order_by="AssetChange.id")
+
+    @property
+    def order_history(self):
+        import json
+        history = [{"version": r.version, "order_id": json.loads(r.snapshot_json).get("order_id"),
+                    "order_item_id": r.order_item_id, "status": "completed"} for r in self.revisions]
+        history.extend({"order_id": c.order_id, "operation": c.operation, "status": c.status,
+                        "due_date": c.due_date.isoformat() if c.due_date else None} for c in self.changes)
+        return history
     created_at: Mapped[dt.datetime] = mapped_column(default=utcnow)

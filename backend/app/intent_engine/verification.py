@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.models.assurance import TroubleTicket, WorkOrder
 from app.models.catalog import OfferingStatus, ProductOffering
-from app.models.crm import Lead, Opportunity, Party, Quote, QuoteStatus
+from app.models.crm import Lead, Opportunity, OpportunityStage, Party, Quote, QuoteStatus
 from app.models.feasibility import FeasibilityAssessment
 from app.models.fulfillment import Proposal
 from app.models.identity import IdentityVerification
@@ -36,6 +36,14 @@ def _require(result: dict[str, Any] | None, key: str) -> Any | None:
 
 
 def verify(db: Session, intent_type: str, result: dict[str, Any] | None) -> VerificationResult:
+    if intent_type == "INT-106":
+        if _require(result, "configuration_request"):
+            return VerificationResult(not _require(result, "order_id"), "Configuration requested; no order submitted yet.")
+        order = db.get(Order, _require(result, "order_id") or 0)
+        item_id = _require(result, "order_item_id")
+        valid = order is not None and any(item.id == item_id for item in order.items) and order.status in (
+            OrderStatus.active, OrderStatus.completed, OrderStatus.activating, OrderStatus.pending_approval)
+        return VerificationResult(valid, "Order and order line submitted through the provisioning/approval sequence." if valid else "Order or order line was not submitted.")
     if intent_type in ("INT-01", "INT-02", "INT-03"):
         offering_id = _require(result, "product_offering_id")
         if offering_id is None:
@@ -93,6 +101,8 @@ def verify(db: Session, intent_type: str, result: dict[str, Any] | None) -> Veri
                 False, f"Expected quote status approved/rejected/pending_approval, found '{quote.status.value}'."
             )
         instance = quote.chain_instance
+        if instance is not None and result.get("waiting_for") and quote.status == QuoteStatus.pending_approval:
+            return VerificationResult(True, f"Quote {quote.id} submitted for approval - waiting for {result['waiting_for']}.")
         if instance is None or not any(s.status.value != "pending" for s in instance.steps):
             return VerificationResult(False, "No approval chain decision was recorded for this quote.")
         return VerificationResult(True, f"Quote {quote.id} chain status: {quote.status.value} (chain {instance.status.value}).")
@@ -105,7 +115,9 @@ def verify(db: Session, intent_type: str, result: dict[str, Any] | None) -> Veri
         # A multi-site order (Phase 3 B2B process pack) deliberately stays
         # "activating" after INT-07 - each site provisions independently
         # via INT-14, so only a single-site INT-07 call must reach "active".
-        if intent_type == "INT-07" and order.status not in (OrderStatus.active, OrderStatus.activating):
+        if intent_type == "INT-07" and order.status == OrderStatus.pending_approval and result.get("waiting_for"):
+            return VerificationResult(True, f"Order {order.id} placed - its discount waits for {result['waiting_for']}.")
+        if intent_type == "INT-07" and order.status not in (OrderStatus.active, OrderStatus.completed, OrderStatus.activating):
             return VerificationResult(False, f"Expected order status 'active' (or 'activating' for a multi-site order), found '{order.status.value}'.")
         return VerificationResult(True, f"Order {order.id} confirmed status '{order.status.value}'.")
 
@@ -180,13 +192,15 @@ def verify(db: Session, intent_type: str, result: dict[str, Any] | None) -> Veri
             return VerificationResult(False, "No feasibility assessment recorded.")
         return VerificationResult(True, f"Feasibility assessment {assessment.id} outcome: {assessment.outcome.value}.")
 
-    if intent_type in ("INT-19", "INT-20"):
+    if intent_type in ("INT-19", "INT-20", "INT-116"):
         quote_id = _require(result, "quote_id")
         quote = db.get(Quote, quote_id) if quote_id else None
         if quote is None:
             return VerificationResult(False, "Quote not found after revision/cancellation.")
         if intent_type == "INT-20" and quote.status != QuoteStatus.cancelled:
             return VerificationResult(False, f"Expected quote status 'cancelled', found '{quote.status.value}'.")
+        if intent_type == "INT-116" and abs(quote.total_price - (result.get("total_price") or 0)) > 0.009:
+            return VerificationResult(False, f"Expected quote total {result.get('total_price')}, found {quote.total_price}.")
         return VerificationResult(True, f"Quote {quote.id} confirmed status '{quote.status.value}'.")
 
     if intent_type == "INT-21":
@@ -225,6 +239,13 @@ def verify(db: Session, intent_type: str, result: dict[str, Any] | None) -> Veri
         if order is None:
             return VerificationResult(False, "Order not found after Order Control Unit decision.")
         chain_status = _require(result, "chain_status")
+        if chain_status == "approved" and result.get("fulfillment_order"):  # a fulfillment pattern took it: COM -> SOM -> TOM
+            from app.models.fulfillment_orders import FulfillmentOrder
+
+            com = db.query(FulfillmentOrder).filter(FulfillmentOrder.crm_order_id == order.id, FulfillmentOrder.layer == "COM").first()
+            if com is None:
+                return VerificationResult(False, f"Order {order.id} approved but orchestration has no customer order for it.")
+            return VerificationResult(True, f"Order {order.id} approved and received by orchestration as {com.number} ({com.status}).")
         if chain_status == "approved" and _require(result, "work_order_id") is None:
             return VerificationResult(False, f"Order {order.id} approved but no installation work order was raised.")
         return VerificationResult(True, f"Order {order.id} Order Control Unit decision recorded: {chain_status}.")
@@ -237,5 +258,144 @@ def verify(db: Session, intent_type: str, result: dict[str, Any] | None) -> Veri
         if work_order.status != "complete":
             return VerificationResult(False, f"Expected work order status 'complete', found '{work_order.status}'.")
         return VerificationResult(True, f"Work order {work_order.id} ('{work_order.kind}') confirmed closed.")
+
+    if intent_type == "INT-30":
+        new_quote = db.get(Quote, _require(result, "new_quote_id") or 0)
+        old_quote = db.get(Quote, _require(result, "quote_id") or 0)
+        if new_quote is None or old_quote is None:
+            return VerificationResult(False, "Revision or original quote not found after execution.")
+        if old_quote.status.value != "superseded" or new_quote.revision_of_quote_id != old_quote.id:
+            return VerificationResult(False, f"Quote {old_quote.id} was not superseded by quote {new_quote.id}.")
+        return VerificationResult(True, f"Quote {old_quote.id} superseded by revision {new_quote.revision_number} (quote {new_quote.id}).")
+
+    if intent_type in ("INT-29", "INT-31", "INT-32"):
+        from app.crm_core import lifecycle_service
+
+        entity_type, entity_id = _require(result, "entity_type"), _require(result, "entity_id")
+        obj = db.get(lifecycle_service.ENTITY_MODELS[entity_type], entity_id) if entity_type in lifecycle_service.ENTITY_MODELS else None
+        if obj is None:
+            return VerificationResult(False, "Record not found after execution.")
+        if intent_type == "INT-31" and _require(result, "approval_status") == "pending":
+            return VerificationResult(True, f"Approval requested - waiting for {_require(result, 'waiting_for')}.")
+        if intent_type == "INT-31":
+            state = lifecycle_service.effective_state(db, obj.tenant_id, entity_type, obj)
+            if state != _require(result, "to_state"):
+                return VerificationResult(False, f"Expected state '{_require(result, 'to_state')}', found '{state}'.")
+            return VerificationResult(True, f"{entity_type.title()} {obj.id} confirmed in state '{state}'.")
+        if intent_type == "INT-32":
+            meta = lifecycle_service.get_meta(db, obj.tenant_id, entity_type, obj.id, create=False)
+            if meta is None or (meta.owner_user_id, meta.owner_position_id) != (
+                _require(result, "owner_user_id"), _require(result, "owner_position_id")
+            ):
+                return VerificationResult(False, "Ownership was not recorded as requested.")
+            return VerificationResult(True, f"{entity_type.title()} {obj.id} ownership transferred.")
+        return VerificationResult(True, f"{entity_type.title()} {obj.id} updated: {', '.join(_require(result, 'updated_fields') or {})}.")
+
+    if intent_type == "INT-33":
+        from app.models.c360 import C360Layout
+
+        version = _require(result, "c360_version")
+        layout_id = _require(result, "c360_layout_id")
+        row = db.get(C360Layout, layout_id) if layout_id else None
+        if row is None or row.version != version:
+            return VerificationResult(False, "The new Customer 360 layout was not saved.")
+        return VerificationResult(True, f"Customer 360 layout version {version} is live.")
+
+    if intent_type == "INT-35":
+        party = db.get(Party, _require(result, "party_id") or 0)
+        if party is None:
+            return VerificationResult(False, "Customer not found after conversion.")
+        if _require(result, "approval_status") == "pending":
+            return VerificationResult(True, f"{party.name}: account approval requested - waiting for {_require(result, 'waiting_for')}.")
+        if party.profile is None or party.profile.account_status != "account":
+            return VerificationResult(False, f"{party.name} is still not an account.")
+        return VerificationResult(True, f"{party.name} is now an account.")
+
+    if intent_type in ("INT-37", "INT-38"):
+        opportunity = db.get(Opportunity, _require(result, "opportunity_id") or 0)
+        expected = {"INT-37": OpportunityStage.configured, "INT-38": OpportunityStage.in_feasibility}[intent_type]
+        if opportunity is None or opportunity.stage != expected:
+            return VerificationResult(False, f"Expected the opportunity to be {expected.value.replace('_', ' ')}.")
+        return VerificationResult(True, f"Opportunity {opportunity.id} is {expected.value.replace('_', ' ')}.")
+
+    if intent_type == "INT-39":
+        quote = db.get(Quote, _require(result, "quote_id") or 0)
+        if quote is None or quote.purchase_order is None:
+            return VerificationResult(False, "No PO recorded on the quote.")
+        return VerificationResult(True, f"PO {quote.purchase_order.po_number} attached to quote {quote.id}.")
+
+    if intent_type == "INT-40":
+        quote = db.get(Quote, _require(result, "quote_id") or 0)
+        order = db.get(Order, _require(result, "order_id") or 0)
+        if quote is None or quote.purchase_order is None or quote.purchase_order.matched_at is None:
+            return VerificationResult(False, "The quote was not matched.")
+        if order is None or not order.items:
+            return VerificationResult(False, "No order was created from the matched quote.")
+        return VerificationResult(True, f"Quote {quote.id} matched; order {order.id} created.")
+
+    if intent_type == "INT-41":
+        party = db.get(Party, _require(result, "party_id") or 0)
+        if party is None:
+            return VerificationResult(False, "No customer created.")
+        return VerificationResult(True, f"Consumer {party.name} added.")
+
+    if intent_type == "INT-42":
+        changes = _require(result, "changes") or []
+        if not changes:
+            return VerificationResult(False, "No attribute was changed.")
+        return VerificationResult(True, f"{_require(result, 'offering_name')}: {'; '.join(changes)}.")
+
+    if intent_type == "INT-43":
+        from app.models.process import PriceList, PriceListItem
+
+        row = (db.query(PriceListItem).join(PriceList, PriceList.id == PriceListItem.price_list_id)
+               .filter(PriceList.name == _require(result, "price_list"), PriceListItem.offering_name == _require(result, "offering_name")).first())
+        if row is None or row.price != _require(result, "price"):
+            return VerificationResult(False, "The pricelist price was not recorded.")
+        return VerificationResult(True, f"{row.offering_name} costs {row.price:,.2f} on {_require(result, 'price_list')}.")
+
+    if intent_type == "INT-44":
+        if not _require(result, "price_list"):
+            return VerificationResult(False, "No pricelist applied.")
+        return VerificationResult(True, f"{_require(result, 'entity_type')} {_require(result, 'entity_id')} now priced from {_require(result, 'price_list')}.")
+
+    if intent_type == "INT-45":
+        if not _require(result, "technical_attributes"):
+            return VerificationResult(False, "No technical attributes recorded.")
+        return VerificationResult(True, f"Order {_require(result, 'order_id')} technical attributes recorded.")
+
+    if intent_type == "INT-47":
+        if not _require(result, "configuration"):
+            return VerificationResult(False, "No configuration was produced.")
+        return VerificationResult(True, f"Configured at {_require(result, 'monthly_price')} a month.")
+
+    if intent_type == "INT-48":
+        if not _require(result, "model_version"):
+            return VerificationResult(False, "No model version was released.")
+        return VerificationResult(True, f"{_require(result, 'offering_name')} model v{_require(result, 'model_version')} released.")
+
+    if intent_type == "INT-49":
+        return VerificationResult(True, f"{len(_require(result, 'eligible') or [])} product(s) can be sold to this customer.")
+
+    if intent_type == "INT-50":
+        if _require(result, "status") != "changed":
+            return VerificationResult(False, "The service was not changed.")
+        return VerificationResult(True, f"Order {_require(result, 'order_id')} reconfigured; now {_require(result, 'new_monthly_price')} a month.")
+
+    if intent_type == "INT-46":
+        lead =db.get(Lead, _require(result, "lead_id") or 0)
+        if lead is None:
+            return VerificationResult(False, "No lead was created.")
+        wanted = ", ".join(p["offering_name"] for p in _require(result, "interested_products") or [])
+        return VerificationResult(True, f"Lead {lead.id} opened for {lead.party.name}" + (f", interested in {wanted}." if wanted else "."))
+
+    if intent_type == "INT-36":
+        if _require(result, "chain_status") is None and _require(result, "status") is None and _require(result, "order_status") is None:
+            return VerificationResult(False, "No decision was recorded.")
+        return VerificationResult(True, f"Decision recorded: {_require(result, 'decision')}.")
+
+    if intent_type == "INT-34":
+        valid = all(isinstance(result.get(key), int) and result[key] >= 0 for key in ("created", "updated", "deactivated"))
+        return VerificationResult(valid, "Inventory check type sync completed." if valid else "Missing sync result counts.")
 
     return VerificationResult(True, "No verification rule defined for this intent type; passing through.")

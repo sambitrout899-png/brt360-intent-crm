@@ -67,14 +67,15 @@ def run_suite(db: Session, tenant_id: int) -> TestRun:
                 cwd=_BACKEND_DIR,
                 capture_output=True,
                 text=True,
-                timeout=300,
+                # the suite has grown past 5 minutes on a busy server - give it room
+                timeout=1200,
             )
             output = proc.stdout + ("\n" + proc.stderr if proc.stderr else "")
             duration = time.monotonic() - start
             counts = _parse_summary(output)
             status = TestRunStatus.passed if proc.returncode == 0 else TestRunStatus.failed
         except subprocess.TimeoutExpired as e:
-            output = (e.stdout or "") + "\n[TIMED OUT after 300s]"
+            output = (e.stdout or "") + "\n[TIMED OUT after 1200s]"
             duration = time.monotonic() - start
             counts = {"total": 0, "passed": 0, "failed": 0, "errors": 1}
             status = TestRunStatus.error

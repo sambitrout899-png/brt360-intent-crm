@@ -1,0 +1,65 @@
+/* Health score, headline numbers and configured panes - the parts of the
+   Customer 360 page that come from the published Configure 360 layout. */
+
+.workspace-health { display: flex; align-items: center; gap: 10px; padding: 8px 14px 8px 10px; border: 1px solid var(--c-border); border-radius: var(--account-radius, 10px); background: color-mix(in srgb, var(--c-bg) 45%, transparent); }
+.workspace-health svg { width: 38px; height: 38px; flex-shrink: 0; }
+.workspace-health strong { display: block; font-size: 17px; font-weight: 650; line-height: 1.2; font-variant-numeric: tabular-nums; }
+.workspace-health strong small { margin-left: 2px; font-size: 11.5px; font-weight: 400; color: var(--c-muted); }
+.workspace-health span { display: block; font-size: 12px; color: var(--c-muted); }
+
+.workspace-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
+.workspace-metric { position: relative; padding: 14px 18px; border: 1px solid var(--c-border); border-radius: var(--account-radius, 10px); background: var(--account-card-bg, var(--c-surface)); }
+.workspace-metric::before { content: ""; position: absolute; left: 0; top: 14px; bottom: 14px; width: 2px; border-radius: 2px; background: var(--c-accent); opacity: .7; }
+.workspace-metric-label { display: block; font-size: 12px; color: var(--c-muted); }
+.workspace-metric strong { display: block; margin-top: 6px; font-size: 22px; font-weight: 650; letter-spacing: -.02em; font-variant-numeric: tabular-nums; color: var(--c-text); }
+.workspace-metric small { display: flex; align-items: center; gap: 5px; margin-top: 6px; font-size: 11px; color: var(--c-muted); }
+.workspace-metric i { width: 6px; height: 6px; border-radius: 50%; background: var(--c-accent); }
+[data-density=compact] .workspace-metric { padding: 10px 14px; }
+[data-density=compact] .workspace-metric strong { font-size: 19px; }
+
+/* configured panes */
+.c360-pane { min-width: 0; overflow: hidden; border: 1px solid var(--c-border); border-radius: var(--account-radius, 10px); background: var(--account-card-bg, var(--c-surface)); }
+.c360-pane[data-highlight] { box-shadow: 0 0 0 2px var(--pane-color, var(--c-accent)); }
+.c360-pane-head { display: flex; align-items: center; gap: 10px; padding: 12px 16px; cursor: pointer; list-style: none; }
+.c360-pane-head::-webkit-details-marker { display: none; }
+.c360-pane[open] > .c360-pane-head { border-bottom: 1px solid var(--c-border); }
+.c360-pane-head h3 { flex: 1; min-width: 0; font-size: 14px; font-weight: 600; color: var(--c-text); }
+.c360-pane-icon { display: flex; width: 26px; height: 26px; flex-shrink: 0; align-items: center; justify-content: center; font-size: 14px; border-radius: 6px; background: color-mix(in srgb, var(--pane-color, var(--c-accent)) 15%, transparent); }
+.c360-pane-toggle { font-size: 15px; color: var(--c-muted); transition: transform .15s; }
+details:not([open]) > summary .c360-pane-toggle { transform: rotate(-90deg); }
+.c360-pane-body { padding: 16px; }
+/* widgets sit flat on the pane - a soft tint, no second border */
+.c360-widget { min-width: 0; padding: 14px; border-radius: 8px; background: color-mix(in srgb, var(--c-muted) 5%, transparent); }
+.c360-widget[data-list] { padding: 0; background: transparent; }
+.c360-widget-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin-bottom: 10px; }
+.c360-widget-head h4 { flex: 1; min-width: 7rem; font-size: 12px; font-weight: 600; color: var(--c-muted); }
+.c360-source { display: inline-flex; flex-shrink: 0; align-items: center; gap: 5px; padding: 1px 8px; font-size: 11px; color: var(--c-muted); border: 1px solid var(--c-border); border-radius: 10px; }
+.c360-source > span { width: 6px; height: 6px; border-radius: 50%; }
+.c360-widget-state { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 20px 12px; text-align: center; font-size: 12.5px; color: var(--c-muted); border: 1px dashed var(--c-border); border-radius: 6px; }
+.c360-widget-state button { padding: 5px 12px; font-size: 12px; font-weight: 600; color: #fff; background: color-mix(in srgb, var(--c-accent) 78%, #0b1220); border-radius: 6px; }
+.c360-widget-error { align-items: flex-start; text-align: left; color: #fda4af; border: 1px solid color-mix(in srgb, #f43f5e 35%, transparent); background: color-mix(in srgb, #f43f5e 8%, transparent); }
+.c360-insights { display: grid; gap: 8px; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+.c360-insight { display: flex; gap: 10px; padding: 12px; border: 1px solid color-mix(in srgb, var(--tone) 30%, var(--c-border)); border-radius: 8px; background: color-mix(in srgb, var(--tone) 6%, transparent); }
+.c360-insight-icon { display: flex; width: 22px; height: 22px; flex-shrink: 0; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; color: var(--tone); border: 1.5px solid var(--tone); border-radius: 50%; }
+.c360-insight-title { font-size: 13px; font-weight: 600; color: var(--c-text); }
+.c360-insight-detail { margin-top: 2px; font-size: 12.5px; line-height: 1.45; color: var(--c-muted); }
+.c360-insight button { margin-top: 8px; font-size: 12px; font-weight: 600; color: var(--c-accent); }
+
+@media (max-width: 639px) {
+  .workspace-health { width: 100%; }
+  .workspace-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .workspace-metric strong { font-size: 19px; }
+}
+
+/* ---------- redesign: headline numbers and attention rows read as one family */
+.workspace-metric::before { display: none; }
+.workspace-metric-label { font-size: 11.5px; font-weight: 600; letter-spacing: .02em; text-transform: uppercase; }
+.workspace-metric strong { margin-top: 8px; font-size: 24px; }
+.workspace-metric small { color: #fda4af; }
+.c360-insights { display: block; grid-template-columns: none; }
+.c360-insight { display: flex; align-items: center; gap: 12px; padding: 11px 4px; border: 0; border-radius: 0; background: transparent; }
+.c360-insight + .c360-insight { border-top: 1px solid var(--c-border); }
+.c360-insight > div { min-width: 0; flex: 1; }
+.c360-insight-icon { width: 24px; height: 24px; border: 0; background: color-mix(in srgb, var(--tone) 15%, transparent); }
+.c360-insight button { flex-shrink: 0; margin-top: 0; padding: 5px 10px; border: 1px solid color-mix(in srgb, var(--c-accent) 35%, var(--c-border)); border-radius: 6px; }
+.c360-insight button:hover { background: color-mix(in srgb, var(--c-accent) 10%, transparent); }

@@ -1,0 +1,151 @@
+# BRT 360 on one server - the "compact" profile of the target architecture.
+#
+#   cd /opt/brt360/deploy/compose
+#   docker compose up -d --build                         the app
+#   docker compose --profile monitoring up -d            + Prometheus and Grafana
+#   (README.md here has the first-time steps)
+#
+# The host nginx stays the front door (it also serves the server's other
+# sites): it passes BRT 360's traffic to the web container on 127.0.0.1:$WEB_PORT.
+# Nothing else is published to the outside; Grafana listens on 127.0.0.1 only
+# (reach it through an SSH tunnel).
+#
+# Limits are sized for the 4-vCPU / 16 GB server, shared with other projects
+# and the host's Ollama.
+
+name: brt360
+
+# what every app container (migrate, api, worker) is told on top of backend/.env
+x-app-env: &app-env
+  DATABASE_URL: postgresql+psycopg://brt360:${POSTGRES_PASSWORD}@postgres:5432/brt360
+  REDIS_URL: redis://redis:6379/0
+  JWT_PRIVATE_KEY_FILE: /run/secrets/jwt_private.pem
+  # the host's Ollama (deploy/local_llm.sh) - see README.md, "Local LLM"
+  LOCAL_LLM_BASE_URL: http://host.docker.internal:11434/v1
+
+x-app: &app
+  image: brt360-api:${BRT_VERSION:-local}
+  build: ../../backend
+  restart: unless-stopped
+  # the app's own settings and secrets (BRT_ID, OpenAI, SMTP...) - the same file the
+  # systemd install uses; `environment` overrides what differs in containers
+  env_file: ../../backend/.env
+  environment: *app-env
+  volumes:
+    # the token signing key apply_sto.sh created (owned by uid 10001, the image's user)
+    - ../../backend/jwt_private.pem:/run/secrets/jwt_private.pem:ro
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: brt360
+      POSTGRES_USER: brt360
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/compose/.env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./backups:/backups
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U brt360 -d brt360"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    deploy:
+      resources:
+        limits: {cpus: "1.0", memory: 1536M}
+
+  # shared rate-limit counters for every API worker (nothing durable lives here)
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "64mb", "--maxmemory-policy", "allkeys-lru"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    deploy:
+      resources:
+        limits: {cpus: "0.25", memory: 128M}
+
+  # one-shot: schema up to date + reference data, before the API starts
+  migrate:
+    <<: *app
+    restart: "no"
+    command: ["sh", "-c", "alembic upgrade head && python -m app.seed"]
+    depends_on:
+      postgres: {condition: service_healthy}
+
+  api:
+    <<: *app
+    environment:
+      <<: *app-env
+      WEB_CONCURRENCY: ${API_WORKERS:-3}
+      SCHEDULER_MODE: "off"   # the worker container runs the background jobs
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+    deploy:
+      resources:
+        limits: {cpus: "2.0", memory: 2G}
+
+  # background jobs (inventory sync, reservation expiry, training reminders) - exactly one copy
+  worker:
+    <<: *app
+    command: ["python", "-m", "app.scheduler"]
+    healthcheck: {disable: true}
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    deploy:
+      resources:
+        limits: {cpus: "0.5", memory: 512M}
+
+  web:
+    image: brt360-web:${BRT_VERSION:-local}
+    build: ../../frontend
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${WEB_PORT:-8081}:80"
+    depends_on:
+      api: {condition: service_healthy}
+    deploy:
+      resources:
+        limits: {cpus: "0.5", memory: 256M}
+
+  # ---------------------------------------------------------------- monitoring (profile)
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    profiles: [monitoring]
+    restart: unless-stopped
+    command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.retention.time=15d"]
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus:/prometheus
+    deploy:
+      resources:
+        limits: {cpus: "0.5", memory: 512M}
+
+  grafana:
+    image: grafana/grafana:11.3.1
+    profiles: [monitoring]
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in deploy/compose/.env}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    ports:
+      - "127.0.0.1:${GRAFANA_PORT:-3000}:3000"
+    volumes:
+      - ./monitoring/grafana:/etc/grafana/provisioning:ro
+      - grafana:/var/lib/grafana
+    depends_on: [prometheus]
+    deploy:
+      resources:
+        limits: {cpus: "0.5", memory: 256M}
+
+volumes:
+  pgdata:
+  prometheus:
+  grafana:

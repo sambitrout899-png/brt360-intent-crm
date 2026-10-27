@@ -18,6 +18,7 @@ class OrderType(str, enum.Enum):
 
 
 class OrderStatus(str, enum.Enum):
+    completed = "completed"
     created = "created"
     activating = "activating"
     active = "active"
@@ -29,6 +30,10 @@ class OrderStatus(str, enum.Enum):
     pending_cancellation = "pending_cancellation"
     cancelled = "cancelled"
     terminated = "terminated"
+    # A consumer order whose discount waits for a monetary approval, and
+    # one whose discount was turned down (INT-07, B2C path).
+    pending_approval = "pending_approval"
+    rejected = "rejected"
 
 
 class ServiceOrderStatus(str, enum.Enum):
@@ -77,9 +82,45 @@ class Order(Base):
         uselist=False,
         primaryjoin=(
             "and_(foreign(ApprovalChainInstance.entity_id) == Order.id, "
-            "ApprovalChainInstance.entity_type == 'order')"
+            "ApprovalChainInstance.entity_type == 'order', ApprovalChainInstance.gate == 'activating')"
         ),
     )
+    milestones: Mapped[list["OrderMilestone"]] = relationship(
+        back_populates="order", cascade="all, delete-orphan", order_by="OrderMilestone.id"
+    )
+    profile: Mapped["OrderProfile | None"] = relationship(back_populates="order", uselist=False, cascade="all, delete-orphan")
+
+
+class OrderProfile(Base):
+    """The segment an order was sold in and, for a consumer order placed
+    without a quote (INT-07), the discount asked for - which a monetary
+    approval rule on orders may gate. Kept beside the order's columns."""
+
+    __tablename__ = "order_profiles"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    order_id: Mapped[int] = mapped_column(ForeignKey("orders.id"), unique=True)
+    segment: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    requested_discount_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    order: Mapped[Order] = relationship(back_populates="profile")
+
+
+class OrderMilestone(Base):
+    """A fulfilment milestone reported back from order fulfillment -
+    order released, installation done, testing done, ESAN signed, live.
+    Purely a record of progress; nothing reads it to decide anything."""
+
+    __tablename__ = "order_milestones"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    order_id: Mapped[int] = mapped_column(ForeignKey("orders.id"))
+    code: Mapped[str] = mapped_column(String(50))
+    label: Mapped[str] = mapped_column(String(200))
+    detail: Mapped[str] = mapped_column(Text, default="")
+    reached_at: Mapped[dt.datetime] = mapped_column(default=utcnow)
+
+    order: Mapped[Order] = relationship(back_populates="milestones")
 
 
 class OrderItem(Base):
@@ -89,6 +130,10 @@ class OrderItem(Base):
     order_id: Mapped[int] = mapped_column(ForeignKey("orders.id"))
     product_offering_id: Mapped[int] = mapped_column(ForeignKey("product_offerings.id"))
     quantity: Mapped[int] = mapped_column(Integer, default=1)
+    status: Mapped[str] = mapped_column(String(30), default="created")
+    unit_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    discount_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    net_unit_price: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     order: Mapped[Order] = relationship(back_populates="items")
 

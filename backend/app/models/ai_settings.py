@@ -27,5 +27,12 @@ class AiSettings(Base):
     api_key: Mapped[str | None] = mapped_column(String(300), nullable=True)
     model: Mapped[str] = mapped_column(String(100), default="gpt-4o-mini")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Which model powers this tenant's AI: external (api_key/model above),
+    # local (the platform's own model on this server) or rules (none).
+    # None = the platform default (app.config.default_llm_provider).
+    provider: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    local_model: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    # Use the local model for as-you-type suggestions too (slow on CPU).
+    local_live_assist: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[dt.datetime] = mapped_column(default=utcnow)
     updated_at: Mapped[dt.datetime] = mapped_column(default=utcnow, onupdate=utcnow)

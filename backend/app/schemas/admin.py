@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import datetime as dt
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class TenantCreate(BaseModel):
+    licensed_modules: list[str] = Field(default_factory=lambda: ["telecom_crm"])
     name: str = Field(min_length=1, max_length=200)
     slug: str = Field(min_length=1, max_length=100, pattern=r"^[a-z0-9][a-z0-9-]*$")
     vertical: str = Field(default="both")
@@ -16,15 +17,42 @@ class TenantCreate(BaseModel):
     admin_password: str = Field(min_length=8)
     admin_name: str = Field(default="Admin", max_length=200)
 
+    @field_validator("slug", mode="before")
+    @classmethod
+    def normalize_slug(cls, value):
+        return value.strip().lower() if isinstance(value, str) else value
+
 
 class TenantOut(BaseModel):
+    licensed_modules: list[str] | None = None
     id: int
     name: str
     slug: str
     vertical: str
+    display_name: str | None = None
+    logo_data_url: str | None = None
+    brand_color: str | None = None
     created_at: dt.datetime
 
     model_config = {"from_attributes": True}
+
+
+class TenantUpdate(BaseModel):
+    """Every field optional; logo_data_url "" (or brand_color "") removes it."""
+
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    vertical: str | None = None
+    display_name: str | None = Field(default=None, max_length=200)
+    logo_data_url: str | None = None
+    brand_color: str | None = None
+    licensed_modules: list[str] | None = None
+
+
+class BrandingOut(BaseModel):
+    name: str
+    display_name: str
+    logo_data_url: str | None = None
+    brand_color: str | None = None
 
 
 class ApprovalChainTierIn(BaseModel):
@@ -198,6 +226,7 @@ class FeasibilityCheckTypeCreate(BaseModel):
 
 
 class FeasibilityCheckTypeOut(BaseModel):
+    external_id: str | None = None
     id: int
     name: str
     resource_type: str
@@ -229,6 +258,10 @@ class AiSettingsUpdate(BaseModel):
     api_key: str | None = None
     model: str = Field(default="gpt-4o-mini", min_length=1, max_length=100)
     is_active: bool = True
+    # external / local / rules - None leaves the current choice
+    provider: str | None = None
+    local_model: str | None = Field(default=None, max_length=100)
+    local_live_assist: bool | None = None
 
 
 class AiSettingsOut(BaseModel):
@@ -237,6 +270,29 @@ class AiSettingsOut(BaseModel):
     model: str
     is_active: bool
     using_global_fallback: bool  # true if this tenant has no key of its own
+    provider: str  # what the tenant chose (or the platform default)
+    effective: str  # what actually answers now: external / local / rules
+    effective_label: str
+    platform_key_available: bool
+    local_model: str
+    local_live_assist: bool
+
+
+class AiTestIn(BaseModel):
+    provider: str | None = None  # test a choice before saving it; None = the saved one
+    local_model: str | None = None
+    text: str = Field(default="New lead Acme Telecom from a referral in the North, interested in Fiber 800", max_length=500)
+
+
+class AiTestOut(BaseModel):
+    ok: bool
+    provider: str
+    model: str | None
+    latency_ms: int
+    intent_type: str | None
+    entities: dict
+    rationale: str
+    error: str | None = None
 
 
 class TestRunSummaryOut(BaseModel):

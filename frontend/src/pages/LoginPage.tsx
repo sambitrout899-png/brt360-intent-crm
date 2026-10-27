@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { login } from "../api/client";
+import { BrtCopyright, BrtLogo } from "../components/shell/BrtBrand";
 
 export default function LoginPage({ onLoggedIn }: { onLoggedIn: () => void }) {
   const [email, setEmail] = useState("");
@@ -22,10 +23,12 @@ export default function LoginPage({ onLoggedIn }: { onLoggedIn: () => void }) {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-950 px-4">
-      <form onSubmit={submit} className="w-full max-w-sm space-y-5 rounded-xl border border-slate-700 bg-slate-900/60 p-8">
-        <div>
-          <h1 className="text-xl font-bold text-slate-100">
+    <div className="relative flex min-h-screen flex-col items-center justify-center overflow-hidden bg-[#070b14] px-4 py-10">
+      <div className="pointer-events-none absolute -top-40 left-1/2 h-[28rem] w-[28rem] -translate-x-1/2 rounded-full bg-sky-500/10 blur-3xl" />
+      <form onSubmit={submit} className="relative w-full max-w-sm space-y-5 rounded-2xl border border-slate-800 bg-slate-900/70 p-8 shadow-2xl shadow-black/40 backdrop-blur">
+        <div className="flex flex-col items-center text-center">
+          <BrtLogo className="h-9" />
+          <h1 className="mt-6 text-xl font-semibold text-slate-100">
             BRT 360 <span className="text-sky-500">·</span> Intent CRM
           </h1>
           <p className="mt-1 text-sm text-slate-400">Sign in to continue.</p>
@@ -64,6 +67,9 @@ export default function LoginPage({ onLoggedIn }: { onLoggedIn: () => void }) {
           {loading ? "Signing in…" : "Sign In"}
         </button>
       </form>
+      <p className="relative mt-8 text-xs text-slate-500">
+        <BrtCopyright />
+      </p>
     </div>
   );
 }

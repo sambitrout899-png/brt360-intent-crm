@@ -20,7 +20,9 @@ def build_int13_steps(db: Session, tenant_id: int, execution_id: int, entities: 
     party_id = entities["party_id"]
     id_type = entities.get("id_type") or "national_id"
     id_number = entities["id_number"]
-    provider_name = entities.get("provider") or "Yakeen"
+    # a commercial registration is a business's ID - the business registry (WATHQ) checks it
+    id_type = str(id_type).strip().lower().replace(" ", "_")
+    provider_name = entities.get("provider") or ("WATHQ" if id_type == "commercial_registration" else "Yakeen")
     state: dict[str, Any] = {}
 
     def step1() -> dict[str, Any]:

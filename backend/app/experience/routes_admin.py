@@ -6,11 +6,15 @@ attributes be admin-configurable via UI rather than only via a config file.
 
 from __future__ import annotations
 
+import time
+
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.auth import hash_password, require_roles
-from app.crm_core import ai_settings_service, attribute_service, sla_service, test_runner_service
+from app.config import get_settings
+from app.crm_core import ai_settings_service, attribute_service, llm, sla_service, test_runner_service
 from app.db import get_db
 from app.models.approval import ApprovalChainTemplate, ApprovalChainTier
 from app.models.attributes import AttributeConstraintRule, ProductAttributeDefinition, ProductAttributeValue
@@ -25,6 +29,8 @@ from app.models.testing import TestRun
 from app.schemas.admin import (
     AiSettingsOut,
     AiSettingsUpdate,
+    AiTestIn,
+    AiTestOut,
     ApprovalChainTemplateCreate,
     ApprovalChainTemplateOut,
     AttributeConstraintRuleCreate,
@@ -234,11 +240,61 @@ def create_attribute_definition(
 def delete_attribute_definition(
     definition_id: int, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)
 ) -> None:
+    from app.crm_core import product_hub
+
     definition = db.get(ProductAttributeDefinition, definition_id)
     if definition is None or definition.tenant_id != tenant_id:
         raise HTTPException(404, "Attribute definition not found")
+    used = product_hub.where_used(db, tenant_id, definition_id)
+    if used:
+        raise HTTPException(409, f"{definition.name} is still used by " + ", ".join(used) + " - remove it there first")
     db.delete(definition)
     db.commit()
+
+
+@router.get("/attribute-definitions/usage")
+def attribute_definitions_usage(db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> list[dict]:
+    from app.crm_core import product_hub
+
+    return product_hub.attribute_usage(db, tenant_id)
+
+
+@router.patch("/attribute-definitions/{definition_id}")
+def update_attribute_definition(
+    definition_id: int, payload: dict, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)
+) -> dict:
+    """Rename (every product using it follows), change its unit, or its library values."""
+    from app.crm_core import product_config_service as pc
+
+    definition = db.get(ProductAttributeDefinition, definition_id)
+    if definition is None or definition.tenant_id != tenant_id:
+        raise HTTPException(404, "Attribute definition not found")
+    name = str(payload.get("name") or "").strip()
+    if name and pc._key(name) != pc._key(definition.name):
+        clash = [d for d in db.query(ProductAttributeDefinition).filter(ProductAttributeDefinition.tenant_id == tenant_id)
+                 if pc._key(d.name) == pc._key(name)]
+        if clash:
+            raise HTTPException(400, f"There is already an attribute called {clash[0].name}")
+        definition.name = name
+    if "unit" in payload:
+        definition.unit = (payload.get("unit") or "").strip() or None
+    if "values" in payload:
+        values = [str(v).strip() for v in payload.get("values") or [] if str(v).strip()]
+        definition.allowed_values = ",".join(values) or None
+    db.commit()
+    return {"id": definition.id, "name": definition.name, "unit": definition.unit, "values": pc._split_values(definition.allowed_values)}
+
+
+@router.post("/attribute-definitions/{definition_id}/tidy")
+def tidy_attribute_definition(definition_id: int, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> dict:
+    from app.crm_core import product_hub
+
+    definition = db.get(ProductAttributeDefinition, definition_id)
+    if definition is None or definition.tenant_id != tenant_id:
+        raise HTTPException(404, "Attribute definition not found")
+    removed = product_hub.tidy_values(db, tenant_id, definition_id)
+    db.commit()
+    return {"removed": removed}
 
 
 def _owned_spec(db: Session, tenant_id: int, spec_id: int) -> ProductSpecification:
@@ -577,17 +633,29 @@ def delete_orchestration_policy(
     db.commit()
 
 
-@router.get("/ai-settings", response_model=AiSettingsOut)
-def get_ai_settings(db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> AiSettingsOut:
-    row = ai_settings_service.get_or_create(db, tenant_id)
-    db.commit()
+def _ai_settings_out(db: Session, tenant_id: int, row) -> AiSettingsOut:
+    settings = get_settings()
+    target = llm.resolve(db, tenant_id)
     return AiSettingsOut(
         configured=bool(row.api_key),
         masked_api_key=ai_settings_service.mask_key(row.api_key),
         model=row.model,
         is_active=row.is_active,
         using_global_fallback=not bool(row.api_key),
+        provider=row.provider or settings.default_llm_provider,
+        effective=target.provider if target else "rules",
+        effective_label=target.label if target else "built-in rules (no AI model)",
+        platform_key_available=bool(settings.openai_api_key),
+        local_model=row.local_model or settings.local_llm_model,
+        local_live_assist=bool(row.local_live_assist),
     )
+
+
+@router.get("/ai-settings", response_model=AiSettingsOut)
+def get_ai_settings(db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> AiSettingsOut:
+    row = ai_settings_service.get_or_create(db, tenant_id)
+    db.commit()
+    return _ai_settings_out(db, tenant_id, row)
 
 
 @router.put("/ai-settings", response_model=AiSettingsOut)
@@ -595,18 +663,83 @@ def update_ai_settings(
     payload: AiSettingsUpdate, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)
 ) -> AiSettingsOut:
     row = ai_settings_service.get_or_create(db, tenant_id)
+    if payload.provider is not None and payload.provider not in llm.PROVIDERS:
+        raise HTTPException(400, f"provider must be one of: {', '.join(llm.PROVIDERS)}")
     if payload.api_key:
         row.api_key = payload.api_key
     row.model = payload.model
     row.is_active = payload.is_active
+    if payload.provider is not None:
+        row.provider = payload.provider
+    if payload.local_model is not None:
+        row.local_model = payload.local_model.strip() or None
+    if payload.local_live_assist is not None:
+        row.local_live_assist = payload.local_live_assist
     db.commit()
     db.refresh(row)
-    return AiSettingsOut(
-        configured=bool(row.api_key),
-        masked_api_key=ai_settings_service.mask_key(row.api_key),
-        model=row.model,
-        is_active=row.is_active,
-        using_global_fallback=not bool(row.api_key),
+    return _ai_settings_out(db, tenant_id, row)
+
+
+@router.get("/ai-settings/local-status")
+def local_model_status() -> dict:
+    """The model running on this server: reachable? which models are installed?"""
+    return llm.local_status()
+
+
+@router.post("/ai-settings/test", response_model=AiTestOut)
+def test_ai(payload: AiTestIn, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> AiTestOut:
+    """Ask the chosen model to understand one request - the real intent
+    prompt - and report what it understood and how long it took."""
+    from app.intent_engine import classifier
+
+    provider = payload.provider or (ai_settings_service.get_or_create(db, tenant_id).provider or get_settings().default_llm_provider)
+    if provider not in llm.PROVIDERS:
+        raise HTTPException(400, f"provider must be one of: {', '.join(llm.PROVIDERS)}")
+    started = time.perf_counter()
+    if provider == "rules":
+        result = classifier._classify_with_rules(payload.text, classifier.custom_intent_specs(db, tenant_id), None)
+        return AiTestOut(ok=True, provider="rules", model=None, latency_ms=round((time.perf_counter() - started) * 1000),
+                         intent_type=result.intent_type, entities=result.entities, rationale=result.rationale)
+    if provider == "local":
+        row = ai_settings_service.get_or_create(db, tenant_id)
+        target = llm.local_target(payload.local_model or row.local_model)
+    else:
+        row = ai_settings_service.get_or_create(db, tenant_id)
+        own_key = row.api_key if row.is_active else None
+        key = own_key or get_settings().openai_api_key
+        if not key:
+            return AiTestOut(ok=False, provider="external", model=None, latency_ms=0, intent_type=None, entities={}, rationale="",
+                             error="No API key - add your key above, or ask the platform owner to set OPENAI_API_KEY")
+        target = llm.LlmTarget("external", (row.model if own_key else None) or get_settings().openai_model, key, None, 30.0)
+    try:
+        result = classifier._classify_with_llm(payload.text, target, classifier.custom_intent_specs(db, tenant_id), None,
+                                               classifier.prompt_entries(db, tenant_id))
+        return AiTestOut(ok=result.intent_type is not None, provider=target.provider, model=target.model,
+                         latency_ms=round((time.perf_counter() - started) * 1000), intent_type=result.intent_type,
+                         entities=result.entities, rationale=result.rationale,
+                         error=None if result.intent_type else "The model answered, but not with a known intent")
+    except llm.LlmUnavailable as exc:
+        return AiTestOut(ok=False, provider=target.provider, model=target.model, latency_ms=round((time.perf_counter() - started) * 1000),
+                         intent_type=None, entities={}, rationale="", error=str(exc))
+
+
+@router.get("/ai-settings/training-data")
+def download_training_data(
+    synthetic: bool = True, per_template: int = 12, style: str = "reasoned", db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_current_tenant_id)
+) -> StreamingResponse:
+    """Fine-tuning file for the own model: this tenant's successful requests
+    plus generated telecom examples, in chat JSONL (see deploy/llm/README.md).
+    style=reasoned (default) teaches it to think first; style=plain = the original examples."""
+    from app.crm_core import training_data
+
+    per_template = max(1, min(per_template, 60))
+    if style not in training_data.STYLES:
+        raise HTTPException(400, f"style is one of {', '.join(training_data.STYLES)}")
+    lines = list(training_data.to_jsonl(training_data.build(db, tenant_id, per_template, synthetic, style)))
+    return StreamingResponse(
+        iter(lines), media_type="application/jsonl",
+        headers={"Content-Disposition": 'attachment; filename="brt360_training_data.jsonl"', "X-Example-Count": str(len(lines))},
     )
 
 

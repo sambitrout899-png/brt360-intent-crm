@@ -25,11 +25,13 @@ later steps' parameters within one plan.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from sqlalchemy.orm import Session
 
 from app.crm_core import account_service, approval_service
+from app.crm_core import product_config_service as product_config
 from app.integration import (
     billing_initiation_adapter,
     document_adapter,
@@ -41,7 +43,7 @@ from app.integration import (
 from app.models.assurance import CompletionEvidence, WorkOrder
 from app.models.crm import Opportunity, Party, Quote
 from app.models.fulfillment import Asset, AssetStatus, Proposal, ProposalStatus
-from app.models.orders import Order, OrderStatus, OrderType
+from app.models.orders import Order, OrderItem, OrderStatus, OrderType
 from app.timeutils import utcnow
 
 
@@ -51,11 +53,20 @@ def op_generate_proposal(db: Session, tenant_id: int, quote_id: int) -> dict[str
         raise ValueError(f"Quote {quote_id} not found")
     if quote.status.value != "approved":
         raise ValueError(f"Quote {quote_id} is not approved (status={quote.status.value}) - cannot propose it")
-    document_ref = document_adapter.store_document_reference("proposal", f"quote-{quote_id}")
+    # The proposal PDF on the quote: the one generated since the last send (INT-109), else one written now.
+    from app.crm_core import quote_documents
+
+    last_sent = db.query(Proposal).filter(Proposal.quote_id == quote_id).order_by(Proposal.id.desc()).first()
+    sent_doc = quote_documents.from_ref(db, tenant_id, last_sent.document_ref) if last_sent is not None else None
+    doc = quote_documents.latest(db, quote_id, "proposal", source="generated")
+    if doc is None or (sent_doc is not None and sent_doc.id >= doc.id):
+        doc = quote_documents.generate(db, tenant_id, quote, "proposal")
+    document_ref = quote_documents.ref(doc)
     proposal = Proposal(tenant_id=tenant_id, quote_id=quote_id, status=ProposalStatus.sent, document_ref=document_ref)
     db.add(proposal)
     db.flush()
-    return {"proposal_id": proposal.id, "quote_id": quote_id, "status": proposal.status.value, "document_ref": document_ref}
+    return {"proposal_id": proposal.id, "quote_id": quote_id, "status": proposal.status.value, "document_ref": document_ref,
+            "document_id": doc.id, "file_name": doc.file_name}
 
 
 def op_record_customer_decision(db: Session, tenant_id: int, proposal_id: int, decision: str) -> dict[str, Any]:
@@ -65,7 +76,8 @@ def op_record_customer_decision(db: Session, tenant_id: int, proposal_id: int, d
     proposal.status = ProposalStatus.customer_approved if decision == "approve" else ProposalStatus.customer_rejected
     proposal.decided_at = utcnow()
     db.flush()
-    return {"proposal_id": proposal.id, "status": proposal.status.value}
+    # the quote too - a flow that runs after the customer's answer acts on it ("then create the order")
+    return {"proposal_id": proposal.id, "quote_id": proposal.quote_id, "status": proposal.status.value}
 
 
 def op_generate_order_from_quote(db: Session, tenant_id: int, quote_id: int) -> dict[str, Any]:
@@ -79,8 +91,14 @@ def op_generate_order_from_quote(db: Session, tenant_id: int, quote_id: int) -> 
         .filter(Proposal.quote_id == quote_id, Proposal.status == ProposalStatus.customer_approved)
         .first()
     )
-    if approved_proposal is None:
-        raise ValueError(f"Quote {quote_id} has no customer-approved proposal yet - generate and approve one first")
+    # Two ways to get the customer's go-ahead: an accepted proposal, or
+    # (Sales-to-Order) their purchase order, matched by Sales Ops.
+    po_matched = quote.purchase_order is not None and quote.purchase_order.matched_at is not None
+    if approved_proposal is None and not po_matched:
+        raise ValueError(
+            f"Quote {quote_id} has no customer-approved proposal yet - generate and approve one first "
+            "(or attach the customer's PO and have Sales Ops match it)"
+        )
 
     opportunity = db.get(Opportunity, quote.opportunity_id)
     party_id = opportunity.lead.party_id
@@ -102,6 +120,8 @@ def op_generate_order_from_quote(db: Session, tenant_id: int, quote_id: int) -> 
     for item in quote.items:
         order_item = order_adapter.add_order_item(db, order.id, item.product_offering_id, item.quantity)
         order_item_ids.append(order_item.id)
+        # The product's configuration (pricing + technical attributes) rides along.
+        product_config.carry_to_order(db, tenant_id, item, order_item, opportunity)
     return {
         "order_id": order.id,
         "order_status": order.status.value,
@@ -110,7 +130,9 @@ def op_generate_order_from_quote(db: Session, tenant_id: int, quote_id: int) -> 
     }
 
 
-def op_approve_order(db: Session, tenant_id: int, order_id: int, decision: str = "approve", reasoning: str = "") -> dict[str, Any]:
+def op_approve_order(
+    db: Session, tenant_id: int, order_id: int, decision: str = "approve", reasoning: str = "", user_id: int | None = None
+) -> dict[str, Any]:
     """Order Control Unit gate - opt-in, same two-phase shape as the
     lead-qualification gate (INT-04/17): no "order" chain template
     configured means this auto-approves on the spot.
@@ -130,15 +152,35 @@ def op_approve_order(db: Session, tenant_id: int, order_id: int, decision: str =
         raise ValueError(f"Order {order_id} not found")
     if order.status.value != "created":
         raise ValueError(f"Order {order_id} has already been submitted for fulfillment (status={order.status.value})")
+    if decision == "approve":
+        # Provisioning needs the product's required technical attributes.
+        missing = product_config.order_missing_technical(db, tenant_id, order)
+        if missing:
+            raise ValueError("Set the technical attributes provisioning needs first - " + "; ".join(missing))
 
     instance = approval_service.get_chain_instance(db, "order", order.id)
+    new = False
     if instance is None:
         template = approval_service.resolve_order_control_template(db, tenant_id)
         if template is None:
             return {"order_id": order.id, "chain_status": "approved", "auto_approved": True}
-        instance = approval_service.instantiate_chain(db, "order", order.id, template)
+        # The request is the order's creator's - whoever opens the approval here is often the approver.
+        instance = approval_service.instantiate_chain(
+            db, "order", order.id, template, summary=f"Order #{order.id}: {order.monthly_price:,.2f}/month",
+            requested_by_user_id=order.sys_created_by,
+        )
+        new = True
 
-    outcome = approval_service.record_step_decision(db, instance, decision, reasoning)
+    # The tier's position decides it (see approval_service.can_decide): a
+    # chain this call just opened has then been submitted to them.
+    allowed, why = approval_service.can_decide(db, instance, user_id)
+    if not allowed:
+        if new:
+            tier = approval_service.waiting_for(instance)
+            return {"order_id": order.id, "auto_approved": False, "chain_status": "pending", "decided_tier": None,
+                    "next_tier": tier, "waiting_for": tier}
+        raise ValueError(why)
+    outcome = approval_service.record_step_decision(db, instance, decision, reasoning, user_id)
     return {"order_id": order.id, "auto_approved": False, **outcome}
 
 
@@ -159,6 +201,10 @@ def op_submit_order_to_orchestration(db: Session, tenant_id: int, order_id: int)
 
 def op_create_work_order(db: Session, tenant_id: int, order_id: int, kind: str, order_item_id: int | None = None) -> dict[str, Any]:
     work_order = WorkOrder(tenant_id=tenant_id, order_id=order_id, order_item_id=order_item_id, kind=kind, status="scheduled")
+    # The field team gets the product's technical attributes on the job.
+    attrs = product_config.order_item_attributes(db, order_item_id)
+    if attrs is not None and attrs[1]:
+        work_order.technical_parameters = product_config.technical_text(attrs[1])
     db.add(work_order)
     db.flush()
     return {"work_order_id": work_order.id, "order_id": order_id, "kind": kind, "work_order_status": work_order.status}
@@ -184,6 +230,8 @@ def op_close_work_order(db: Session, tenant_id: int, work_order_id: int) -> dict
     work_order = db.get(WorkOrder, work_order_id)
     if work_order is None or work_order.tenant_id != tenant_id:
         raise ValueError(f"Work order {work_order_id} not found")
+    if work_order.kind == "tom":
+        raise ValueError(f"Work order {work_order_id} belongs to a technical order (Fulfillment) - the engineer closes it in Field Service")
     work_order.status = "complete"
     db.flush()
     return {
@@ -197,7 +245,11 @@ def op_close_work_order(db: Session, tenant_id: int, work_order_id: int) -> dict
 
 def op_activate_network(db: Session, tenant_id: int, order_item_id: int) -> dict[str, Any]:
     ref = network_activation_adapter.activate_connection(order_item_id)
-    return {"order_item_id": order_item_id, "network_activation_ref": ref}
+    out: dict[str, Any] = {"order_item_id": order_item_id, "network_activation_ref": ref}
+    attrs = product_config.order_item_attributes(db, order_item_id)
+    if attrs is not None and attrs[1]:
+        out["provisioning_attributes"] = attrs[1]  # what the network was activated with
+    return out
 
 
 def op_record_connectivity_acceptance(db: Session, tenant_id: int, work_order_id: int, signature: str) -> dict[str, Any]:
@@ -234,6 +286,38 @@ def op_initiate_billing(db: Session, tenant_id: int, service_account_id: int) ->
 def op_create_asset(
     db: Session, tenant_id: int, service_account_id: int, order_item_id: int | None, asset_type: str, identifier: str
 ) -> dict[str, Any]:
+    if not order_item_id:
+        import re
+        match = re.fullmatch(r"ORDER-(\d+)-ITEM-0", identifier or "")
+        order = db.get(Order, int(match[1])) if match else None
+        if not order or order.tenant_id != tenant_id or order.service_account_id != service_account_id or not order.items:
+            raise ValueError("Select the fulfilled order line before creating an installed asset")
+        results = [op_create_asset(db, tenant_id, service_account_id, item.id, asset_type,
+                                  f"ORDER-{order.id}-ITEM-{item.id}") for item in order.items]
+        return results[0] if len(results) == 1 else {"asset_ids": [r["asset_id"] for r in results]}
+    if order_item_id:
+        item = db.get(OrderItem, order_item_id)
+        if item is None or item.order.tenant_id != tenant_id:
+            raise ValueError("Order line not found")
+        if item.order.service_account_id != service_account_id:
+            raise ValueError("Asset must use the service account selected on the order")
+        if item.order.order_type == OrderType.new:
+            from app.crm_core import abo_service
+            asset = abo_service.assetize(db, item.order, item)
+            if not asset.inventory_system_ref:
+                technical = json.loads(asset.attributes or "{}")
+                asset.inventory_system_ref = inventory_adapter.sync_asset_to_inventory(asset.asset_type, asset.identifier, technical)
+                db.flush()
+            return {"asset_id": asset.id, "inventory_system_ref": asset.inventory_system_ref}
+        from app.models.abo import AssetChange
+        change = db.query(AssetChange).filter_by(tenant_id=tenant_id, order_id=item.order_id).first()
+        if change is None:
+            raise ValueError("Change orders must originate from an asset")
+        asset = db.get(Asset, change.asset_id)
+        return {"asset_id": asset.id, "inventory_system_ref": asset.inventory_system_ref}
+    existing = db.query(Asset).filter_by(tenant_id=tenant_id, order_item_id=order_item_id).first() if order_item_id else None
+    if existing:
+        return {"asset_id": existing.id, "inventory_system_ref": existing.inventory_system_ref}
     asset = Asset(
         tenant_id=tenant_id,
         service_account_id=service_account_id,
@@ -242,9 +326,14 @@ def op_create_asset(
         identifier=identifier,
         status=AssetStatus.active,
     )
+    attrs = product_config.order_item_attributes(db, order_item_id)
+    technical = attrs[1] if attrs is not None else {}
+    if technical:
+        asset.attributes = json.dumps(technical)
     db.add(asset)
     db.flush()
-    inventory_ref = inventory_adapter.sync_asset_to_inventory(asset_type, identifier)
+    inventory_ref = (inventory_adapter.sync_asset_to_inventory(asset_type, identifier, technical) if technical
+                     else inventory_adapter.sync_asset_to_inventory(asset_type, identifier))
     asset.inventory_system_ref = inventory_ref
     db.flush()
     return {"asset_id": asset.id, "inventory_system_ref": inventory_ref}
@@ -254,7 +343,13 @@ def op_activate_order(db: Session, tenant_id: int, order_id: int) -> dict[str, A
     order = db.get(Order, order_id)
     if order is None or order.tenant_id != tenant_id:
         raise ValueError(f"Order {order_id} not found")
-    order.status = OrderStatus.active
+    from app.models.assurance import WorkOrder
+    pending = db.query(WorkOrder.id).filter(WorkOrder.order_id == order.id,
+        WorkOrder.kind != "field_dispatch", WorkOrder.status.notin_(("complete", "cancelled"))).first()
+    if pending:
+        return {"order_id": order.id, "order_status": order.status.value, "waiting_for": "remaining fulfillment work orders"}
+    from app.crm_core import abo_service
+    abo_service.complete(db, order)
     db.flush()
     return {"order_id": order.id, "order_status": order.status.value}
 

@@ -25,12 +25,12 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.crm_core import orchestration_mode_service
+from app.crm_core import orchestration_mode_service, process_service
 from app.data_intelligence import event_bus
 from app.models.catalog import ProductOffering
 from app.models.orchestration_policy import OrchestrationMode
 from app.models.orders import Order, OrderItem
-from app.orchestration import fulfillment_ops, llm_planner
+from app.orchestration import actions_sales, fulfillment_ops, llm_planner
 from app.orchestration.orchestrator import SagaStep
 
 
@@ -99,6 +99,7 @@ def build_int24_steps(db: Session, tenant_id: int, execution_id: int, entities: 
 
     def step1() -> dict[str, Any]:
         result = fulfillment_ops.op_generate_order_from_quote(db, tenant_id, quote_id)
+        actions_sales.milestone(db, result["order_id"], "order_created", "Order created from the quote")
         event_bus.publish(db, execution_id, "order.generated_from_quote", result)
         return result
 
@@ -120,17 +121,34 @@ def build_int25_steps(db: Session, tenant_id: int, execution_id: int, entities: 
     state: dict[str, Any] = {}
 
     def step1() -> dict[str, Any]:
-        result = fulfillment_ops.op_approve_order(db, tenant_id, order_id, decision, reasoning)
+        user_id = int(entities["_actor_user_id"]) if entities.get("_actor_user_id") else None
+        result = fulfillment_ops.op_approve_order(db, tenant_id, order_id, decision, reasoning, user_id)
         state["approve_result"] = result
         return result
 
     def step2() -> dict[str, Any]:
         if state["approve_result"]["chain_status"] != "approved":
+            if state["approve_result"]["chain_status"] == "rejected":
+                actions_sales.milestone(db, order_id, "order_rejected", "Order approval refused", reasoning)
             event_bus.publish(db, execution_id, "order.control_unit_decision_recorded", state["approve_result"])
             return {}
 
         order = db.get(Order, order_id)
         first_item = order.items[0] if order.items else None
+
+        # A tenant-designed fulfillment pattern (Admin -> Fulfillment) takes the
+        # order from here: COM -> SOM -> TOM, instead of the fixed work-order chain.
+        from app.orchestration import fulfillment_engine
+
+        pattern = fulfillment_engine.matching_pattern(db, tenant_id, order, fulfillment_engine.APPROVAL_INTENT)
+        if pattern is not None:
+            approved_by = "auto-approved" if state["approve_result"].get("auto_approved") else state["approve_result"].get("decided_tier") or ""
+            actions_sales.milestone(db, order_id, "order_approved", "Order approved", approved_by)
+            com = fulfillment_engine.receive(db, tenant_id, order, execution_id, pattern)
+            result = {"order_id": order.id, "order_status": order.status.value, "fulfillment_order": com.number, "fulfillment_status": com.status,
+                      "fulfillment_pattern": pattern.name, "planned_by": com.planned_by}
+            event_bus.publish(db, execution_id, "order.sent_to_orchestration", result)
+            return result
 
         def deterministic() -> list[SagaStep]:
             def sub1() -> dict[str, Any]:
@@ -153,6 +171,12 @@ def build_int25_steps(db: Session, tenant_id: int, execution_id: int, entities: 
             ["submit_order_to_orchestration", "create_work_order"],
             deterministic(),
         )
+        approved_by = "auto-approved" if state["approve_result"].get("auto_approved") else state["approve_result"].get("decided_tier") or ""
+        actions_sales.milestone(db, order_id, "order_approved", "Order approved", approved_by)
+        actions_sales.milestone(db, order_id, "sent_to_osm", "Sent to order fulfillment", str(result.get("orchestration_ref", "")))
+        actions_sales.milestone(db, order_id, "wfm1_generated", "WFM1 (installation) raised")
+        if result.get("work_order_id"):
+            process_service.hand_to_role(db, tenant_id, "order", order_id, "bsd", "Installation (WFM1)", "process")
         event_bus.publish(db, execution_id, "order.approved_and_submitted", result)
         return result
 
@@ -203,6 +227,9 @@ def build_int26_steps(db: Session, tenant_id: int, execution_id: int, entities: 
             ["activate_network", "create_work_order"],
             deterministic(),
         )
+        actions_sales.milestone(db, order_id, "wfm1_closed", "WFM1 closed - installation complete")
+        actions_sales.milestone(db, order_id, "network_activated", "Network provisioning done", str(result.get("network_activation_ref", "")))
+        actions_sales.milestone(db, order_id, "wfm2_generated", "WFM2 (testing) raised")
         event_bus.publish(db, execution_id, "work_order.installation_closed", result)
         return result
 
@@ -246,6 +273,9 @@ def build_int27_steps(db: Session, tenant_id: int, execution_id: int, entities: 
             ["create_work_order"],
             deterministic(),
         )
+        actions_sales.milestone(db, order_id, "wfm2_closed", "WFM2 closed - service tested with the customer", signature)
+        actions_sales.milestone(db, order_id, "esan_initiated", "ESAN initiated")
+        actions_sales.milestone(db, order_id, "wfm3_generated", "WFM3 (ESAN / acceptance letter) raised")
         event_bus.publish(db, execution_id, "work_order.connectivity_test_closed", result)
         return result
 
@@ -314,6 +344,10 @@ def build_int28_steps(db: Session, tenant_id: int, execution_id: int, entities: 
             ["initiate_billing", "create_asset", "activate_order", "convert_prospect_to_customer"],
             deterministic(),
         )
+        actions_sales.milestone(db, order_id, "esan_signed", "ESAN signed - WFM3 closed", document_ref or "")
+        actions_sales.milestone(db, order_id, "billing_started", "Billing started", str(result.get("billing_initiation_ref", "")))
+        actions_sales.milestone(db, order_id, "assets_created", "Assets created", str(result.get("inventory_system_ref", "")))
+        actions_sales.milestone(db, order_id, "live", "Service live")
         event_bus.publish(db, execution_id, "order.fulfilled", result)
         return result
 

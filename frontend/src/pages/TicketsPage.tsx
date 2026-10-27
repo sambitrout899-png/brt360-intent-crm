@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
-import { listTechnicians, listTickets, listWorkOrders } from "../api/client";
-import type { Technician, TroubleTicket, WorkOrder } from "../api/types";
+import { commsApi, listTickets } from "../api/client";
+import type { TroubleTicket } from "../api/types";
+import { useIntentRefresh, useWorkspace } from "../workspace";
+import type { CommsOverview, TicketDetail } from "./comms/types";
 
 const SEVERITY_STYLES: Record<string, string> = {
   critical: "bg-red-500/15 text-red-400 border-red-500/30",
@@ -9,66 +11,133 @@ const SEVERITY_STYLES: Record<string, string> = {
   low: "bg-slate-500/15 text-slate-400 border-slate-500/30",
 };
 
-export default function TicketsPage({ onRequestIntent }: { onRequestIntent: (text: string) => void }) {
+const ACTION = "rounded-md border px-2.5 py-1 text-xs font-bold";
+const ACTION_SKY = `${ACTION} border-sky-500/40 bg-sky-500/10 text-sky-400 hover:bg-sky-500/20`;
+const ACTION_SLATE = `${ACTION} border-slate-700 text-slate-300 hover:border-sky-500 hover:text-sky-300`;
+
+/** Trouble tickets: complaints and their diagnosis, network tickets with
+ * the customer tickets they caused, order fallout, resolution and surveys.
+ * Field work - engineers, work orders, scheduling and dispatch - lives in
+ * the Field Service module. */
+export default function TicketsPage({ onRequestIntent, onOpenFieldService }: { onRequestIntent: (text: string) => void; onOpenFieldService?: () => void }) {
+  const { runIntent, canRun } = useWorkspace();
   const [tickets, setTickets] = useState<TroubleTicket[]>([]);
-  const [workOrders, setWorkOrders] = useState<WorkOrder[]>([]);
-  const [technicians, setTechnicians] = useState<Technician[]>([]);
-  const [tab, setTab] = useState<"tickets" | "field">("tickets");
+  const [details, setDetails] = useState<Record<number, TicketDetail>>({});
+  const [stats, setStats] = useState<CommsOverview["tickets"] | null>(null);
+  const [filter, setFilter] = useState<"all" | "open" | "network" | "fallout">("all");
 
   function load() {
     listTickets().then(setTickets);
-    listWorkOrders().then(setWorkOrders);
-    listTechnicians().then(setTechnicians);
+    commsApi<Record<number, TicketDetail>>("/tickets").then(setDetails).catch(() => setDetails({}));
+    commsApi<CommsOverview["tickets"]>("/tickets/analysis").then(setStats).catch(() => setStats(null));
   }
   useEffect(load, []);
+  useIntentRefresh(load);
+
+  const shown = tickets.filter((t) => {
+    const d = details[t.id];
+    if (filter === "open") return t.status !== "resolved";
+    if (filter === "network") return d?.origin === "network" || (d?.children ?? 0) > 0;
+    if (filter === "fallout") return d?.origin === "fallout";
+    return true;
+  });
 
   return (
-    <div className="mx-auto max-w-6xl space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-100">Trouble Tickets & Field Service</h1>
-          <p className="mt-1 text-sm text-slate-400">Trouble-to-Resolve: complaints, diagnosis, and the technicians dispatched to fix them.</p>
+    <div className="page space-y-6">
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="min-w-0 flex-1">
+          <h1 className="text-2xl font-bold text-slate-100">Trouble Tickets</h1>
+          <p className="mt-1 text-sm text-slate-400">Complaints and their diagnosis, network outages, order fallout. Engineers, scheduling and dispatch are in Field Service.</p>
         </div>
+        {canRun("INT-98") ? <button onClick={() => runIntent("INT-98")} className="rounded-lg border border-slate-700 bg-slate-800/60 px-3 py-2 text-xs font-bold text-slate-300 hover:border-sky-500 hover:text-sky-400">
+          Log order fallout
+        </button> : null}
+        {onOpenFieldService && (
+          <button onClick={onOpenFieldService} className="rounded-lg border border-sky-500/40 bg-sky-500/10 px-3 py-2 text-xs font-bold text-sky-300 hover:bg-sky-500/20">
+            Field Service →
+          </button>
+        )}
         <button onClick={load} className="rounded-lg border border-slate-700 bg-slate-800/60 px-3 py-2 text-xs font-bold text-slate-300 hover:border-sky-500 hover:text-sky-400">
           Refresh
         </button>
       </div>
 
-      <div className="flex gap-2">
-        <button onClick={() => setTab("tickets")} className={`rounded-lg px-3 py-1.5 text-sm font-semibold ${tab === "tickets" ? "bg-sky-600 text-white" : "bg-slate-900/60 text-slate-400"}`}>
-          Tickets
-        </button>
-        <button onClick={() => setTab("field")} className={`rounded-lg px-3 py-1.5 text-sm font-semibold ${tab === "field" ? "bg-sky-600 text-white" : "bg-slate-900/60 text-slate-400"}`}>
-          Field Service
-        </button>
+      {stats && (
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          {[
+            ["Last 30 days", String(stats.total), `${stats.today} today`],
+            ["Open", String(stats.open), `${stats.network_parents} network ticket(s)`],
+            ["Time to resolve", stats.mean_hours_to_resolve !== null ? `${stats.mean_hours_to_resolve} h` : "—", "average"],
+            ["Satisfaction", stats.satisfaction !== null ? `${stats.satisfaction}/100` : "—", `${stats.fallout_open} fallout open`],
+          ].map(([label, value, sub]) => (
+            <div key={label} className="rounded-2xl border border-slate-800 bg-slate-900/60 px-4 py-3">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">{label}</p>
+              <p className="mt-1 text-xl font-bold text-slate-100">{value}</p>
+              <p className="text-[11px] text-slate-500">{sub}</p>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="flex flex-wrap gap-2">
+        {(["all", "open", "network", "fallout"] as const).map((f) => (
+          <button key={f} onClick={() => setFilter(f)}
+            className={`rounded-lg px-3 py-1.5 text-xs font-semibold ${filter === f ? "bg-sky-600 text-white" : "bg-slate-900/60 text-slate-400 hover:text-slate-200"}`}>
+            {{ all: "All", open: "Open", network: "Network & outages", fallout: "Order fallout" }[f]}
+          </button>
+        ))}
       </div>
 
-      {tab === "tickets" && (
-        <div className="space-y-3">
-          {tickets.map((t) => (
-            <div key={t.id} className="rounded-xl border border-slate-700 bg-slate-900/60 p-4">
+      <div className="space-y-3">
+        {shown.map((t) => {
+          const d = details[t.id];
+          const closed = t.status === "resolved";
+          return (
+            <div key={t.id} className={`rounded-xl border border-slate-700 bg-slate-900/60 p-4 ${closed ? "opacity-80" : ""}`}>
               <div className="flex flex-wrap items-center gap-3">
-                <span className="font-mono text-xs text-slate-500">#{t.id}</span>
+                <span className="font-mono text-xs text-slate-500">{d?.number ?? `#${t.id}`}</span>
                 <span className={`rounded-md border px-2 py-0.5 text-xs font-bold ${SEVERITY_STYLES[t.severity]}`}>{t.severity}</span>
                 <span className="rounded-md bg-slate-800 px-2 py-0.5 text-xs text-slate-300">{t.priority}</span>
                 <span className="text-xs text-slate-500">{t.sla_class} SLA</span>
-                <span className="text-xs text-slate-500">{t.status}</span>
-                <div className="ml-auto flex gap-2">
+                <span className="text-xs text-slate-500">{t.status}{d?.sub_status ? ` · ${d.sub_status.replace("_", " ")}` : ""}</span>
+                {d?.origin === "network" && <span className="rounded-md bg-violet-500/15 px-2 py-0.5 text-xs text-violet-300">network{d.service_item ? ` · ${d.service_item}` : ""}</span>}
+                {d?.origin === "fallout" && <span className="rounded-md bg-red-500/15 px-2 py-0.5 text-xs text-red-300">fallout · order #{d.order_id}{d.error_code ? ` · ${d.error_code}` : ""}</span>}
+                {(d?.children ?? 0) > 0 && <span className="rounded-md bg-slate-800 px-2 py-0.5 text-xs text-slate-300">{d!.children} child ticket(s)</span>}
+                {d?.parent_ticket_id && <span className="text-xs text-slate-500">under #{d.parent_ticket_id}</span>}
+                {d?.group && <span className="text-xs text-slate-500">{d.group}</span>}
+                <div className="ml-auto flex flex-wrap gap-2">
                   {!t.root_cause && (
-                    <button
-                      onClick={() => onRequestIntent(`Diagnose the root cause. ticket_id: ${t.id}`)}
-                      className="rounded-md border border-sky-500/40 bg-sky-500/10 px-2.5 py-1 text-xs font-bold text-sky-400 hover:bg-sky-500/20"
-                    >
+                    <button onClick={() => onRequestIntent(`Diagnose the root cause. ticket_id: ${t.id}`)} className={ACTION_SKY}>
                       Diagnose
                     </button>
                   )}
-                  {t.root_cause?.field_dispatch_required && (
-                    <button
-                      onClick={() => onRequestIntent(`Dispatch a technician. ticket_id: ${t.id}, required_skill: fiber_install, region: `)}
-                      className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-xs font-bold text-emerald-400 hover:bg-emerald-500/20"
-                    >
-                      Dispatch
+                  {t.root_cause?.field_dispatch_required && onOpenFieldService && (
+                    <button onClick={onOpenFieldService} className={`${ACTION} border-emerald-500/40 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20`}>
+                      Schedule in Field Service
                     </button>
+                  )}
+                  {!closed && (
+                    <>
+                      {canRun("INT-99") ? <button onClick={() => runIntent("INT-99", { ticket_id: t.id })} className={ACTION_SLATE}>
+                        Solutions
+                      </button> : null}
+                      {canRun("INT-95") ? <button onClick={() => runIntent("INT-95", { parent_ticket_id: t.id })} className={ACTION_SLATE} title="Make this the parent of other tickets (an outage)">
+                        Link children
+                      </button> : null}
+                      {canRun("INT-96") ? <button onClick={() => runIntent("INT-96", { ticket_id: t.id, ticket_action: "resolve" })} className={ACTION_SKY}>
+                        Resolve
+                      </button> : null}
+                    </>
+                  )}
+                  {closed && (
+                    <>
+                      {canRun("INT-97") ? <button onClick={() => runIntent("INT-97", { ticket_id: t.id })} className={ACTION_SLATE}>
+                        Survey
+                      </button> : null}
+                      {canRun("INT-96") ? <button onClick={() => runIntent("INT-96", { ticket_id: t.id, ticket_action: "reopen" })} className={ACTION_SLATE}>
+                        Reopen
+                      </button> : null}
+                    </>
                   )}
                 </div>
               </div>
@@ -80,52 +149,10 @@ export default function TicketsPage({ onRequestIntent }: { onRequestIntent: (tex
                 </div>
               )}
             </div>
-          ))}
-          {tickets.length === 0 && <p className="text-sm text-slate-500">No tickets yet.</p>}
-        </div>
-      )}
-
-      {tab === "field" && (
-        <div className="space-y-6">
-          <div>
-            <h2 className="mb-3 text-lg font-bold text-slate-100">Work Orders</h2>
-            <div className="space-y-2">
-              {workOrders.map((w) => (
-                <div key={w.id} className="flex flex-wrap items-center gap-3 rounded-lg border border-slate-700 bg-slate-900/60 px-4 py-3 text-sm">
-                  <span className="font-mono text-xs text-slate-500">#{w.id}</span>
-                  <span className="rounded-md bg-slate-800 px-2 py-0.5 text-xs text-slate-300">{w.status}</span>
-                  <span className="text-xs text-slate-500">{w.scheduled_window}</span>
-                  {w.technician_name && <span className="text-slate-300">Tech: {w.technician_name}</span>}
-                  {w.status !== "complete" && (
-                    <button
-                      onClick={() => onRequestIntent(`Complete the work order. work_order_id: ${w.id}`)}
-                      className="ml-auto rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-xs font-bold text-emerald-400 hover:bg-emerald-500/20"
-                    >
-                      Mark Complete
-                    </button>
-                  )}
-                </div>
-              ))}
-              {workOrders.length === 0 && <p className="text-sm text-slate-500">No work orders yet.</p>}
-            </div>
-          </div>
-
-          <div>
-            <h2 className="mb-3 text-lg font-bold text-slate-100">Technician Roster</h2>
-            <div className="grid gap-2 md:grid-cols-3">
-              {technicians.map((t) => (
-                <div key={t.id} className="rounded-lg border border-slate-700 bg-slate-900/60 px-3 py-2 text-sm">
-                  <div className="font-semibold text-slate-200">{t.name}</div>
-                  <div className="text-xs text-slate-500">{t.skills} · {t.region}</div>
-                  <span className={`mt-1 inline-block rounded-md px-2 py-0.5 text-xs ${t.status === "available" ? "bg-emerald-500/15 text-emerald-400" : "bg-slate-700 text-slate-400"}`}>
-                    {t.status}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
+          );
+        })}
+        {shown.length === 0 && <p className="text-sm text-slate-500">No tickets here.</p>}
+      </div>
     </div>
   );
 }

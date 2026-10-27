@@ -1,0 +1,101 @@
+"""Background jobs: inventory sync, inventory reservation expiry and training
+reminders, every minute.
+
+Exactly one process may run them. Under gunicorn every worker runs the app's
+lifespan, so with N workers each job used to run N times a minute. Now
+SCHEDULER_MODE decides:
+- "embedded" (default): the API worker that takes the lock file first runs
+  them; the other workers skip. If that worker dies, gunicorn's replacement
+  takes the lock on its startup.
+- "off": the API never runs them - a separate process does
+  (`python -m app.scheduler`), as the container setup will.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+import tempfile
+import time
+
+from app.config import get_settings
+from app.db import SessionLocal
+
+log = logging.getLogger(__name__)
+
+INTERVAL_SECONDS = 60
+
+
+def _inventory_sync() -> None:
+    from app.crm_core.inventory_sync_service import run_due
+
+    run_due(SessionLocal)
+
+
+def _reservation_expiry() -> None:
+    # inventory reservations no open order needs any more go back
+    from app.crm_core import inventory_service
+
+    inventory_service.run_due(SessionLocal)
+
+
+def _training() -> None:
+    from app.crm_core.training_service import run_due_training
+
+    run_due_training(SessionLocal)
+
+
+JOBS = (
+    ("Inventory scheduler", _inventory_sync),
+    ("Inventory reservation expiry", _reservation_expiry),
+    ("Training scheduler", _training),
+)
+
+
+def run_jobs_once() -> None:
+    """Each job on its own: one failing never stops the others."""
+    for name, job in JOBS:
+        try:
+            job()
+        except Exception:
+            log.exception("%s failed", name)
+
+
+async def run_forever() -> None:
+    while True:
+        await asyncio.to_thread(run_jobs_once)
+        await asyncio.sleep(INTERVAL_SECONDS)
+
+
+def claim():
+    """The scheduler lock, or None when another process already holds it.
+    Held for the life of the process - the OS drops it when the process ends."""
+    try:
+        import fcntl
+    except ImportError:  # Windows dev machine: a single process, nothing to share
+        return True
+    path = get_settings().scheduler_lock_file or os.path.join(tempfile.gettempdir(), "brt360-scheduler.lock")
+    handle = open(path, "a")
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        handle.close()
+        return None
+    return handle
+
+
+def release(lock) -> None:
+    if lock is not None and lock is not True:
+        lock.close()
+
+
+if __name__ == "__main__":
+    # The dedicated scheduler process (SCHEDULER_MODE=off on the API).
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    if claim() is None:
+        raise SystemExit("Another process already runs the scheduler - not starting a second one")
+    log.info("Scheduler running every %s s", INTERVAL_SECONDS)
+    while True:
+        run_jobs_once()
+        time.sleep(INTERVAL_SECONDS)

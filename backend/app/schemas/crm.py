@@ -5,6 +5,15 @@ import datetime as dt
 from pydantic import BaseModel
 
 
+class PartyProfileOut(BaseModel):
+    segment: str | None = None
+    account_status: str | None = None
+    price_list_id: int | None = None
+    industry: str | None = None
+
+    model_config = {"from_attributes": True}
+
+
 class PartyOut(BaseModel):
     id: int
     name: str
@@ -12,6 +21,8 @@ class PartyOut(BaseModel):
     email: str | None
     phone: str | None
     created_at: dt.datetime
+    # Sales-to-Order details (None for parties that never took those steps)
+    profile: PartyProfileOut | None = None
 
     model_config = {"from_attributes": True}
 
@@ -36,9 +47,13 @@ class OpportunityOut(BaseModel):
     lead_id: int
     name: str
     stage: str
+    offering_name: str | None = None
+    quantity: int = 1
     created_at: dt.datetime
     updated_at: dt.datetime
     feasibility_assessments: list[dict] = []
+    # Sales-to-Order: configuration + Presales hand-off (None = not used)
+    config: dict | None = None
 
     model_config = {"from_attributes": True}
 
@@ -94,6 +109,18 @@ class QuoteOut(BaseModel):
     approval_chain: ApprovalChainOut | None = None
     feasible: bool | None = None
     proposals: list[ProposalOut] = []
+    revision_number: int = 1
+    revision_of_quote_id: int | None = None
+    # Sales-to-Order: the customer's PO and Sales Ops' match
+    purchase_order: dict | None = None
+    # Product configuration: chosen attributes, price breakdown, the quote's own pricelist
+    configuration: dict | None = None
+    # The PDFs on the quote - proposal, the customer's PO, the agreement, others (no file content)
+    documents: list[dict] = []
+    # The order the quote became, once it is ordered
+    order_id: int | None = None
+    # The negotiated price (INT-116): {"active": {...} | None, "history": [...]} - None = never overridden
+    price_override: dict | None = None
 
     model_config = {"from_attributes": True}
 
@@ -140,6 +167,9 @@ class WorkOrderOut(BaseModel):
 
 
 class AssetOut(BaseModel):
+    order_history: list[dict] = []
+    instance_json: str = "{}"
+    version: int = 1
     id: int
     service_account_id: int
     order_item_id: int | None
@@ -173,11 +203,19 @@ class OrderOut(BaseModel):
     # TroubleTicket raises).
     order_control_chain: ApprovalChainOut | None = None
     fulfillment_work_orders: list[WorkOrderOut] = []
+    # Fulfilment milestones reported back (Fulfillment), and - for a consumer order
+    # waiting on a discount approval - that approval.
+    milestones: list[dict] = []
+    segment: str | None = None
+    # Product configuration per ordered product: pricing + technical attributes
+    configuration: list[dict] = []
+    discount_approval: ApprovalChainOut | None = None
 
     model_config = {"from_attributes": True}
 
 
 class ServiceAccountOut(BaseModel):
+    party_id: int | None = None
     id: int
     billing_account_id: int
     name: str

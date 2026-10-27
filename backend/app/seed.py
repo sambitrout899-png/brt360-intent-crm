@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from app.auth import hash_password
 from app.config import get_settings
+from app.crm_core import approval_service, page_service, process_service
 from app.crm_core.approval_service import DEFAULT_SEED_TEMPLATES
 from app.db import SessionLocal
 from app.models.approval import ApprovalChainTemplate, ApprovalChainTier
@@ -97,7 +98,8 @@ def seed_reference_data(db, tenant_id: int) -> None:
         for name, skills, region in TECHNICIANS:
             db.add(Technician(tenant_id=tenant_id, name=name, skills=skills, region=region, status="available"))
 
-    if db.query(ApprovalChainTemplate).filter(ApprovalChainTemplate.tenant_id == tenant_id).count() == 0:
+    new_approval_chains = db.query(ApprovalChainTemplate).filter(ApprovalChainTemplate.tenant_id == tenant_id).count() == 0
+    if new_approval_chains:
         for name, segment, min_pct, max_pct, tiers in DEFAULT_SEED_TEMPLATES:
             template = ApprovalChainTemplate(
                 tenant_id=tenant_id, name=name, segment=segment, min_discount_pct=min_pct, max_discount_pct=max_pct
@@ -110,6 +112,24 @@ def seed_reference_data(db, tenant_id: int) -> None:
     if db.query(IdentityVerificationProvider).filter(IdentityVerificationProvider.tenant_id == tenant_id).count() == 0:
         for name in DEFAULT_IDENTITY_PROVIDERS:
             db.add(IdentityVerificationProvider(tenant_id=tenant_id, name=name))
+
+    # Sales-to-Order reference data: the process-role positions (Account
+    # Manager, Presales, Sales Ops, CPMO, BSD), pricelists and pricing
+    # attributes - each only where the tenant has none yet.
+    process_service.seed_defaults(db, tenant_id)
+    # The standard B2B/B2C prospect and lead fields (Page Designer) - only
+    # keys the tenant has no field for yet; a tenant's own field is kept.
+    page_service.seed_defaults(db, tenant_id)
+    # A new tenant's default approval steps get a position each, so an admin
+    # only has to put people in it (until then anyone allowed to approve
+    # decides them, as before). Existing tenants' steps are never re-bound
+    # here - their admins choose positions in Admin -> Approvals.
+    if new_approval_chains:
+        for _, _, _, _, tiers in DEFAULT_SEED_TEMPLATES:
+            for tier in tiers:
+                if tier != "Auto-Approved":
+                    approval_service.position_by_name(db, tenant_id, tier)
+        approval_service.link_tiers_to_positions(db, tenant_id)
 
 
 def get_or_create_user(db, *, tenant_id: int | None, email: str, password: str, name: str, role: UserRole) -> User:
@@ -127,6 +147,12 @@ def seed() -> None:
     try:
         tenant = get_or_create_tenant(db, DEFAULT_TENANT_SLUG, "Default Tenant")
         seed_reference_data(db, tenant.id)
+        # Every organization gets the standard B2B/B2C prospect and lead fields
+        # of the Page Designer - only keys it has no field for yet.
+        for other in db.query(Tenant).all():
+            page_service.seed_defaults(db, other.id)
+            from app.crm_core import abo_service
+            abo_service.backfill(db, other.id)
 
         get_or_create_user(
             db,

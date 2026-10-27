@@ -56,10 +56,10 @@ def test_provisioning_each_site_eventually_activates_order(client):
         "/api/intents", json={"text": f"Provision this site. order_id: {order_id}, site_label: Z-End"}
     ).json()
     assert second["result"]["all_sites_provisioned"] is True
-    assert second["result"]["order_status"] == "active"
+    assert second["result"]["order_status"] == "completed"
 
     order_final = client.get(f"/api/orders/{order_id}").json()
-    assert order_final["status"] == "active"
+    assert order_final["status"] == "completed"
     assert all(so["status"] == "active" for so in order_final["service_orders"])
 
 
@@ -90,7 +90,7 @@ def test_single_site_default_still_activates_immediately(client):
     quote_id = _approved_quote(client, company="SingleSiteCo")
     resp = client.post("/api/intents", json={"text": f"Activate this order end-to-end. quote_id: {quote_id}"})
     body = resp.json()
-    assert body["result"]["status"] == "active"
+    assert body["result"]["status"] == "completed"
     order = client.get(f"/api/orders/{body['result']['order_id']}").json()
     assert len(order["service_orders"]) == 1
     assert order["service_orders"][0]["status"] == "active"

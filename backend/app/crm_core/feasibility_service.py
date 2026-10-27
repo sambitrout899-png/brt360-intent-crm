@@ -24,11 +24,14 @@ from app.models.sla import SlaClock
 from app.timeutils import utcnow
 
 
-def run_assessment(db: Session, tenant_id: int, opportunity_id: int, locator: str) -> FeasibilityAssessment:
+def run_assessment(db: Session, tenant_id: int, opportunity_id: int | None, locator: str, order_id: int | None = None) -> FeasibilityAssessment:
     """locator stands in for whatever a real check would key off - an
     installation address for B2C FTTH, a site code for a B2B circuit.
+    B2B runs it on the opportunity (Presales); a B2C order runs it on the
+    order itself, from the Order Module (order_id, no opportunity).
     """
-    assessment = FeasibilityAssessment(tenant_id=tenant_id, opportunity_id=opportunity_id, outcome=FeasibilityOutcome.pending)
+    assessment = FeasibilityAssessment(tenant_id=tenant_id, opportunity_id=opportunity_id, order_id=order_id,
+                                       outcome=FeasibilityOutcome.pending)
     db.add(assessment)
     db.flush()
 
@@ -42,7 +45,26 @@ def run_assessment(db: Session, tenant_id: int, opportunity_id: int, locator: st
     any_failed = not address_ok
     any_pending = False
 
-    if not check_types:
+    if opportunity_id is not None and address_ok and "PENDING" not in locator.upper() and _network_recorded(db, tenant_id):
+        # The tenant records its network in BRT 360 Inventory: check the real thing - the location serving
+        # the site, and each resource the product needs there (what a reservation would give).
+        from app.crm_core import inventory_service
+
+        view = inventory_service.opportunity_view(db, tenant_id, opportunity_id, locator)
+        held = {h["type_code"] for h in view["holds"]} | {h.get("resource_type") for h in view["holds"]}
+        db.add(FeasibilityCheckResult(assessment_id=assessment.id, check_type_name="Serving location", resource_type="location",
+                                      outcome=FeasibilityOutcome.passed if view["location"] else FeasibilityOutcome.failed,
+                                      detail=f"{view['location']} ({view['location_name']}) serves the site" if view["location"]
+                                      else f"No location in Inventory serves '{locator}'"))
+        any_failed = view["location"] is None
+        for c in view["checks"]:
+            ok = c["available"] is not False or c["resource_type"] in held
+            any_failed = any_failed or not ok
+            db.add(FeasibilityCheckResult(assessment_id=assessment.id, check_type_name=f"Network Inventory · {c['resource_type'].replace('_', ' ')}",
+                                          resource_type=c["resource_type"][:50],
+                                          outcome=FeasibilityOutcome.passed if ok else FeasibilityOutcome.failed,
+                                          detail=("already held for this deal" if c["resource_type"] in held else c["detail"])[:2000]))
+    elif not check_types:
         # No checks configured - nothing to assess against; treat as an
         # address-validation-only pass/fail so this intent still does
         # something meaningful for a tenant that hasn't configured
@@ -91,6 +113,12 @@ def run_assessment(db: Session, tenant_id: int, opportunity_id: int, locator: st
 
     db.flush()
     return assessment
+
+
+def _network_recorded(db: Session, tenant_id: int) -> bool:
+    from app.crm_core import inventory_service
+
+    return inventory_service.in_use(db, tenant_id)
 
 
 def _handle_feasibility_breach(db: Session, clock: SlaClock, correlation_id: int) -> dict[str, Any]:

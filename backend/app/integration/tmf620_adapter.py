@@ -88,6 +88,28 @@ def retire_offering(db: Session, offering_id: int, *, replacement_offering_id: i
     return offering
 
 
+def not_sellable(db: Session, tenant_id: int, name: str) -> str:
+    """Why a product can't be sold - for a retired one, what replaced it
+    (Siebel offers the replacement product)."""
+    latest = (db.query(ProductOffering).filter(ProductOffering.tenant_id == tenant_id, ProductOffering.name == name)
+              .order_by(ProductOffering.version.desc()).first())
+    if latest is None:
+        return f"No active product named '{name}'"
+    if latest.status == OfferingStatus.retired:
+        replacement = db.get(ProductOffering, latest.replacement_offering_id) if latest.replacement_offering_id else None
+        return f"{name} is retired" + (f" - sell its replacement, {replacement.name}" if replacement is not None else "")
+    return f"{name} is {latest.status.value}, not on sale - publish it first"
+
+
+def active_offering_names(db: Session, tenant_id: int) -> list[str]:
+    """The products on sale now - one name each, whatever versions sit behind it
+    (drafts, superseded and retired versions are left out)."""
+    rows = (db.query(ProductOffering.name)
+            .filter(ProductOffering.tenant_id == tenant_id, ProductOffering.status == OfferingStatus.active)
+            .distinct().order_by(ProductOffering.name))
+    return [name for (name,) in rows]
+
+
 def get_active_offering_by_name(db: Session, tenant_id: int, name: str) -> ProductOffering | None:
     return (
         db.query(ProductOffering)

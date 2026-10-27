@@ -12,10 +12,13 @@ rewritten.
 from __future__ import annotations
 
 import datetime as dt
+import functools
+import hashlib
 
 import bcrypt
 import jwt
-from fastapi import Depends, HTTPException, status
+from cryptography.hazmat.primitives import serialization
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
@@ -39,6 +42,43 @@ def verify_password(password: str, password_hash: str) -> bool:
         return False
 
 
+def _key_id(public_key) -> str:
+    """A key's id (the token header's `kid`): its fingerprint, so it never needs configuring."""
+    der = public_key.public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
+    return hashlib.sha256(der).hexdigest()[:16]
+
+
+@functools.lru_cache
+def _signing_key(path: str):
+    with open(path, "rb") as f:
+        key = serialization.load_pem_private_key(f.read(), password=None)
+    return key, _key_id(key.public_key())
+
+
+@functools.lru_cache
+def _verification_keys(private_key_file: str, previous_public_key_files: str) -> dict[str, object]:
+    """kid -> public key: the current signing key's, plus earlier keys still
+    trusted while their tokens run out (key rotation)."""
+    keys: dict[str, object] = {}
+    if private_key_file:
+        key, kid = _signing_key(private_key_file)
+        keys[kid] = key.public_key()
+    for path in filter(None, (p.strip() for p in previous_public_key_files.split(","))):
+        with open(path, "rb") as f:
+            public = serialization.load_pem_public_key(f.read())
+        keys[_key_id(public)] = public
+    return keys
+
+
+def public_jwks() -> dict:
+    """The public keys tokens are signed with (JWKS) - what another service
+    needs to verify a BRT 360 token without any shared secret."""
+    settings = get_settings()
+    keys = _verification_keys(settings.jwt_private_key_file, settings.jwt_previous_public_key_files)
+    return {"keys": [{**jwt.algorithms.RSAAlgorithm.to_jwk(public, as_dict=True), "kid": kid, "use": "sig", "alg": "RS256"}
+                     for kid, public in keys.items()]}
+
+
 def create_access_token(user: User) -> str:
     settings = get_settings()
     now = utcnow()
@@ -49,19 +89,38 @@ def create_access_token(user: User) -> str:
         "iat": now,
         "exp": now + dt.timedelta(minutes=settings.jwt_expiry_minutes),
     }
+    if settings.jwt_private_key_file:  # RS256: anyone with the public key can verify, only this server can sign
+        key, kid = _signing_key(settings.jwt_private_key_file)
+        return jwt.encode(payload, key, algorithm="RS256", headers={"kid": kid})
     return jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
 
 
+def decode_token(token: str) -> dict | None:
+    """The token's verified claims, or None when it is invalid or expired.
+    Each algorithm is verified only with its own kind of key."""
+    settings = get_settings()
+    try:
+        header = jwt.get_unverified_header(token)
+        if header.get("alg") == "RS256":
+            key = _verification_keys(settings.jwt_private_key_file, settings.jwt_previous_public_key_files).get(header.get("kid"))
+            return jwt.decode(token, key, algorithms=["RS256"]) if key is not None else None
+        if settings.jwt_accept_hs256:  # shared-secret tokens: dev and tests, and sessions from before RS256
+            return jwt.decode(token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
+        return None
+    except jwt.PyJWTError:
+        return None
+
+
 def get_current_user(
+    request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
     db: Session = Depends(get_db),
 ) -> User:
     if credentials is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Not authenticated")
-    settings = get_settings()
-    try:
-        payload = jwt.decode(credentials.credentials, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
-    except jwt.PyJWTError:
+    # main.py's middleware already verified this request's token - reuse it
+    payload = getattr(request.state, "token_payload", None) or decode_token(credentials.credentials)
+    if payload is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or expired token")
 
     user = db.get(User, int(payload["sub"]))

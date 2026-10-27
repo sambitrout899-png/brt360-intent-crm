@@ -153,11 +153,11 @@ def test_full_fulfillment_chain_without_order_control_gate(client):
     assert close3["status"] == "executed"
     assert "billing_initiation_ref" in close3["result"]
     assert close3["result"]["asset_id"] is not None
-    assert close3["result"]["order_status"] == "active"
+    assert close3["result"]["order_status"] == "completed"  # every field service step done
     assert "order.fulfilled" in close3["events"]
 
     order = client.get(f"/api/orders/{order_id}").json()
-    assert order["status"] == "active"
+    assert order["status"] == "completed"
 
     db = client.TestSessionLocal()
     try:

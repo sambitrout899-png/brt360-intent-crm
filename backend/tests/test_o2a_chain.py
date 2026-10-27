@@ -25,7 +25,7 @@ def test_full_o2a_chain_activate_change_cancel(client):
     activate_body = activate.json()
     assert activate_body["intent_type"] == "INT-07"
     assert activate_body["status"] == "executed"
-    assert activate_body["result"]["status"] == "active"
+    assert activate_body["result"]["status"] == "completed"  # fulfilled: the service lives on as an asset
     assert "order.activated" in activate_body["events"]
     order_id = activate_body["result"]["order_id"]
 

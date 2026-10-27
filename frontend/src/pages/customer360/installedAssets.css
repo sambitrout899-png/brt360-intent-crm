@@ -1,0 +1,45 @@
+.installed-assets { border: 1px solid var(--c-border); border-radius: 12px; overflow: hidden; background: var(--c-bg); color: var(--c-text); }
+.asset-heading, .asset-toolbar, .asset-detail { padding: 16px 20px; }
+.asset-heading h3 { font-size: 16px; font-weight: 700; }
+.asset-heading h3 span { margin-left: 8px; font-size: 12px; color: var(--c-accent); }
+.asset-heading p, .asset-detail-heading p { margin-top: 4px; color: var(--c-muted); font-size: 12px; }
+.asset-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; border-block: 1px solid var(--c-border); }
+.asset-toolbar input, .asset-toolbar select, .asset-actions select { background: var(--c-bg); color: var(--c-text); border: 1px solid var(--c-border); border-radius: 6px; padding: 8px 10px; font-size: 12px; }
+.asset-toolbar input { flex: 1; min-width: 200px; }
+.asset-toolbar span, .asset-actions span { font-size: 11px; color: var(--c-muted); }
+.asset-table-scroll { overflow-x: auto; }
+.asset-table { width: 100%; border-collapse: collapse; text-align: left; font-size: 12px; }
+.asset-table th { padding: 12px 14px; color: var(--c-muted); font-size: 10px; text-transform: uppercase; letter-spacing: .05em; white-space: nowrap; }
+.asset-table td { padding: 12px 14px; border-top: 1px solid var(--c-border); }
+.asset-table tbody tr:hover { background: color-mix(in srgb, var(--c-accent) 5%, transparent); }
+.asset-table .asset-selected { background: color-mix(in srgb, var(--c-accent) 10%, transparent); box-shadow: inset 3px 0 var(--c-accent); }
+.asset-table button { color: var(--c-accent); font-weight: 600; text-align: left; }
+.asset-table small { display: block; color: var(--c-muted); margin-top: 4px; font-size: 10px; }
+.asset-table .asset-account-group th { text-transform: none; letter-spacing: 0; padding: 12px 14px; border-top: 1px solid var(--c-border); background: color-mix(in srgb, var(--c-accent) 6%, var(--c-bg)); }
+.asset-account-group span { color: var(--c-text); font-size: 12px; }
+.asset-detail { border-top: 1px solid var(--c-border); }
+.asset-detail-heading { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; align-items: center; }
+.asset-detail-heading h4 { font-size: 16px; font-weight: 650; display: flex; gap: 12px; align-items: center; }
+.asset-readonly { color: var(--c-muted); font-size: 10px; border: 1px solid var(--c-border); border-radius: 20px; padding: 5px 9px; }
+.asset-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 16px 0; }
+.asset-actions label { display: flex; gap: 10px; align-items: center; font-size: 12px; }
+.asset-actions button { background: var(--c-accent); color: var(--c-bg); font-size: 12px; font-weight: 700; border-radius: 6px; padding: 9px 14px; }
+.asset-tabs { display: flex; overflow-x: auto; gap: 22px; border-bottom: 1px solid var(--c-border); margin-top: 12px; }
+.asset-tabs button { padding: 12px 0; white-space: nowrap; color: var(--c-muted); font-size: 12px; border-bottom: 2px solid transparent; }
+.asset-tabs button[aria-selected=true] { color: var(--c-accent); border-color: var(--c-accent); }
+.asset-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px 28px; padding: 20px 0; }
+.asset-facts dt { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--c-muted); }
+.asset-facts dd { font-size: 13px; margin-top: 6px; overflow-wrap: anywhere; }
+.asset-detail h5 { margin-top: 20px; font-size: 12px; font-weight: 700; }
+.asset-empty { color: var(--c-muted); font-size: 12px; padding: 18px 0; }
+.installed-assets > .asset-empty { padding: 20px; }
+.installed-assets button:focus-visible, .installed-assets input:focus-visible, .installed-assets select:focus-visible { outline: 2px solid var(--c-accent); outline-offset: 3px; }
+
+/* the asset's network (Network Inventory) */
+.asset-network + .asset-network { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--c-border, #1e293b); }
+.asset-network h5 { display: flex; align-items: center; gap: .5rem; }
+
+
+/* one primary action per row - the rest read as secondary */
+.asset-actions button ~ button { color: var(--c-text); background: transparent; border: 1px solid var(--c-border); font-weight: 600; }
+.asset-actions button ~ button:hover { border-color: color-mix(in srgb, var(--c-accent) 55%, var(--c-border)); }

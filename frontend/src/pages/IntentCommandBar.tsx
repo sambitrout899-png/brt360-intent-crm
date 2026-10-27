@@ -1,329 +1,239 @@
-import { useEffect, useRef, useState } from "react";
-import { assistIntent, listCatalog, submitIntent } from "../api/client";
-import type { IntentAssist, IntentResponse, Offering } from "../api/types";
+import { useCallback, useEffect, useState } from "react";
+import { assistantOutcome, intentCatalog, recentIntents } from "../api/client";
+import type { IntentCatalog, IntentResponse, RecentIntent } from "../api/types";
+import AgentPanel from "../components/intent/AgentPanel";
+import AssistantPanel from "../components/intent/AssistantPanel";
+import AskBox from "../components/intent/AskBox";
+import IntentForm from "../components/intent/IntentForm";
+import IntentGallery from "../components/intent/IntentGallery";
+import IntentResult from "../components/intent/IntentResult";
+import ProcessBuilder from "../components/intent/ProcessBuilder";
+import { useTechView } from "../components/intent/intentUi";
+import { notifyIntentExecuted } from "../workspace";
 
-const EXAMPLES = [
-  {
-    label: "✨ Natural language",
-    text: "Sign up Acme Telecom as a new lead, they came in through a referral, they're in the North region",
-  },
-  {
-    label: "INT-01 · Launch",
-    text: "Launch a new bundle. name: Fiber 500 Bundle, composition: Fiber500+VOIP, segment: B2C, channel: B2C, price: 999, discount: 10",
-  },
-  {
-    label: "INT-02 · Modify",
-    text: "Modify this bundle. offering_name: Fiber 500 Bundle, new_price: 849",
-  },
-  {
-    label: "INT-03 · Retire",
-    text: "Retire this bundle. offering_name: Fiber 500 Bundle, replacement_offering_name: Fiber 1000 Elite",
-  },
-  {
-    label: "INT-04 · Qualify lead",
-    text: "Qualify this lead. company_name: Acme Telecom, source: referral, region: North",
-  },
-  {
-    label: "INT-05 · Configure & quote",
-    text: "Configure and quote this bundle. opportunity_id: 1, offering_name: Fiber 500 Bundle, quantity: 1, discount: 5",
-  },
-  {
-    label: "INT-06 · Approve",
-    text: "Approve this quote. quote_id: 1, reasoning: strategic account",
-  },
-  {
-    label: "INT-07 · Activate order",
-    text: "Activate this order end-to-end. quote_id: 1",
-  },
-  {
-    label: "INT-08 · Change service",
-    text: "Upgrade this service. order_id: 1, new_price: 1200",
-  },
-  {
-    label: "INT-09 · Cancel",
-    text: "Cancel this service. order_id: 1",
-  },
-  {
-    label: "INT-10 · Log complaint",
-    text: "Log this complaint. description: Fiber internet is completely down since this morning, company_name: Acme Telecom, sla_class: premium",
-  },
-  {
-    label: "INT-11 · Diagnose",
-    text: "Diagnose the root cause. ticket_id: 1",
-  },
-  {
-    label: "INT-12 · Dispatch tech",
-    text: "Dispatch a technician. ticket_id: 1, required_skill: fiber_install, region: North",
-  },
-];
+type View =
+  | { kind: "home" }
+  | { kind: "form"; key: number; code: string; entities: Record<string, unknown>; text: string }
+  | { kind: "result"; response: IntentResponse; code: string; entities: Record<string, unknown> };
 
-const STATUS_STYLES: Record<string, string> = {
-  executed: "bg-emerald-500/15 text-emerald-400 border-emerald-500/30",
-  needs_review: "bg-amber-500/15 text-amber-400 border-amber-500/30",
-  failed: "bg-red-500/15 text-red-400 border-red-500/30",
-  verification_failed: "bg-red-500/15 text-red-400 border-red-500/30",
-};
+const MODE_KEY = "brt360.intent.mode";
+type Mode = "anything" | "ask" | "agent" | "build";
 
-export default function IntentCommandBar({ prefillText }: { prefillText?: string }) {
-  const [text, setText] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [response, setResponse] = useState<IntentResponse | null>(null);
+function readMode(): Mode {
+  try {
+    const saved = localStorage.getItem(MODE_KEY);
+    return saved === "ask" || saved === "agent" || saved === "build" ? saved : "anything";
+  } catch {
+    return "anything";
+  }
+}
+
+function timeAgo(iso: string): string {
+  const minutes = Math.round((Date.now() - new Date(iso.endsWith("Z") ? iso : `${iso}Z`).getTime()) / 60000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes} min ago`;
+  if (minutes < 1440) return `${Math.round(minutes / 60)} h ago`;
+  return `${Math.round(minutes / 1440)} d ago`;
+}
+
+/** The command center: say what you want or pick an action, get a form the
+ * copilot has already filled in, run it, see what changed and what to do
+ * next. Only the actions the user's roles allow appear here. */
+export default function IntentCommandBar() {
+  const [catalog, setCatalog] = useState<IntentCatalog | null>(null);
+  const [recent, setRecent] = useState<RecentIntent[]>([]);
   const [error, setError] = useState("");
-  const [assist, setAssist] = useState<IntentAssist | null>(null);
-  const [assisting, setAssisting] = useState(false);
-  const [offerings, setOfferings] = useState<Offering[]>([]);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [view, setView] = useState<View>({ kind: "home" });
+  const [techView, setTechView] = useTechView();
+  const [mode, setMode] = useState<Mode>(readMode);
+  // a process request spotted in the Ask box, handed to the Process Builder
+  const [processText, setProcessText] = useState({ key: 0, text: "" });
 
-  useEffect(() => {
-    if (prefillText) setText(prefillText);
-  }, [prefillText]);
+  function buildProcess(text: string) {
+    setProcessText((p) => ({ key: p.key + 1, text }));
+    pickMode("build");
+  }
 
-  useEffect(() => {
-    listCatalog().then(setOfferings).catch(() => {});
+  function pickMode(m: Mode) {
+    setMode(m);
+    try {
+      localStorage.setItem(MODE_KEY, m);
+    } catch {
+      /* private window - the choice lasts for this visit */
+    }
+  }
+
+  const loadRecent = useCallback(() => {
+    recentIntents().then(setRecent).catch(() => setRecent([]));
   }, []);
 
-  // The Expression Builder's live intellisense - debounced so typing
-  // doesn't fire a call per keystroke; never executes anything.
   useEffect(() => {
-    if (text.trim().length < 6) {
-      setAssist(null);
-      return;
+    intentCatalog()
+      .then(setCatalog)
+      .catch((e) => setError(e instanceof Error ? e.message : "Could not load your actions"));
+    loadRecent();
+  }, [loadRecent]);
+
+  // the Ask-anything request a form was opened for - its outcome goes to the journal
+  const [journalId, setJournalId] = useState<number | null>(null);
+
+  const open = (code: string, entities: Record<string, unknown> = {}, text = "", fromJournal: number | null = null) => {
+    setJournalId(fromJournal);
+    setView({ kind: "form", key: Date.now(), code, entities, text });
+  };
+
+  function done(response: IntentResponse, code: string, entities: Record<string, unknown>) {
+    setView({ kind: "result", response, code, entities });
+    if (response.status === "executed") notifyIntentExecuted();
+    if (journalId !== null) {
+      assistantOutcome(journalId, response.status === "executed" ? "done" : response.status, response.summary ?? response.rationale ?? "").catch(() => undefined);
+      setJournalId(null);
     }
-    const handle = setTimeout(() => {
-      setAssisting(true);
-      assistIntent(text)
-        .then(setAssist)
-        .catch(() => setAssist(null))
-        .finally(() => setAssisting(false));
-    }, 500);
-    return () => clearTimeout(handle);
-  }, [text]);
-
-  const lastToken = text.split(/[,.\n]/).pop()?.trim().toLowerCase() ?? "";
-  const productMatches =
-    lastToken.length >= 2 ? offerings.filter((o) => o.name.toLowerCase().includes(lastToken)).slice(0, 5) : [];
-
-  function appendField(fieldName: string) {
-    setText((t) => {
-      const trimmed = t.trimEnd();
-      if (!trimmed) return `${fieldName}: `;
-      const sep = trimmed.endsWith(",") ? " " : ", ";
-      return `${trimmed}${sep}${fieldName}: `;
-    });
-    textareaRef.current?.focus();
+    loadRecent();
   }
 
-  function insertProductName(name: string) {
-    setText((t) => {
-      const cutAt = Math.max(t.lastIndexOf(","), t.lastIndexOf("\n"));
-      const prefix = cutAt >= 0 ? `${t.slice(0, cutAt + 1)} ` : "";
-      return `${prefix}${name}`;
-    });
-    textareaRef.current?.focus();
-  }
-
-  async function handleSubmit() {
-    if (!text.trim()) return;
-    setLoading(true);
-    setError("");
-    try {
-      const result = await submitIntent(text);
-      setResponse(result);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Request failed");
-    } finally {
-      setLoading(false);
-    }
-  }
+  const intents = catalog?.intents ?? [];
+  const label = (code: string) => intents.find((i) => i.code === code)?.label ?? code;
 
   return (
-    <div className="mx-auto max-w-6xl space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-slate-100">Expression Builder</h1>
-        <p className="mt-1 text-sm text-slate-400">
-          Type what you want in plain English — no fixed structure required. The system corrects typos, figures
-          out the intent, and tells you (to the right) which fields it's already understood and which it still
-          needs, with product names it recognizes as you type.
-        </p>
+    <div className="page space-y-8">
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div className="min-w-0">
+          <h1 className="text-[1.75rem] font-semibold leading-tight text-slate-50">What would you like to do?</h1>
+          <p className="mt-2 max-w-3xl text-[15px] leading-relaxed text-slate-400">
+            Describe it in your own words or pick an action. I'll fill in what I can, check it before it runs, and show you exactly what changed.
+          </p>
+        </div>
+        <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-slate-800 px-3 py-2 text-xs font-medium text-slate-400 hover:border-slate-700">
+          <input type="checkbox" checked={techView} onChange={(e) => setTechView(e.target.checked)} className="accent-sky-500" />
+          Explain results
+        </label>
       </div>
 
-      <div className="flex flex-wrap gap-2">
-        {EXAMPLES.map((ex) => (
-          <button
-            key={ex.label}
-            onClick={() => setText(ex.text)}
-            className="rounded-full border border-slate-700 bg-slate-800/60 px-3 py-1.5 text-xs font-semibold text-slate-300 hover:border-sky-500 hover:text-sky-400"
-          >
-            {ex.label}
-          </button>
-        ))}
-      </div>
+      {error && <p className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-400">{error}</p>}
 
-      <div className="grid gap-4 md:grid-cols-[1fr_320px]">
-        <div className="rounded-xl border border-slate-700 bg-slate-900/60 p-4">
-          <textarea
-            ref={textareaRef}
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            rows={4}
-            placeholder='Type naturally — e.g. "sign up Acme Telecom as a new lead from a referral in the North region"'
-            className="w-full resize-none rounded-lg border border-slate-700 bg-slate-950 px-3 py-3 text-sm text-slate-100 outline-none focus:border-sky-500"
-          />
-          <div className="mt-3 flex justify-end">
-            <button
-              onClick={handleSubmit}
-              disabled={loading || !text.trim()}
-              className="rounded-lg bg-sky-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-sky-500 disabled:opacity-50"
-            >
-              {loading ? "Executing…" : "Submit Intent"}
-            </button>
-          </div>
-        </div>
-
-        <div className="space-y-3 rounded-xl border border-slate-700 bg-slate-900/60 p-4">
-          <h3 className="text-xs font-bold uppercase tracking-wide text-slate-500">Live Assist</h3>
-
-          {assisting && <p className="text-xs text-slate-500">Thinking…</p>}
-
-          {!assisting && assist?.intent_type && (
-            <div className="space-y-3">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="rounded-md bg-slate-800 px-2 py-0.5 font-mono text-xs text-slate-300">{assist.intent_type}</span>
-                <span className="text-xs text-slate-300">{assist.intent_label}</span>
-              </div>
-              <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-800">
-                <div
-                  className="h-full rounded-full bg-sky-500"
-                  style={{ width: `${Math.round(assist.confidence * 100)}%` }}
-                />
-              </div>
-              {assist.required_fields.length > 0 && (
-                <div className="space-y-1.5">
-                  {assist.required_fields.map((f) => {
-                    const missing = assist.missing_fields.includes(f);
-                    return missing ? (
-                      <button
-                        key={f}
-                        onClick={() => appendField(f)}
-                        className="block w-full rounded-md border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-left text-xs font-semibold text-amber-400 hover:bg-amber-500/20"
-                      >
-                        + {f}
-                      </button>
-                    ) : (
-                      <div key={f} className="flex items-center gap-2 rounded-md bg-emerald-500/10 px-2.5 py-1.5 text-xs text-emerald-400">
-                        <span>✓</span>
-                        <span>{f}</span>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          )}
-
-          {!assisting && text.trim().length >= 6 && !assist?.intent_type && (
-            <p className="text-xs text-slate-500">Not recognized yet — keep typing, or try one of the examples above.</p>
-          )}
-
-          {!assisting && text.trim().length < 6 && (
-            <p className="text-xs text-slate-500">Start typing to see the detected intent and required fields here.</p>
-          )}
-
-          {productMatches.length > 0 && (
-            <div className="space-y-1.5 border-t border-slate-800 pt-3">
-              <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Matching Products</p>
-              {productMatches.map((o) => (
-                <button
-                  key={o.id}
-                  onClick={() => insertProductName(o.name)}
-                  className="block w-full rounded-md border border-sky-500/30 bg-sky-500/10 px-2.5 py-1.5 text-left text-xs font-semibold text-sky-400 hover:bg-sky-500/20"
-                >
-                  {o.name}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-
-      {error && (
-        <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-400">
-          {error}
-        </div>
-      )}
-
-      {response && (
-        <div className="space-y-4 rounded-xl border border-slate-700 bg-slate-900/60 p-5">
-          <div className="flex flex-wrap items-center gap-3">
-            <span className="rounded-md bg-slate-800 px-2.5 py-1 font-mono text-xs text-slate-300">
-              {response.intent_type ?? "UNKNOWN"}
-            </span>
-            <span
-              className={`rounded-md border px-2.5 py-1 text-xs font-bold ${STATUS_STYLES[response.status] ?? "bg-slate-800 text-slate-300 border-slate-700"}`}
-            >
-              {response.status}
-            </span>
-            <span className="text-xs text-slate-400">
-              confidence <span className="font-mono text-slate-200">{response.confidence.toFixed(2)}</span>
-            </span>
-            <span className="text-xs text-slate-500">#{response.intent_execution_id}</span>
-          </div>
-
-          <p className="text-sm text-slate-300">{response.rationale}</p>
-
-          <div>
-            <h3 className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-500">Extracted Entities</h3>
-            <pre className="overflow-x-auto rounded-lg bg-slate-950 p-3 text-xs text-slate-300">
-              {JSON.stringify(response.entities, null, 2)}
-            </pre>
-          </div>
-
-          {response.plan.length > 0 && (
-            <div>
-              <h3 className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-500">Execution Plan</h3>
-              <div className="space-y-2">
-                {response.plan.map((step) => (
-                  <div
-                    key={step.step}
-                    className="flex items-center gap-3 rounded-lg bg-slate-950 px-3 py-2 text-sm"
-                  >
-                    <span
-                      className={`flex h-6 w-6 items-center justify-center rounded-full text-xs font-bold ${
-                        step.status === "ok"
-                          ? "bg-emerald-500/20 text-emerald-400"
-                          : "bg-red-500/20 text-red-400"
+      {view.kind === "home" && catalog && (
+        <>
+          {/* one place to start: a single action, or a goal the agent breaks into steps */}
+          <section className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/50 shadow-xl shadow-black/20">
+            <div className="flex flex-wrap items-center gap-4 border-b border-slate-800 px-6 pt-4 sm:px-8">
+              <div role="tablist" aria-label="How to start" className="-mb-px flex gap-6">
+                {(
+                  [
+                    ["anything", "🧠", "Ask anything", "border-fuchsia-400"],
+                    ["ask", "✨", "Do one thing", "border-sky-400"],
+                    ["agent", "🤖", "Multi-step agent", "border-violet-400"],
+                    ["build", "🏗️", "Build a process", "border-emerald-400"],
+                  ] as const
+                ).map(([key, icon, name, tone]) => {
+                  const on = mode === key;
+                  return (
+                    <button
+                      key={key}
+                      role="tab"
+                      aria-selected={on}
+                      onClick={() => pickMode(key)}
+                      className={`flex items-center gap-2 border-b-2 pb-3.5 text-sm font-semibold transition ${
+                        on ? `${tone} text-slate-50` : "border-transparent text-slate-500 hover:text-slate-300"
                       }`}
                     >
-                      {step.step}
+                      <span className="text-base">{icon}</span>
+                      {name}
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="ml-auto hidden pb-3.5 text-xs text-slate-500 lg:block">
+                {mode === "anything"
+                  ? "Any request in plain English - I work out whether to do it, chain it or set it up, and record it."
+                  : mode === "ask"
+                  ? "Say it in your words - I find the action and fill the form for you."
+                  : mode === "agent"
+                    ? "Give a goal - I plan the steps, rehearse them on live data, and run all or none."
+                    : "Describe a process - I set it up with approvals, flows and pages, asking where I must."}
+              </p>
+            </div>
+            <div className="px-6 py-6 sm:px-8 sm:py-7">
+              {mode === "anything" ? (
+                <AssistantPanel intents={intents} onAction={(code, entities, text, id) => open(code, entities, text, id)} />
+              ) : mode === "ask" ? (
+                <AskBox bare intents={intents} onPick={(code, text) => open(code, {}, text)} onProcess={buildProcess} />
+              ) : mode === "agent" ? (
+                <AgentPanel bare intents={intents} />
+              ) : (
+                <ProcessBuilder key={processText.key} initialText={processText.text} intents={intents} />
+              )}
+            </div>
+          </section>
+
+          <div className="grid gap-8 xl:grid-cols-[minmax(0,1fr)_320px]">
+            <section className="min-w-0 space-y-5">
+              <div className="flex items-baseline justify-between gap-3">
+                <h2 className="text-lg font-semibold text-slate-100">All actions</h2>
+                <span className="text-xs text-slate-500">{intents.length} available to you</span>
+              </div>
+              <IntentGallery intents={intents} categories={catalog.categories} processes={catalog.processes} techView={techView} onPick={(code) => open(code)} />
+            </section>
+            <aside className="space-y-4 xl:sticky xl:top-24 xl:self-start">
+              <h2 className="text-lg font-semibold text-slate-100">Recent</h2>
+              <div className="overflow-hidden rounded-xl border border-slate-800 bg-slate-900/40">
+                {recent.length === 0 && <p className="p-4 text-xs leading-relaxed text-slate-500">Nothing yet - your last actions appear here so you can repeat them in one click.</p>}
+                {recent.map((r) => (
+                  <button
+                    key={r.code}
+                    onClick={() => open(r.code, r.entities)}
+                    className="group flex w-full items-center gap-3 border-b border-slate-800/80 px-4 py-3.5 text-left transition last:border-b-0 hover:bg-slate-800/40"
+                  >
+                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-800/80 text-base">{r.icon}</span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-medium text-slate-200">{r.label}</span>
+                      <span className="block text-xs text-slate-500">
+                        {timeAgo(r.at)} · {r.status === "executed" ? "done" : r.status.replace("_", " ")}
+                      </span>
                     </span>
-                    <span className="font-mono text-slate-200">{step.action}</span>
-                    <span className="ml-auto text-xs text-slate-500">{step.status}</span>
-                  </div>
+                    <span className="text-xs font-semibold text-sky-400 opacity-70 transition group-hover:opacity-100">Again →</span>
+                  </button>
                 ))}
               </div>
-            </div>
-          )}
+            </aside>
+          </div>
+        </>
+      )}
 
-          {response.result && (
-            <div>
-              <h3 className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-500">Result</h3>
-              <pre className="overflow-x-auto rounded-lg bg-slate-950 p-3 text-xs text-slate-300">
-                {JSON.stringify(response.result, null, 2)}
-              </pre>
-            </div>
-          )}
-
-          {response.events.length > 0 && (
-            <div className="flex flex-wrap gap-2">
-              {response.events.map((ev, i) => (
-                <span key={i} className="rounded-md bg-sky-500/10 px-2 py-1 font-mono text-xs text-sky-400">
-                  {ev}
-                </span>
-              ))}
-            </div>
-          )}
+      {view.kind === "form" && (
+        <div className="space-y-3">
+          <button onClick={() => setView({ kind: "home" })} className="text-sm text-slate-400 hover:text-slate-200">
+            ← All actions
+          </button>
+          <IntentForm
+            key={view.key}
+            code={view.code}
+            initialEntities={view.entities}
+            text={view.text}
+            onDone={(response) => done(response, view.code, response.entities)}
+            onSwitch={(code, entities) => open(code, entities)}
+            onCancel={() => setView({ kind: "home" })}
+          />
         </div>
       )}
+
+      {view.kind === "result" && (
+        <div className="space-y-4">
+          <IntentResult response={view.response} techView={techView} onNext={(code, entities) => open(code, entities)} />
+          <div className="flex flex-wrap gap-2">
+            <button onClick={() => setView({ kind: "home" })} className="rounded-lg bg-slate-100 px-4 py-2 text-sm font-bold text-slate-900 hover:bg-white">
+              Do something else
+            </button>
+            {view.response.status !== "executed" && (
+              <button onClick={() => open(view.code, view.entities)} className="rounded-lg border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-300 hover:border-slate-500">
+                Back to “{label(view.code)}”
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {!catalog && !error && <p className="text-sm text-slate-500">Loading your actions…</p>}
     </div>
   );
 }

@@ -1,0 +1,67 @@
+# BRT 360 CI: every push and pull request is tested and both images are built.
+# Nothing is deployed from here yet - deploy/deploy_docker.ps1 does that; a
+# registry push + Argo CD come later (Phase 0 of the architecture plan).
+name: CI
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"   # what the Docker image runs
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - run: pip install -r requirements.txt
+      # test_admin_test_runner.py only runs this same suite again from inside the app
+      - run: python -m pytest -q -p no:cacheprovider --ignore=tests/test_admin_test_runner.py
+
+  frontend:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npx tsc -b
+      - run: npx vite build
+
+  images:
+    runs-on: ubuntu-24.04
+    needs: [backend, frontend]
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t brt360-api:ci backend
+      - run: docker build -t brt360-web:ci frontend
+      - name: Compose file is valid
+        working-directory: deploy/compose
+        run: |
+          cp .env.example .env
+          sed -i 's/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=ci/; s/^GRAFANA_ADMIN_PASSWORD=.*/GRAFANA_ADMIN_PASSWORD=ci/' .env
+          touch ../../backend/.env
+          docker compose --profile monitoring config --quiet
+
+  scripts:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Shell scripts parse
+        run: for f in deploy/*.sh deploy/compose/*.sh; do bash -n "$f" || exit 1; done

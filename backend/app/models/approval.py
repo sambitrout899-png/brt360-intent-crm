@@ -17,6 +17,25 @@ resolve_* call considers: "quote" templates still match by discount band
 + segment (approval_service.resolve_template); "lead" templates match
 simply - one active chain per tenant, no discount band, since there's no
 discount concept on a Lead (approval_service.resolve_lead_qualification_template).
+
+Two kinds of approval rule (template.kind):
+- "monetary" - money is at stake: a quote's discount band (B2B) or a
+  consumer order's (B2C), optionally narrowed by deal value.
+- "record" - a record may only enter a state once approved: the lead gate
+  (lead -> qualified), the order-control gate (order -> activating), or any
+  state of any record type an admin picks (trigger_state).
+Older rows carry no kind; approval_service.kind_of derives it (quote ->
+monetary, lead/order -> record), so every existing chain keeps working.
+
+A tier may name the position whose holders decide it (position_id). While
+nobody holds that position - or a tier names none, like every tier created
+before positions existed - anyone allowed to run the approval decides it,
+exactly as before.
+
+ApprovalChainInstance.gate says which approval of a record this is:
+"discount" for a monetary one, else the state it unlocks. One approval per
+record per gate (it used to be one per record), so a record can carry a
+discount approval and, say, a stage approval side by side.
 """
 
 from __future__ import annotations
@@ -52,6 +71,15 @@ class ApprovalChainTemplate(Base):
     max_discount_pct: Mapped[float] = mapped_column(Float, default=100.0)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[dt.datetime] = mapped_column(default=utcnow)
+    # "monetary" | "record" (None on rows from before kinds existed - see
+    # approval_service.kind_of).
+    kind: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # record rules: the state the record may only enter once approved
+    # (None on older lead/order rows = their classic gate state).
+    trigger_state: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    # monetary rules: optional deal-value band on top of the discount band
+    min_amount: Mapped[float | None] = mapped_column(Float, nullable=True)
+    max_amount: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     tiers: Mapped[list["ApprovalChainTier"]] = relationship(
         back_populates="template", cascade="all, delete-orphan", order_by="ApprovalChainTier.sequence"
@@ -67,6 +95,8 @@ class ApprovalChainTier(Base):
     template_id: Mapped[int] = mapped_column(ForeignKey("approval_chain_templates.id"))
     sequence: Mapped[int] = mapped_column(Integer)
     approver_tier: Mapped[str] = mapped_column(String(100))
+    # The position whose holders decide this tier (None = anyone allowed).
+    position_id: Mapped[int | None] = mapped_column(ForeignKey("positions.id"), nullable=True)
 
     template: Mapped[ApprovalChainTemplate] = relationship(back_populates="tiers")
 
@@ -79,7 +109,7 @@ class ApprovalChainInstance(Base):
     """
 
     __tablename__ = "approval_chain_instances"
-    __table_args__ = (UniqueConstraint("entity_type", "entity_id", name="uq_approval_chain_instances_entity"),)
+    __table_args__ = (UniqueConstraint("entity_type", "entity_id", "gate", name="uq_approval_chain_instances_entity_gate"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     entity_type: Mapped[str] = mapped_column(String(30))
@@ -88,6 +118,12 @@ class ApprovalChainInstance(Base):
     status: Mapped[ApprovalStatus] = mapped_column(Enum(ApprovalStatus), default=ApprovalStatus.pending)
     current_sequence: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[dt.datetime] = mapped_column(default=utcnow)
+    # "discount" (monetary) or the state this approval unlocks (record).
+    gate: Mapped[str] = mapped_column(String(50), default="discount", server_default="discount")
+    tenant_id: Mapped[int | None] = mapped_column(ForeignKey("tenants.id"), nullable=True)
+    summary: Mapped[str] = mapped_column(Text, default="", server_default="")
+    requested_by_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    decided_at: Mapped[dt.datetime | None] = mapped_column(nullable=True)
 
     template: Mapped[ApprovalChainTemplate] = relationship()
     steps: Mapped[list["ApprovalStepInstance"]] = relationship(
@@ -107,5 +143,7 @@ class ApprovalStepInstance(Base):
     status: Mapped[ApprovalStatus] = mapped_column(Enum(ApprovalStatus), default=ApprovalStatus.pending)
     reasoning: Mapped[str] = mapped_column(Text, default="")
     decided_at: Mapped[dt.datetime | None] = mapped_column(nullable=True)
+    position_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    decided_by_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     chain_instance: Mapped[ApprovalChainInstance] = relationship(back_populates="steps")

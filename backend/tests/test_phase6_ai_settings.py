@@ -91,7 +91,7 @@ def test_assist_reports_required_and_missing_fields(client):
     assert resp.status_code == 200
     body = resp.json()
     assert body["intent_type"] == "INT-01"
-    assert body["intent_label"] == "Launch a new bundle"
+    assert body["intent_label"] == "Launch a new product"
     assert "composition" in body["required_fields"]
     assert "list_price" in body["required_fields"]
     assert "name" in body["required_fields"]
