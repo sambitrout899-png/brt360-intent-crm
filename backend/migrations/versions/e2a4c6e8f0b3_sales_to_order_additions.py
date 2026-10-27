@@ -92,6 +92,12 @@ def _shrink_enums() -> None:
             )
 
 
+def _rebuild(bind) -> str:
+    """batch_alter_table's recreate mode: SQLite rebuilds the table (it can't
+    drop a constraint in place); Postgres alters it in place."""
+    return "always" if bind.dialect.name == "sqlite" else "auto"
+
+
 def _entity_unique_name(bind) -> str | None:
     for constraint in sa.inspect(bind).get_unique_constraints("approval_chain_instances"):
         if sorted(constraint["column_names"]) == ["entity_id", "entity_type"]:
@@ -188,7 +194,9 @@ def _extend_approvals() -> None:
         batch_op.create_foreign_key("fk_approval_chain_tiers_position_id", "positions", ["position_id"], ["id"])
 
     old_unique = _entity_unique_name(bind)
-    with op.batch_alter_table("approval_chain_instances", recreate="always") as batch_op:
+    # SQLite needs the table rebuilt to drop its (possibly unnamed) unique constraint;
+    # Postgres alters in place - a rebuild there would drop the primary key other tables reference
+    with op.batch_alter_table("approval_chain_instances", recreate=_rebuild(bind)) as batch_op:
         if old_unique:
             batch_op.drop_constraint(old_unique, type_="unique")
         batch_op.add_column(sa.Column("gate", sa.String(50), nullable=False, server_default="discount"))
@@ -279,7 +287,7 @@ def downgrade() -> None:
         "DELETE FROM approval_chain_instances WHERE NOT ((entity_type = 'quote' AND gate = 'discount') OR "
         "(entity_type = 'lead' AND gate = 'qualified') OR (entity_type = 'order' AND gate = 'activating'))"
     )
-    with op.batch_alter_table("approval_chain_instances", recreate="always") as batch_op:
+    with op.batch_alter_table("approval_chain_instances", recreate=_rebuild(op.get_bind())) as batch_op:
         batch_op.drop_constraint("fk_approval_chain_instances_tenant_id", type_="foreignkey")
         for column in ("decided_at", "requested_by_user_id", "summary", "tenant_id", "gate"):
             batch_op.drop_column(column)
