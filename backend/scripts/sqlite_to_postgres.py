@@ -6,7 +6,9 @@ Run with the app stopped (nothing may write to SQLite meanwhile), after
     python scripts/sqlite_to_postgres.py sqlite:////data/brt360.db --yes
 
 The target is DATABASE_URL, read like the app reads it. What it does:
-1. both databases must be at the same Alembic revision (same schema)
+1. both databases must be at the same Alembic revision (same schema), and
+   every value must fit Postgres's stricter rules (text lengths, enum
+   values) - all misfits are listed and nothing is touched otherwise
 2. every table on the target is emptied - the seed rows the migrations
    wrote go; the copy brings the real ones (hence --yes)
 3. every table is copied in batches, foreign key checks off for the copy
@@ -27,7 +29,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # the backend dir, for `app`
 
-from sqlalchemy import Boolean, Integer, MetaData, create_engine, func, select, text  # noqa: E402
+from sqlalchemy import Boolean, Integer, MetaData, String, create_engine, func, select, text  # noqa: E402
+from sqlalchemy.dialects.postgresql import ENUM  # noqa: E402
 
 from app.config import get_settings  # noqa: E402
 
@@ -38,6 +41,33 @@ SKIP = {"alembic_version"}
 def _revision(engine) -> str | None:
     with engine.connect() as conn:
         return conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
+
+
+def _misfits(src, src_meta, tables) -> list[str]:
+    """Values SQLite accepted that Postgres won't: text over its column's
+    length (SQLite never enforces lengths) and statuses outside an enum
+    type. All of them, before anything is touched - not the first one
+    halfway through the copy."""
+    problems = []
+    with src.connect() as conn:
+        for table in tables:
+            source = src_meta.tables.get(table.name)
+            if source is None:
+                continue
+            for column in table.columns:
+                if column.name not in source.columns:
+                    continue
+                name, col = f'"{table.name}"', f'"{column.name}"'
+                if isinstance(column.type, ENUM):
+                    values = {r[0] for r in conn.execute(text(f"SELECT DISTINCT {col} FROM {name} WHERE {col} IS NOT NULL"))}
+                    if bad := sorted(values - set(column.type.enums)):
+                        problems.append(f"{table.name}.{column.name}: values the enum doesn't allow: {bad}")
+                elif isinstance(column.type, String) and column.type.length:
+                    limit = column.type.length
+                    longest, over = conn.execute(text(f"SELECT MAX(LENGTH({col})), SUM(LENGTH({col}) > {limit}) FROM {name}")).one()
+                    if longest and longest > limit:
+                        problems.append(f"{table.name}.{column.name}: limit {limit}, longest {longest}, {over} row(s) over")
+    return problems
 
 
 def _count(engine, table) -> int:
@@ -81,6 +111,10 @@ def main() -> int:
             if extra:
                 print(f"{table.name}: columns in SQLite but not in Postgres: {', '.join(extra)}")
                 return 1
+    misfits = _misfits(src, src_meta, tables)
+    if misfits:
+        print("Data that doesn't fit the Postgres schema - nothing was copied:\n  " + "\n  ".join(misfits))
+        return 1
 
     started = time.monotonic()
     print(f"Copying {len(tables)} tables at revision {src_rev}")

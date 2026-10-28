@@ -82,7 +82,8 @@ class StateModelTransition(Base):
     # the intent to use instead, so business steps are never bypassed.
     intent_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
     # Comma-separated roles allowed to perform it; empty = admin + agent.
-    allowed_roles: Mapped[str] = mapped_column(String(100), default="")
+    # Text: a list of position names outgrows any fixed length (live data: 152 chars).
+    allowed_roles: Mapped[str] = mapped_column(Text, default="")
 
     state_model: Mapped[StateModel] = relationship(back_populates="transitions")
 
