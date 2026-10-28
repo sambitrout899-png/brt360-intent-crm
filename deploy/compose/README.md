@@ -357,6 +357,39 @@ docker compose run --rm --no-deps api python -m app.rls --off
 docker compose run --rm --no-deps api python -m app.rls
 ```
 
+### Split services: training and the AI gateway
+
+Two services run in their own containers, from the same image as the API:
+
+- **`training`** (`app/services/training_app.py`) serves `/api/training`,
+  `/api/assessments` and `/api/p` (the public participant pages). The web
+  container sends those paths to it, and the API leaves them out
+  (`SPLIT_SERVICES=training`). Training's reminders still run in `worker`.
+- **`ai-gateway`** (`app/services/ai_gateway.py`) is the only way out to a
+  language model. It's the one container with `OPENAI_API_KEY`; the app
+  containers have the key blanked and call the gateway with
+  `AI_GATEWAY_TOKEN`, which `apply.sh` creates in `.env` on the first deploy
+  that needs it. It uses a tenant's own key when the tenant set one, sends
+  "local" calls to the host's Ollama, allows `AI_GATEWAY_TENANT_RPM` calls a
+  minute per tenant (default 60), and counts calls, time and tokens per tenant
+  (`brt360_ai_*` in Prometheus).
+
+If the gateway is down, every AI feature falls back to its built-in rules; if
+`training` is down, only the training pages fail. To check either:
+
+```bash
+docker compose ps training ai-gateway
+docker compose logs --tail 50 ai-gateway
+# AI calls per tenant and outcome (ok, limited, no_key, timeout, unreachable, http_NNN)
+docker compose exec -T ai-gateway python -c "import urllib.request as u; print(u.urlopen('http://127.0.0.1:8000/metrics').read().decode())" | grep brt360_ai_calls_total
+```
+
+To put training back into the API: remove `SPLIT_SERVICES: training` from
+`x-app-env` in `docker-compose.yml`, and the three `/api/training/`,
+`/api/assessments/` and `/api/p/` blocks from `frontend/nginx.conf`, then
+deploy. To stop using the gateway, remove `AI_GATEWAY_URL` and
+`OPENAI_API_KEY: ""` from `x-app-env`.
+
 ### Token signing key rotation (yearly, or if the key may have leaked)
 
 ```bash
@@ -379,7 +412,7 @@ remove both lines. Once every session from before RS256 has expired, set
 | Task | Command |
 |---|---|
 | Status | `docker compose ps` |
-| Logs | `docker compose logs -f api worker` |
+| Logs | `docker compose logs -f api worker training ai-gateway` |
 | Deploy new code | from your PC: `deploy\deploy_docker.ps1 -Environment staging` first, then `deploy\deploy_docker.ps1` for production. Each takes a database dump and a code backup, rebuilds, runs migrations first, then waits for health (`deploy/compose/apply.sh`) |
 | Database backup | `docker compose exec postgres pg_dump -U brt360 -Fc brt360 > backups/brt360-$(date +%F).dump` |
 | psql shell | `docker compose exec postgres psql -U brt360 brt360` |

@@ -65,7 +65,8 @@ chown 10001 "$STAGE/backend/jwt_private.pem" && chmod 600 "$STAGE/backend/jwt_pr
 
 COMPOSE="$STAGE/deploy/compose"
 cp "$COMPOSE/.env.staging.example" "$COMPOSE/.env"
-sed -i -e "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$(secret 24)/" -e "s/^GRAFANA_ADMIN_PASSWORD=.*/GRAFANA_ADMIN_PASSWORD=$(secret 16)/" "$COMPOSE/.env"
+sed -i -e "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$(secret 24)/" -e "s/^GRAFANA_ADMIN_PASSWORD=.*/GRAFANA_ADMIN_PASSWORD=$(secret 16)/" \
+  -e "s/^AI_GATEWAY_TOKEN=.*/AI_GATEWAY_TOKEN=$(secret 24)/" "$COMPOSE/.env"
 chmod 600 "$COMPOSE/.env"
 mkdir -p "$COMPOSE/backups"
 touch "$COMPOSE/.cutover-done"   # deployed with deploy_docker.ps1 -Environment staging

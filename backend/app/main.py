@@ -20,10 +20,7 @@ async def lifespan(app):
                 await task
         scheduler.release(lock)
 
-from fastapi import FastAPI
-from app.licensing import include_module_router
-from fastapi.middleware.cors import CORSMiddleware
-
+from app import service
 from app.config import get_settings
 from app.experience import (
     routes_admin,
@@ -60,109 +57,72 @@ from app.experience import (
 # Schema is Alembic-driven (migrations/) - run `alembic upgrade head` before
 # starting the app, in both dev and production. Nothing here creates tables.
 
-app = FastAPI(title="BRT 360 — Intent CRM", version="0.1.0-sprint1", lifespan=lifespan)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=get_settings().cors_allowed_origins_list,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-    expose_headers=["X-Example-Count"],
-)
+app = service.new_app("BRT 360 — Intent CRM", lifespan=lifespan)
 
 from app.crm_core import process_service as _process_service  # noqa: E402
 
 _process_service.install_account_conversion()
 
-
-@app.middleware("http")
-async def _record_who_acts(request, call_next):
-    """Records saved during this request are stamped with who saved them
-    (app/brt_id.py) - read from the verified token; no token, no stamp.
-    The verified claims are kept on request.state, so get_current_user
-    doesn't decode the token a second time."""
-    from app import brt_id
-    from app.auth import decode_token
-
-    token = request.headers.get("authorization", "")
-    payload = decode_token(token[7:]) if token.lower().startswith("bearer ") else None
-    request.state.token_payload = payload
-    try:
-        user_id = int(payload["sub"]) if payload else None
-    except (KeyError, TypeError, ValueError):
-        user_id = None
-    marker = brt_id.current_user.set({"user_id": user_id} if user_id else None)
-    try:
-        return await call_next(request)
-    finally:
-        brt_id.current_user.reset(marker)
-
-
-include_module_router(app, routes_auth.router)
-include_module_router(app, routes_intent.router)
-include_module_router(app, routes_intent_admin.router)
-include_module_router(app, routes_catalog.router)
-include_module_router(app, routes_crm.router)
-include_module_router(app, routes_admin.router)
-include_module_router(app, routes_tenants.router)
-include_module_router(app, routes_records.router)
-include_module_router(app, routes_studio.router)
-include_module_router(app, routes_custom_records.admin_router)
-include_module_router(app, routes_custom_records.router)
-include_module_router(app, routes_org.router)
-include_module_router(app, routes_org.access_router)
-include_module_router(app, routes_c360.router)
-include_module_router(app, routes_c360.admin_router)
-include_module_router(app, routes_process.admin_router)
-include_module_router(app, routes_process.router)
-include_module_router(app, routes_product_config.router)
-include_module_router(app, routes_product_config.admin_router)
-include_module_router(app, routes_configurator.router)
-include_module_router(app, routes_configurator.tmf_router)
-include_module_router(app, routes_configurator.admin_router)
-include_module_router(app, routes_configurator.classes_router)
-include_module_router(app, routes_product_model.router)
-include_module_router(app, routes_product_model.admin_router)
-include_module_router(app, routes_pages.router)
-include_module_router(app, routes_pages.admin_router)
-include_module_router(app, routes_bim.router)
-include_module_router(app, routes_field_service.router)
-include_module_router(app, routes_order_mgmt.router)
-include_module_router(app, routes_order_mgmt.admin_router)
-include_module_router(app, routes_fulfillment.router)
-include_module_router(app, routes_fulfillment.admin_router)
-include_module_router(app, routes_inventory.router)
-include_module_router(app, routes_inventory.presales_router)
-include_module_router(app, routes_comms.router)
-include_module_router(app, routes_comms.admin_router)
-include_module_router(app, routes_notices.router)
-include_module_router(app, routes_agent.router)
-include_module_router(app, routes_builder.router)
-include_module_router(app, routes_assistant.router)
-include_module_router(app, routes_notices.admin_router)
-include_module_router(app, routes_function_map.router)
-include_module_router(app, routes_conflicts.router)
+service.include(
+    app,
+    routes_auth.router,
+    routes_intent.router,
+    routes_intent_admin.router,
+    routes_catalog.router,
+    routes_crm.router,
+    routes_admin.router,
+    routes_tenants.router,
+    routes_records.router,
+    routes_studio.router,
+    routes_custom_records.admin_router,
+    routes_custom_records.router,
+    routes_org.router,
+    routes_org.access_router,
+    routes_c360.router,
+    routes_c360.admin_router,
+    routes_process.admin_router,
+    routes_process.router,
+    routes_product_config.router,
+    routes_product_config.admin_router,
+    routes_configurator.router,
+    routes_configurator.tmf_router,
+    routes_configurator.admin_router,
+    routes_configurator.classes_router,
+    routes_product_model.router,
+    routes_product_model.admin_router,
+    routes_pages.router,
+    routes_pages.admin_router,
+    routes_bim.router,
+    routes_field_service.router,
+    routes_order_mgmt.router,
+    routes_order_mgmt.admin_router,
+    routes_fulfillment.router,
+    routes_fulfillment.admin_router,
+    routes_inventory.router,
+    routes_inventory.presales_router,
+    routes_comms.router,
+    routes_comms.admin_router,
+    routes_notices.router,
+    routes_agent.router,
+    routes_builder.router,
+    routes_assistant.router,
+    routes_notices.admin_router,
+    routes_function_map.router,
+    routes_conflicts.router,
+)
 
 from app.experience import routes_analytics  # noqa: E402
-include_module_router(app, routes_analytics.router)
 
+service.include(app, routes_analytics.router)
+service.finish(app)  # /api/health, /metrics
+service.include(app, routes_inventory_sync.router)
 
-@app.get("/api/health")
-def health() -> dict[str, str]:
-    return {"status": "ok"}
+from app.experience import routes_modules  # noqa: E402
 
+service.include(app, routes_modules.router)
 
-from app import observability  # noqa: E402
+# Training runs in its own container when SPLIT_SERVICES names it (app/services/training.py).
+if not service.split("training"):
+    from app.services import training as _training
 
-observability.install(app)  # /metrics, and request counts + latency per route
-
-include_module_router(app, routes_inventory_sync.router)
-
-from app.experience import routes_training, routes_modules, routes_training_brd
-include_module_router(app, routes_training.router)
-include_module_router(app, routes_training.public_router)
-include_module_router(app, routes_modules.router)
-include_module_router(app, routes_training_brd.router)
-include_module_router(app, routes_training_brd.public)
-
+    service.include(app, *_training.routers())

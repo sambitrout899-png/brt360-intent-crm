@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./brt360.db"
     openai_api_key: str | None = None
     openai_model: str = "gpt-4o-mini"
+    openai_base_url: str = "https://api.openai.com/v1"
 
     # The platform's own model on this server (deploy/local_llm.sh installs
     # Ollama with it). Tenants choose "local" in Admin -> AI Settings; where
@@ -41,6 +42,24 @@ class Settings(BaseSettings):
     # Shared state for every worker (rate limits). Empty = each worker keeps
     # its own; the Docker setup points this at its Redis container.
     redis_url: str = ""
+
+    # Services that run in their own container (app/services/), comma-separated:
+    # the main API then leaves their routes out. Empty = everything in one app
+    # (development, tests). The Docker setup sets "training".
+    split_services: str = ""
+
+    @property
+    def split_services_list(self) -> list[str]:
+        return [s.strip() for s in self.split_services.split(",") if s.strip()]
+
+    # The AI gateway (app/services/ai_gateway.py). Set, every model call goes
+    # through it and it alone holds the platform's model keys; empty = the app
+    # calls the model itself (development, tests).
+    ai_gateway_url: str = ""
+    # Shared between the app and the gateway: only the platform's own services may use it.
+    ai_gateway_token: str = ""
+    # Model calls per tenant per minute through the gateway (0 = no limit).
+    ai_gateway_tenant_rpm: int = 60
 
     # Confidence below this routes the plan to a human instead of auto-executing,
     # per HLD 4.3 / 8.5 (AI Governance).

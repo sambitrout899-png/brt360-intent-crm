@@ -645,7 +645,7 @@ def _ai_settings_out(db: Session, tenant_id: int, row) -> AiSettingsOut:
         provider=row.provider or settings.default_llm_provider,
         effective=target.provider if target else "rules",
         effective_label=target.label if target else "built-in rules (no AI model)",
-        platform_key_available=bool(settings.openai_api_key),
+        platform_key_available=llm.platform_key_available(),
         local_model=row.local_model or settings.local_llm_model,
         local_live_assist=bool(row.local_live_assist),
     )
@@ -702,15 +702,15 @@ def test_ai(payload: AiTestIn, db: Session = Depends(get_db), tenant_id: int = D
                          intent_type=result.intent_type, entities=result.entities, rationale=result.rationale)
     if provider == "local":
         row = ai_settings_service.get_or_create(db, tenant_id)
-        target = llm.local_target(payload.local_model or row.local_model)
+        target = llm.local_target(payload.local_model or row.local_model, tenant_id)
     else:
         row = ai_settings_service.get_or_create(db, tenant_id)
         own_key = row.api_key if row.is_active else None
-        key = own_key or get_settings().openai_api_key
-        if not key:
+        if not own_key and not llm.platform_key_available():
             return AiTestOut(ok=False, provider="external", model=None, latency_ms=0, intent_type=None, entities={}, rationale="",
                              error="No API key - add your key above, or ask the platform owner to set OPENAI_API_KEY")
-        target = llm.LlmTarget("external", (row.model if own_key else None) or get_settings().openai_model, key, None, 30.0)
+        target = llm.LlmTarget("external", (row.model if own_key else None) or get_settings().openai_model,
+                               own_key or get_settings().openai_api_key or "", None, 30.0, tenant_id)
     try:
         result = classifier._classify_with_llm(payload.text, target, classifier.custom_intent_specs(db, tenant_id), None,
                                                classifier.prompt_entries(db, tenant_id))

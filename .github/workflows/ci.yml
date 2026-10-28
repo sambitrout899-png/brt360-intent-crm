@@ -120,7 +120,7 @@ jobs:
         working-directory: deploy/compose
         run: |
           cp .env.example .env
-          sed -i 's/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=ci/; s/^GRAFANA_ADMIN_PASSWORD=.*/GRAFANA_ADMIN_PASSWORD=ci/' .env
+          sed -i 's/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=ci/; s/^GRAFANA_ADMIN_PASSWORD=.*/GRAFANA_ADMIN_PASSWORD=ci/; s/^AI_GATEWAY_TOKEN=.*/AI_GATEWAY_TOKEN=ci/' .env
           touch ../../backend/.env
           docker compose --profile monitoring config --quiet
 

@@ -44,7 +44,7 @@ MODULES: tuple[Module, ...] = (
     # scope, ids, metrics, events out, licensing, the capability registry.
     Module("chassis", (
         "config", "db", "auth", "tenancy", "rls", "observability", "timeutils", "brt_id",
-        "capabilities", "boundaries", "licensing", "",
+        "capabilities", "boundaries", "licensing", "service", "ratelimit", "services", "",
         "data_intelligence.event_bus", "data_intelligence", "models.auth", "models.tenant",
         "schemas", "experience", "orchestration", "intent_engine", "crm_core", "integration",
         "experience.routes_modules",
@@ -53,7 +53,7 @@ MODULES: tuple[Module, ...] = (
     # (app.models gathers every table for the migrations).
     Module("assembly", ("main", "seed", "scheduler", "models")),
     Module("audit", ("data_intelligence.audit", "crm_core.audit_service")),
-    Module("ai", ("crm_core.llm", "crm_core.ai_settings_service", "models.ai_settings")),
+    Module("ai", ("crm_core.llm", "crm_core.ai_settings_service", "models.ai_settings", "services.ai_gateway")),
     Module("notification", (
         "crm_core.notice_service", "integration.notification_adapter", "experience.routes_notices",
     ), uses=("audit", "identity")),
@@ -82,7 +82,7 @@ MODULES: tuple[Module, ...] = (
     ), uses=("metadata", "audit", "ai")),
     Module("bim", ("crm_core.bim_service", "models.bim", "experience.routes_bim"), uses=("product", "metadata", "ai")),
     Module("training", (
-        "crm_core.training_*", "models.training", "experience.routes_training*", "schemas.training",
+        "crm_core.training_*", "models.training", "experience.routes_training*", "schemas.training", "services.training*",
     ), uses=("identity", "notification", "metadata", "ai")),
     # Leads, accounts, opportunities, quotes.
     Module("crm", (

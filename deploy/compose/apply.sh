@@ -13,7 +13,8 @@
 #   2. extracts the bundle over app_dir (nothing is deleted)
 #   3. docker compose up -d --build: images rebuilt, migrations + seed run
 #      first (the migrate service), then api / worker / web are replaced
-#   4. waits for /api/health through the web container
+#   4. waits for /api/health through the web container, and for the training
+#      and AI gateway containers to report healthy
 set -euo pipefail
 
 BUNDLE="$(readlink -f "${1:-/tmp/brt360_docker_deploy.tar.gz}")"
@@ -39,6 +40,14 @@ if systemctl is-enabled --quiet brt360-api 2>/dev/null || systemctl is-active --
   systemctl disable --now brt360-api
 fi
 
+# Secrets a release needs, made once per server - before anything runs docker compose,
+# which refuses the compose file while one is missing.
+if ! grep -qE '^AI_GATEWAY_TOKEN=.+' .env; then
+  step "Creating AI_GATEWAY_TOKEN in .env (shared by the app and the AI gateway)"
+  sed -i '/^AI_GATEWAY_TOKEN=/d' .env
+  echo "AI_GATEWAY_TOKEN=$(openssl rand -hex 24)" >> .env
+fi
+
 # ---------- 1. backups ----------
 step "Backing up the database -> $COMPOSE_DIR/backups/pre-deploy-$STAMP.dump"
 mkdir -p backups "$BACKUP"
@@ -54,7 +63,7 @@ failed() {
   printf '\n\033[31mDEPLOY FAILED at line %s.\033[0m\n' "$1" >&2
   cat >&2 <<EOF
 To roll back:
-  cd $COMPOSE_DIR && docker compose stop api worker web
+  cd $COMPOSE_DIR && docker compose stop api worker web training ai-gateway
   tar -xzf $BACKUP/code.tar.gz -C $APP_DIR
   # only if a migration changed the database:
   docker compose exec -T postgres pg_restore -U brt360 -d brt360 --clean --if-exists < backups/pre-deploy-$STAMP.dump
@@ -74,8 +83,10 @@ docker compose up -d --build --remove-orphans
 # ---------- 4. health ----------
 WEB_PORT="$(grep -E '^WEB_PORT=' .env | cut -d= -f2)"
 step "Waiting for http://127.0.0.1:${WEB_PORT:-8081}/api/health"
-for _ in $(seq 1 60); do
-  if curl -fsS "http://127.0.0.1:${WEB_PORT:-8081}/api/health" >/dev/null 2>&1; then
+for _ in $(seq 1 90); do  # containers report healthy after their first check (~30 s)
+  if curl -fsS "http://127.0.0.1:${WEB_PORT:-8081}/api/health" >/dev/null 2>&1 \
+     && [[ "$(docker inspect -f '{{.State.Health.Status}}' "$(docker compose ps -q training)" 2>/dev/null)" == healthy ]] \
+     && [[ "$(docker inspect -f '{{.State.Health.Status}}' "$(docker compose ps -q ai-gateway)" 2>/dev/null)" == healthy ]]; then
     trap - ERR
     docker compose ps
     # prune: the newest KEEP_BACKUPS code backups and database dumps stay
@@ -86,5 +97,6 @@ for _ in $(seq 1 60); do
   fi
   sleep 2
 done
-docker compose logs --tail 50 api >&2
+docker compose ps >&2
+docker compose logs --tail 30 api training ai-gateway >&2
 false  # health never came up: the ERR trap prints the rollback

@@ -20,11 +20,31 @@ groups:
           summary: "The BRT 360 API is down"
           description: "Prometheus can't reach the API container. Check: docker compose logs --tail 50 api"
 
+      - alert: ServiceDown
+        expr: up{job=~"brt360-training|brt360-ai-gateway"} == 0
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: "The {{ $labels.job }} container is down"
+          description: "Training pages, or every AI feature (they fall back to rules), are affected. Check: docker compose ps; docker compose logs --tail 50 training ai-gateway"
+
+      - alert: AiCallsFailing
+        expr: >
+          sum(rate(brt360_ai_calls_total{outcome!~"ok|limited"}[15m]))
+            / clamp_min(sum(rate(brt360_ai_calls_total[15m])), 1e-9) > 0.5
+          and sum(rate(brt360_ai_calls_total[15m])) > 0.005
+        for: 15m
+        labels: {severity: warning}
+        annotations:
+          summary: "Most AI calls are failing - features are using their built-in rules"
+          description: "Grafana -> Explore: sum by (outcome) (rate(brt360_ai_calls_total[15m])). no_key = OPENAI_API_KEY missing in backend/.env; unreachable/timeout = model or network. Logs: docker compose logs --tail 50 ai-gateway"
+
+      # user-facing services only: the AI gateway's calls take seconds by nature
       - alert: HighErrorRate
         expr: >
-          sum(rate(brt360_http_requests_total{status=~"5.."}[5m]))
-            / clamp_min(sum(rate(brt360_http_requests_total[5m])), 1e-9) > 0.05
-          and sum(rate(brt360_http_requests_total[5m])) > 0.02
+          sum(rate(brt360_http_requests_total{job!="brt360-ai-gateway",status=~"5.."}[5m]))
+            / clamp_min(sum(rate(brt360_http_requests_total{job!="brt360-ai-gateway"}[5m])), 1e-9) > 0.05
+          and sum(rate(brt360_http_requests_total{job!="brt360-ai-gateway"}[5m])) > 0.02
         for: 10m
         labels: {severity: warning}
         annotations:
@@ -32,7 +52,7 @@ groups:
           description: "Grafana -> BRT 360 - API lists the failing routes. Logs: docker compose logs --tail 100 api"
 
       - alert: SlowResponses
-        expr: histogram_quantile(0.95, sum by (le) (rate(brt360_http_request_duration_seconds_bucket[10m]))) > 2
+        expr: histogram_quantile(0.95, sum by (le) (rate(brt360_http_request_duration_seconds_bucket{job!="brt360-ai-gateway"}[10m]))) > 2
         for: 15m
         labels: {severity: warning}
         annotations:

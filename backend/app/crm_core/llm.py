@@ -15,6 +15,11 @@ Every AI feature (intent understanding, Configure 360 agent, field
 mapping, Flow Studio drafting, flow AI decisions) calls chat_json(); any
 failure (unreachable, slow, bad JSON) raises LlmUnavailable and the caller
 falls back to its rules, so the app never depends on a model being up.
+
+With AI_GATEWAY_URL set, chat_json() calls the AI gateway
+(app/services/ai_gateway.py) instead of the model: the gateway alone holds
+the platform's key, picks the tenant's own key when it has one, and limits
+and counts calls per tenant. The app then needs no model key at all.
 """
 
 from __future__ import annotations
@@ -46,15 +51,39 @@ class LlmTarget:
     api_key: str
     base_url: str | None
     timeout: float
+    tenant_id: int | None = None  # whose call it is - the gateway limits and counts per tenant
 
     @property
     def label(self) -> str:
         return f"{'own model' if self.provider == 'local' else 'external API'} ({self.model})"
 
 
-def local_target(model: str | None = None) -> LlmTarget:
+def local_target(model: str | None = None, tenant_id: int | None = None) -> LlmTarget:
     s = get_settings()
-    return LlmTarget("local", model or s.local_llm_model, "local", s.local_llm_base_url, s.local_llm_timeout_seconds)
+    return LlmTarget("local", model or s.local_llm_model, "local", s.local_llm_base_url, s.local_llm_timeout_seconds, tenant_id)
+
+
+_gateway_status: dict[str, Any] = {}
+
+
+def platform_key_available() -> bool:
+    """Is there a platform model key - here, or (behind the gateway) in the
+    gateway? The gateway's answer is kept for a minute."""
+    s = get_settings()
+    if s.openai_api_key:
+        return True
+    if not s.ai_gateway_url:
+        return False
+    if time.monotonic() - _gateway_status.get("at", -1e9) > 60:
+        import httpx
+
+        try:
+            resp = httpx.get(f"{s.ai_gateway_url.rstrip('/')}/v1/status", timeout=3.0,
+                             headers={"Authorization": f"Bearer {s.ai_gateway_token}"})
+            _gateway_status.update(at=time.monotonic(), external=bool(resp.json().get("platform_key")))
+        except Exception:  # noqa: BLE001 - gateway down: no key reachable now, try again in a minute
+            _gateway_status.update(at=time.monotonic(), external=False)
+    return bool(_gateway_status.get("external"))
 
 
 def resolve(db: Session | None, tenant_id: int | None, live: bool = False) -> LlmTarget | None:
@@ -73,17 +102,26 @@ def resolve(db: Session | None, tenant_id: int | None, live: bool = False) -> Ll
     if provider == "local":
         if live and not (row is not None and row.local_live_assist):
             return None
-        return local_target(row.local_model if row is not None and row.local_model else None)
+        return local_target(row.local_model if row is not None and row.local_model else None, tenant_id)
     if row is not None and row.is_active and row.api_key:
-        return LlmTarget("external", row.model or s.openai_model, row.api_key, None, 30.0)
-    if s.openai_api_key:
-        return LlmTarget("external", s.openai_model, s.openai_api_key, None, 30.0)
+        return LlmTarget("external", row.model or s.openai_model, row.api_key, None, 30.0, tenant_id)
+    if platform_key_available():
+        return LlmTarget("external", s.openai_model, s.openai_api_key or "", None, 30.0, tenant_id)
     return None
 
 
 def _client(target: LlmTarget):
     from openai import OpenAI
 
+    s = get_settings()
+    if s.ai_gateway_url:
+        # the gateway picks the key and retries the model itself
+        return OpenAI(api_key=s.ai_gateway_token or "none", base_url=f"{s.ai_gateway_url.rstrip('/')}/v1",
+                      timeout=target.timeout, max_retries=0, default_headers={
+                          "X-BRT-Provider": target.provider,
+                          "X-BRT-Tenant": str(target.tenant_id or ""),
+                          "X-BRT-Timeout": f"{target.timeout:g}",
+                      })
     return OpenAI(api_key=target.api_key, base_url=target.base_url, timeout=target.timeout, max_retries=0 if target.provider == "local" else 2)
 
 

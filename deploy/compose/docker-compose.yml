@@ -19,7 +19,7 @@
 
 name: brt360
 
-# what every app container (migrate, api, worker) is told on top of backend/.env
+# what every app container (migrate, api, worker, training) is told on top of backend/.env
 x-app-env: &app-env
   DATABASE_URL: postgresql+psycopg://brt360:${POSTGRES_PASSWORD}@postgres:5432/brt360
   # the app works as this plain role, which row-level security applies to (app/rls.py);
@@ -29,6 +29,12 @@ x-app-env: &app-env
   JWT_PRIVATE_KEY_FILE: /run/secrets/jwt_private.pem
   # the host's Ollama (deploy/local_llm.sh) - see README.md, "Local LLM"
   LOCAL_LLM_BASE_URL: http://host.docker.internal:11434/v1
+  # training runs in its own container; the API leaves its routes to it
+  SPLIT_SERVICES: training
+  # every model call goes through the AI gateway, the only container with the model key
+  AI_GATEWAY_URL: http://ai-gateway:8000
+  AI_GATEWAY_TOKEN: ${AI_GATEWAY_TOKEN:?set AI_GATEWAY_TOKEN in deploy/compose/.env - apply.sh creates it}
+  OPENAI_API_KEY: ""
 
 x-app: &app
   # IMAGE_PREFIX keeps staging's images apart from production's (both are built on this server)
@@ -129,12 +135,53 @@ services:
       resources:
         limits: {cpus: "0.5", memory: 512M}
 
+  # the training workspace and participant pages (backend/app/services/training.py): the web
+  # container sends /api/training, /api/assessments and /api/p here
+  training:
+    <<: *app
+    command: ["gunicorn", "app.services.training_app:app", "-k", "uvicorn.workers.UvicornWorker", "-b", "0.0.0.0:8000",
+              "--timeout", "120", "--access-logfile", "-", "--forwarded-allow-ips", "*"]
+    environment:
+      <<: *app-env
+      WEB_CONCURRENCY: ${TRAINING_WORKERS:-2}
+      SCHEDULER_MODE: "off"   # training reminders run in the worker container
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+    deploy:
+      resources:
+        limits: {cpus: "1.0", memory: 768M}
+
+  # the one way out to a language model (backend/app/services/ai_gateway.py): it alone gets
+  # OPENAI_API_KEY (from backend/.env); the app containers have it blanked above
+  ai-gateway:
+    <<: *app
+    command: ["gunicorn", "app.services.ai_gateway:app", "-k", "uvicorn.workers.UvicornWorker", "-b", "0.0.0.0:8000",
+              "--timeout", "130", "--access-logfile", "-"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://brt360:${POSTGRES_PASSWORD}@postgres:5432/brt360
+      DATABASE_APP_ROLE: brt360_app   # reads a tenant's own key from ai_settings, under row-level security
+      REDIS_URL: redis://redis:6379/0  # per-tenant call limits shared by its workers
+      LOCAL_LLM_BASE_URL: http://host.docker.internal:11434/v1
+      AI_GATEWAY_TOKEN: ${AI_GATEWAY_TOKEN}
+      AI_GATEWAY_TENANT_RPM: ${AI_GATEWAY_TENANT_RPM:-60}
+      WEB_CONCURRENCY: 2
+      SCHEDULER_MODE: "off"
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+    deploy:
+      resources:
+        limits: {cpus: "0.5", memory: 384M}
+
   web:
     image: ${IMAGE_PREFIX:-brt360}-web:${BRT_VERSION:-local}
     build: ../../frontend
     restart: unless-stopped
     ports:
       - "127.0.0.1:${WEB_PORT:-8081}:80"
+    # not on training: nginx looks it up per request, so a broken training container
+    # fails only the training pages, never the whole site
     depends_on:
       api: {condition: service_healthy}
     deploy:

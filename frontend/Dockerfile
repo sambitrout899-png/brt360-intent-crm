@@ -11,4 +11,5 @@ RUN npx vite build
 
 FROM nginx:1.27-alpine
 COPY nginx.conf /etc/nginx/conf.d/default.conf
+COPY nginx_proxy.conf /etc/nginx/brt360_proxy.conf
 COPY --from=build /src/dist /usr/share/nginx/html

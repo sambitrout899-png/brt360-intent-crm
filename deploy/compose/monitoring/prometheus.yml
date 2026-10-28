@@ -18,6 +18,15 @@ scrape_configs:
     static_configs:
       - targets: ["api:8000"]
 
+  # the services split out of the API (backend/app/services/) - the same metrics, plus
+  # the gateway's model calls, time and tokens per tenant
+  - job_name: brt360-training
+    static_configs:
+      - targets: ["training:8000"]
+  - job_name: brt360-ai-gateway
+    static_configs:
+      - targets: ["ai-gateway:8000"]
+
   # the public site, checked the way a user reaches it (DNS, host nginx, certificate, web, API)
   - job_name: site
     metrics_path: /probe
