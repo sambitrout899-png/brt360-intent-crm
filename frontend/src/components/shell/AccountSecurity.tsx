@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { changePassword, mfaDisable, mfaNewRecoveryCodes, mfaStatus, type MfaStatus } from "../../api/client";
 import { problem } from "../../api/customRecords";
 import { RecoveryCodes, TwoStepEnroll } from "./TwoStep";
@@ -33,7 +34,9 @@ export default function AccountSecurity({ onClose }: { onClose: () => void }) {
     setMode("codes");
   }
 
-  return (
+  // Rendered on <body>: opened from the header, whose backdrop blur would otherwise make
+  // the header the box this "fixed" overlay fills (it showed as a strip inside the header).
+  return createPortal(
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-950/70 p-3 backdrop-blur-sm sm:p-6" onClick={onClose}>
       <div role="dialog" aria-modal="true" aria-label="Account security"
         className="relative my-auto w-full max-w-md space-y-6 rounded-2xl border border-slate-700 bg-slate-900 p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
@@ -70,7 +73,8 @@ export default function AccountSecurity({ onClose }: { onClose: () => void }) {
 
         <PasswordSection />
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
