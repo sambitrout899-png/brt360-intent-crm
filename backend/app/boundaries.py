@@ -52,8 +52,8 @@ MODULES: tuple[Module, ...] = (
     # Wires everything together - the one place allowed to import it all
     # (app.models gathers every table for the migrations).
     Module("assembly", ("main", "seed", "scheduler", "models")),
-    Module("audit", ("data_intelligence.audit", "crm_core.audit_service")),
-    Module("ai", ("crm_core.llm", "crm_core.ai_settings_service", "models.ai_settings", "services.ai_gateway")),
+    Module("audit", ("data_intelligence.audit", "crm_core.audit_*", "models.audit_chain")),
+    Module("ai", ("crm_core.llm", "crm_core.ai_settings_service", "models.ai_settings", "services.ai_*")),
     Module("notification", (
         "crm_core.notice_service", "integration.notification_adapter", "experience.routes_notices",
     ), uses=("audit", "identity")),

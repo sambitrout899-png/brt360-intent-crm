@@ -680,6 +680,14 @@ def update_ai_settings(
     return _ai_settings_out(db, tenant_id, row)
 
 
+@router.get("/audit-chain/verify")
+def verify_audit_chain(db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> dict:
+    """Is this workspace's audit trail as it was recorded? (app/crm_core/audit_chain.py)"""
+    from app.crm_core import audit_chain
+
+    return audit_chain.verify(db, tenant_id)
+
+
 @router.get("/ai-settings/local-status")
 def local_model_status() -> dict:
     """The model running on this server: reachable? which models are installed?"""

@@ -1,5 +1,5 @@
-"""Background jobs: inventory sync, inventory reservation expiry and training
-reminders, every minute.
+"""Background jobs: inventory sync, inventory reservation expiry, training
+reminders and the audit chain, every minute.
 
 Exactly one process may run them. Under gunicorn every worker runs the app's
 lifespan, so with N workers each job used to run N times a minute. Now
@@ -46,16 +46,38 @@ def _training() -> None:
     run_due_training(SessionLocal)
 
 
+def _audit_chain() -> None:
+    # finished intent runs and training audit entries into the tamper-evident chain
+    from app.crm_core import audit_chain
+
+    with SessionLocal() as db:
+        audit_chain.extend(db)
+
+
 JOBS = (
     ("Inventory scheduler", _inventory_sync),
     ("Inventory reservation expiry", _reservation_expiry),
     ("Training scheduler", _training),
+    ("Audit chain", _audit_chain),
 )
 
+# Jobs that belong to a split-out service (app/services/): with that service in
+# SPLIT_SERVICES its own worker runs them (`python -m app.scheduler --service training`,
+# from its own image), so a release of the service updates its jobs too.
+SERVICE_OF = {"Training scheduler": "training"}
 
-def run_jobs_once() -> None:
+
+def jobs_for(service: str | None = None) -> list[tuple[str, object]]:
+    """service's own jobs; without one, every job no split service has taken."""
+    if service:
+        return [(name, job) for name, job in JOBS if SERVICE_OF.get(name) == service]
+    split = set(get_settings().split_services_list)
+    return [(name, job) for name, job in JOBS if SERVICE_OF.get(name) not in split]
+
+
+def run_jobs_once(service: str | None = None) -> None:
     """Each job on its own: one failing never stops the others."""
-    for name, job in JOBS:
+    for name, job in jobs_for(service):
         try:
             job()
         except Exception:
@@ -91,11 +113,17 @@ def release(lock) -> None:
 
 
 if __name__ == "__main__":
-    # The dedicated scheduler process (SCHEDULER_MODE=off on the API).
+    # The dedicated scheduler process (SCHEDULER_MODE=off on the API), or with
+    # --service NAME a split service's own (its jobs only).
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--service", default=None)
+    service = parser.parse_args().service
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     if claim() is None:
         raise SystemExit("Another process already runs the scheduler - not starting a second one")
-    log.info("Scheduler running every %s s", INTERVAL_SECONDS)
+    log.info("Scheduler running every %s s: %s", INTERVAL_SECONDS, ", ".join(name for name, _ in jobs_for(service)) or "no jobs")
     while True:
-        run_jobs_once()
+        run_jobs_once(service)
         time.sleep(INTERVAL_SECONDS)

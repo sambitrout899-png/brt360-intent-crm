@@ -151,6 +151,85 @@ def test_gateway_retries_a_busy_api_then_passes_its_answer_on(gateway, monkeypat
     assert _ask(gateway).status_code == 200 and len(gateway.calls) == 2
 
 
+def _echo_upstream(gateway, monkeypatch):
+    """An external model that answers with the user's message as it received it."""
+
+    def echo(url, json=None, timeout=None, headers=None):
+        seen = json["messages"][-1]["content"]
+        gateway.calls.append({"url": url, "sent": seen})
+        return httpx.Response(200, json={"choices": [{"message": {"content": seen}, "finish_reason": "stop"}],
+                                         "usage": {"prompt_tokens": 100, "completion_tokens": 20}})
+
+    monkeypatch.setattr(ai_gateway.httpx, "post", echo)
+
+
+def _ask_text(svc, text, provider="external", tenant=""):
+    return svc.post("/v1/chat/completions", json={"model": "m", "messages": [{"role": "user", "content": text}]},
+                    headers={"Authorization": "Bearer svc-token", "X-BRT-Provider": provider, "X-BRT-Tenant": tenant})
+
+
+def test_gateway_masks_personal_details_and_puts_them_back(gateway, monkeypatch):
+    _echo_upstream(gateway, monkeypatch)
+    text = "New lead: Sara, sara@acme.com, +966 50 123 4567, card 4111 1111 1111 1111, budget 250000 on 2026-10-29"
+    resp = _ask_text(gateway, text)
+    sent = gateway.calls[-1]["sent"]
+    assert "sara@acme.com" not in sent and "4567" not in sent and "4111" not in sent
+    assert "[EMAIL_1]" in sent and "[PHONE_1]" in sent and "[CARD_1]" in sent and "250000" in sent and "2026-10-29" in sent
+    assert resp.json()["choices"][0]["message"]["content"] == text  # the answer gets the real values back
+
+    _ask_text(gateway, text, provider="local")  # the model on this server: nothing leaves it, nothing masked
+    assert gateway.calls[-1]["sent"] == text
+
+    monkeypatch.setattr(get_settings(), "ai_gateway_redact", False)
+    _ask_text(gateway, text)
+    assert gateway.calls[-1]["sent"] == text
+
+
+def test_gateway_records_every_call_without_the_prompt(gateway, client, monkeypatch):
+    _echo_upstream(gateway, monkeypatch)
+    _ask_text(gateway, "call me on 0501234567", tenant="1")
+    monkeypatch.setattr(get_settings(), "openai_api_key", None)
+    _ask_text(gateway, "anything", tenant="1")  # refused: no key - recorded too
+    db = client.TestSessionLocal()
+    try:
+        from app.models.ai_settings import AiCall
+
+        rows = db.query(AiCall).order_by(AiCall.id).all()
+        assert [(r.tenant_id, r.provider, r.outcome) for r in rows] == [(1, "external", "ok"), (1, "external", "no_key")]
+        assert rows[0].prompt_tokens == 100 and rows[0].completion_tokens == 20 and rows[0].redactions == 1
+        assert len(rows[0].prompt_sha256) == 64 and rows[0].prompt_chars == len("call me on 0501234567")
+        assert not any(hasattr(r, "prompt") for r in rows)  # the text itself is never stored
+    finally:
+        db.close()
+    usage = gateway.get("/v1/usage", params={"tenant": 1}, headers={"Authorization": "Bearer svc-token"}).json()
+    assert usage["tokens"] == 120 and usage["calls"] == {"ok": 1, "no_key": 1} and usage["redactions"] == 1
+
+
+def test_gateway_stops_a_tenant_at_its_monthly_budget(gateway, monkeypatch):
+    _echo_upstream(gateway, monkeypatch)
+    monkeypatch.setattr(get_settings(), "ai_gateway_tenant_monthly_tokens", 200)
+    assert _ask_text(gateway, "one", tenant="1").status_code == 200  # 120 tokens used
+    assert _ask_text(gateway, "two", tenant="1").status_code == 200  # 240: over from now on
+    resp = _ask_text(gateway, "three", tenant="1")
+    assert resp.status_code == 429 and "budget" in resp.json()["error"]["message"]
+    assert _ask_text(gateway, "platform").status_code == 200  # platform calls have no budget
+
+
+def test_redactor_round_trip():
+    from app.services.ai_redact import Redactor
+
+    r = Redactor()
+    text = ("a@b.co and a@b.co, IBAN SA03 8000 0000 6080 1016 7519, (020) 7946 0958, ref 4111111111111112, "
+            "order 1500 on 2026-10-29, qty 25")
+    masked = r.mask_text(text)
+    assert masked.count("[EMAIL_1]") == 2 and "[EMAIL_2]" not in masked  # one value, one placeholder
+    assert "[IBAN_1]" in masked and "[PHONE_1]" in masked
+    assert "4111111111111112" in masked  # fails the card checksum: not a card
+    assert "1500" in masked and "2026-10-29" in masked and "25" in masked
+    assert r.unmask_text(masked) == text
+    assert r.unmask({"choices": [{"message": {"content": '{"email": "[EMAIL_1]"}'}}]})["choices"][0]["message"]["content"] == '{"email": "a@b.co"}'
+
+
 def test_app_calls_the_model_through_the_gateway(monkeypatch):
     """With AI_GATEWAY_URL set the app needs no key: it sends the gateway its
     token, the tenant and the provider, and the gateway's refusal is just

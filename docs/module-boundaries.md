@@ -77,6 +77,23 @@ match exactly the routes the training service has, that the web container
 routes them there, and how the gateway behaves (who may call it, which key,
 per-tenant limits, retries, metrics).
 
+**Independent releases.** `training` and `training-worker` (training's
+background jobs, `python -m app.scheduler --service training`) run from their
+own `brt360-training` image, and the gateway from `brt360-ai-gateway`.
+`deploy_docker.ps1 -Service training` rebuilds and replaces only those; the
+API keeps running. A release with a database migration is refused as a
+single-service release.
+
+**The gateway's guard rails** (`app/services/ai_gateway.py`,
+`ai_redact.py`): personal details are masked before a prompt leaves the server
+and restored in the answer; there are optional monthly token budgets per tenant;
+every call is recorded in `ai_calls` (no prompt text).
+
+**Tamper-evident audit** (`app/crm_core/audit_chain.py`): a per-tenant hash
+chain over finished intent runs and training audit entries, append-only on
+Postgres, which `/api/admin/audit-chain/verify` checks. It reads those two logs
+directly (two recorded crossings) until an event stream feeds it.
+
 **Not split yet: notifications.** `notification_adapter.send` only records a
 `notification.sent` event in the outbox; nothing delivers it, because no email
 or SMS provider is chosen. The notices bar (`/api/notices`) is a read of

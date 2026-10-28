@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import datetime as dt
 
-from sqlalchemy import Boolean, ForeignKey, Integer, String
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
@@ -36,3 +36,28 @@ class AiSettings(Base):
     local_live_assist: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[dt.datetime] = mapped_column(default=utcnow)
     updated_at: Mapped[dt.datetime] = mapped_column(default=utcnow, onupdate=utcnow)
+
+
+class AiCall(Base):
+    """One model call through the AI gateway (app/services/ai_gateway.py) -
+    the prompt audit, and what a tenant's monthly token budget is counted
+    from. The prompt itself is never stored: its SHA-256 shows which calls
+    sent the same text, its length how much, `redactions` how many personal
+    details were masked before it left the server."""
+
+    __tablename__ = "ai_calls"
+    __table_args__ = (Index("ix_ai_calls_tenant_at", "tenant_id", "at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant_id: Mapped[int | None] = mapped_column(ForeignKey("tenants.id"), nullable=True)  # None: a platform call
+    at: Mapped[dt.datetime] = mapped_column(DateTime, default=utcnow)
+    provider: Mapped[str] = mapped_column(String(20))
+    model: Mapped[str] = mapped_column(String(100), default="")
+    # ok | limited | over_budget | no_key | timeout | unreachable | http_NNN
+    outcome: Mapped[str] = mapped_column(String(20))
+    prompt_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    completion_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+    prompt_sha256: Mapped[str] = mapped_column(String(64), default="")
+    prompt_chars: Mapped[int] = mapped_column(Integer, default=0)
+    redactions: Mapped[int] = mapped_column(Integer, default=0)

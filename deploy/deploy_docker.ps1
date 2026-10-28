@@ -12,18 +12,24 @@
 #   -Environment  production (default, /opt/brt360) or staging (/opt/brt360-staging, made once by
 #                 deploy/compose/setup_staging.sh) - try a change on staging first
 #   -AppDir       overrides the folder the environment deploys to
+#   -Service      release one service only, the rest keep running untouched:
+#                 training (training + training-worker), ai-gateway, api (api + worker), web.
+#                 Refused when the release has a database migration - deploy everything then.
+#                 Default: all.
 #   -DryRun       package only - nothing is sent
 
 param(
     [ValidateSet("production", "staging")]
     [string]$Environment = "production",
+    [ValidateSet("all", "training", "ai-gateway", "api", "web")]
+    [string]$Service = "all",
     [string]$Server = "root@187.127.132.149",
     [string]$AppDir = "",
     [switch]$DryRun
 )
 
 if (-not $AppDir) { $AppDir = @{ production = "/opt/brt360"; staging = "/opt/brt360-staging" }[$Environment] }
-Write-Host "==> Deploying to $Environment ($AppDir)" -ForegroundColor Cyan
+Write-Host "==> Deploying $(if ($Service -eq 'all') { 'everything' } else { $Service }) to $Environment ($AppDir)" -ForegroundColor Cyan
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
@@ -61,7 +67,7 @@ if ($DryRun) {
 Write-Host "==> Uploading and applying on $Server" -ForegroundColor Cyan
 $remote = "set -e; cat > /tmp/brt360_docker_deploy_$Environment.tar.gz; " +
           "tar -xzf /tmp/brt360_docker_deploy_$Environment.tar.gz -O ./deploy/compose/apply.sh | sed 's/\r$//' > /tmp/brt360_apply_docker_$Environment.sh; " +
-          "bash /tmp/brt360_apply_docker_$Environment.sh /tmp/brt360_docker_deploy_$Environment.tar.gz $AppDir"
+          "SERVICE=$Service bash /tmp/brt360_apply_docker_$Environment.sh /tmp/brt360_docker_deploy_$Environment.tar.gz $AppDir"
 # cmd.exe's "<" streams the file byte-for-byte (a PowerShell pipe would re-encode it)
 cmd /c "ssh -o ConnectTimeout=20 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 $Server `"$remote`" < `"$bundle`""
 $sshExit = $LASTEXITCODE

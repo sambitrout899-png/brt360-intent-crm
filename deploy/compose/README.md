@@ -364,15 +364,21 @@ Two services run in their own containers, from the same image as the API:
 - **`training`** (`app/services/training_app.py`) serves `/api/training`,
   `/api/assessments` and `/api/p` (the public participant pages). The web
   container sends those paths to it, and the API leaves them out
-  (`SPLIT_SERVICES=training`). Training's reminders still run in `worker`.
+  (`SPLIT_SERVICES=training`). Training's reminders run in `training-worker`,
+  from the same `brt360-training` image, so a training release updates both.
 - **`ai-gateway`** (`app/services/ai_gateway.py`) is the only way out to a
   language model. It's the one container with `OPENAI_API_KEY`; the app
   containers have the key blanked and call the gateway with
   `AI_GATEWAY_TOKEN`, which `apply.sh` creates in `.env` on the first deploy
   that needs it. It uses a tenant's own key when the tenant set one, sends
   "local" calls to the host's Ollama, allows `AI_GATEWAY_TENANT_RPM` calls a
-  minute per tenant (default 60), and counts calls, time and tokens per tenant
-  (`brt360_ai_*` in Prometheus).
+  minute per tenant (default 60) and, when set, `AI_GATEWAY_TENANT_MONTHLY_TOKENS`
+  tokens a month. Before a prompt goes to an external model it masks emails,
+  phone numbers, card numbers and IBANs (`AI_GATEWAY_REDACT`, on by default) and
+  puts them back in the answer. Every call is recorded in the `ai_calls` table
+  (who, model, outcome, tokens, time, the prompt's hash and size, never its text)
+  and counted in Prometheus (`brt360_ai_*`). A tenant's month:
+  `docker compose exec -T ai-gateway python -c "import os,urllib.request as u; print(u.urlopen(u.Request('http://127.0.0.1:8000/v1/usage?tenant=1', headers={'Authorization': 'Bearer '+os.environ['AI_GATEWAY_TOKEN']})).read().decode())"`
 
 If the gateway is down, every AI feature falls back to its built-in rules; if
 `training` is down, only the training pages fail. To check either:
@@ -389,6 +395,26 @@ To put training back into the API: remove `SPLIT_SERVICES: training` from
 `/api/assessments/` and `/api/p/` blocks from `frontend/nginx.conf`, then
 deploy. To stop using the gateway, remove `AI_GATEWAY_URL` and
 `OPENAI_API_KEY: ""` from `x-app-env`.
+
+### Tamper-evident audit chain
+
+Every minute the worker chains each finished intent run and each training audit
+entry into a per-tenant hash chain (`audit_chain` table). On Postgres the table
+refuses UPDATE and DELETE. A tenant admin can check theirs at
+`/api/admin/audit-chain/verify`. It reports a record changed after it was
+chained, a changed or missing entry, or an entry out of order. To check every
+tenant from the server:
+
+```bash
+docker compose exec -T worker python -c "
+from app.db import SessionLocal; from app.crm_core import audit_chain; from app.models.tenant import Tenant
+db = SessionLocal()
+for t in db.query(Tenant).all(): r = audit_chain.verify(db, t.id); print(t.slug, r['entries'], 'OK' if r['ok'] else r['problems'][:3], r['last_hash'])"
+```
+
+Removing the newest entries together with their records leaves no break. Note
+the `last_hash` from time to time (it is in the output above), and a later check
+must still contain it.
 
 ### Token signing key rotation (yearly, or if the key may have leaked)
 
@@ -412,8 +438,9 @@ remove both lines. Once every session from before RS256 has expired, set
 | Task | Command |
 |---|---|
 | Status | `docker compose ps` |
-| Logs | `docker compose logs -f api worker training ai-gateway` |
+| Logs | `docker compose logs -f api worker training training-worker ai-gateway` |
 | Deploy new code | from your PC: `deploy\deploy_docker.ps1 -Environment staging` first, then `deploy\deploy_docker.ps1` for production. Each takes a database dump and a code backup, rebuilds, runs migrations first, then waits for health (`deploy/compose/apply.sh`) |
+| Release one service only | add `-Service training` (training + training-worker), `ai-gateway`, `api` (api + worker) or `web`: only those containers are rebuilt and replaced, the rest keep running. Refused when the release brings a database migration - deploy everything then. The code on the server is still updated as a whole, so the next full deploy also brings the other services' changes |
 | Database backup | `docker compose exec postgres pg_dump -U brt360 -Fc brt360 > backups/brt360-$(date +%F).dump` |
 | psql shell | `docker compose exec postgres psql -U brt360 brt360` |
 

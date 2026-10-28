@@ -11,6 +11,8 @@ app.crm_core.account_service -> telecom
 app.crm_core.approval_service -> crm
 app.crm_core.approval_service -> telecom
 app.crm_core.attribute_service -> product
+app.crm_core.audit_chain -> intent
+app.crm_core.audit_chain -> training
 app.crm_core.audit_service -> intent
 app.crm_core.b2c_order_service -> flow
 app.crm_core.bim_service -> crm

@@ -60,6 +60,12 @@ class Settings(BaseSettings):
     ai_gateway_token: str = ""
     # Model calls per tenant per minute through the gateway (0 = no limit).
     ai_gateway_tenant_rpm: int = 60
+    # Tokens per tenant per calendar month through the gateway (0 = no budget);
+    # once used up, the tenant's AI features use their rules until the 1st.
+    ai_gateway_tenant_monthly_tokens: int = 0
+    # Mask emails, phone numbers, card numbers and IBANs before a prompt goes to
+    # an external model (app/services/ai_redact.py); the answer gets them back.
+    ai_gateway_redact: bool = True
 
     # Confidence below this routes the plan to a human instead of auto-executing,
     # per HLD 4.3 / 8.5 (AI Governance).

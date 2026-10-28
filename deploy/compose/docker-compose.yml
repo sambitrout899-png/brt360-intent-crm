@@ -124,7 +124,8 @@ services:
       resources:
         limits: {cpus: "2.0", memory: 2G}
 
-  # background jobs (inventory sync, reservation expiry, training reminders) - exactly one copy
+  # background jobs (inventory sync, reservation expiry) - exactly one copy; split services'
+  # jobs run in their own workers (training-worker)
   worker:
     <<: *app
     command: ["python", "-m", "app.scheduler"]
@@ -137,14 +138,17 @@ services:
 
   # the training workspace and participant pages (backend/app/services/training.py): the web
   # container sends /api/training, /api/assessments and /api/p here
+  # Its own image name (same Dockerfile): `deploy_docker.ps1 -Service training` rebuilds and
+  # replaces training and training-worker only - the API keeps running its own image.
   training:
     <<: *app
+    image: ${IMAGE_PREFIX:-brt360}-training:${BRT_VERSION:-local}
     command: ["gunicorn", "app.services.training_app:app", "-k", "uvicorn.workers.UvicornWorker", "-b", "0.0.0.0:8000",
               "--timeout", "120", "--access-logfile", "-", "--forwarded-allow-ips", "*"]
     environment:
       <<: *app-env
       WEB_CONCURRENCY: ${TRAINING_WORKERS:-2}
-      SCHEDULER_MODE: "off"   # training reminders run in the worker container
+      SCHEDULER_MODE: "off"   # training's jobs run in training-worker
     depends_on:
       migrate: {condition: service_completed_successfully}
       redis: {condition: service_healthy}
@@ -152,10 +156,23 @@ services:
       resources:
         limits: {cpus: "1.0", memory: 768M}
 
+  # training's background jobs (reminders, retention) - the worker container leaves them out
+  training-worker:
+    <<: *app
+    image: ${IMAGE_PREFIX:-brt360}-training:${BRT_VERSION:-local}
+    command: ["python", "-m", "app.scheduler", "--service", "training"]
+    healthcheck: {disable: true}
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    deploy:
+      resources:
+        limits: {cpus: "0.25", memory: 256M}
+
   # the one way out to a language model (backend/app/services/ai_gateway.py): it alone gets
   # OPENAI_API_KEY (from backend/.env); the app containers have it blanked above
   ai-gateway:
     <<: *app
+    image: ${IMAGE_PREFIX:-brt360}-ai-gateway:${BRT_VERSION:-local}
     command: ["gunicorn", "app.services.ai_gateway:app", "-k", "uvicorn.workers.UvicornWorker", "-b", "0.0.0.0:8000",
               "--timeout", "130", "--access-logfile", "-"]
     environment:
@@ -165,6 +182,8 @@ services:
       LOCAL_LLM_BASE_URL: http://host.docker.internal:11434/v1
       AI_GATEWAY_TOKEN: ${AI_GATEWAY_TOKEN}
       AI_GATEWAY_TENANT_RPM: ${AI_GATEWAY_TENANT_RPM:-60}
+      AI_GATEWAY_TENANT_MONTHLY_TOKENS: ${AI_GATEWAY_TENANT_MONTHLY_TOKENS:-0}
+      AI_GATEWAY_REDACT: ${AI_GATEWAY_REDACT:-true}
       WEB_CONCURRENCY: 2
       SCHEDULER_MODE: "off"
     depends_on:

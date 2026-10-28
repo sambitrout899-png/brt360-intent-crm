@@ -7,12 +7,17 @@
 #
 # Env options:
 #   KEEP_BACKUPS   code backups and database dumps kept, newest first [5]
+#   SERVICE        all [default], or one service to release on its own: training
+#                  (+ training-worker), ai-gateway, api (+ worker), web. The others
+#                  keep running their current images. Refused when the bundle brings
+#                  a new database migration - those need everything deployed together.
 #
 # Steps (stops at the first failure and prints how to roll back):
 #   1. dumps the Postgres database and backs up the code
 #   2. extracts the bundle over app_dir (nothing is deleted)
 #   3. docker compose up -d --build: images rebuilt, migrations + seed run
-#      first (the migrate service), then api / worker / web are replaced
+#      first (the migrate service), then the containers are replaced - with
+#      SERVICE, only that service's
 #   4. waits for /api/health through the web container, and for the training
 #      and AI gateway containers to report healthy
 set -euo pipefail
@@ -21,6 +26,7 @@ BUNDLE="$(readlink -f "${1:-/tmp/brt360_docker_deploy.tar.gz}")"
 APP_DIR="$(readlink -f "${2:-/opt/brt360}")"
 COMPOSE_DIR="$APP_DIR/deploy/compose"
 KEEP_BACKUPS="${KEEP_BACKUPS:-5}"
+SERVICE="${SERVICE:-all}"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 BACKUP="$APP_DIR/.deploy_backups/docker-$STAMP"
 
@@ -32,6 +38,23 @@ die()  { printf '\033[31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
 [[ -f "$COMPOSE_DIR/.env" ]] || die "$COMPOSE_DIR/.env is missing"
 command -v docker >/dev/null || die "docker is not installed"
 cd "$COMPOSE_DIR"
+
+case "$SERVICE" in
+  all)        CONTAINERS="" ;;
+  training)   CONTAINERS="training training-worker" ;;
+  ai-gateway) CONTAINERS="ai-gateway" ;;
+  api)        CONTAINERS="api worker" ;;
+  web)        CONTAINERS="web" ;;
+  *) die "SERVICE must be all, training, ai-gateway, api or web (got '$SERVICE')" ;;
+esac
+if [[ -n "$CONTAINERS" ]]; then
+  # a migration changes the database every service shares: release everything together then
+  new_migrations=""
+  while read -r f; do
+    [[ -f "$APP_DIR/${f#./}" ]] || new_migrations+="${f##*/} "
+  done < <(tar -tzf "$BUNDLE" | grep -E '^\./backend/migrations/versions/[^/]+\.py$' || true)
+  [[ -z "$new_migrations" ]] || die "This release has new database migrations (${new_migrations% }) - deploy everything (no -Service)"
+fi
 
 # The old systemd API must never run beside the containers: its background jobs
 # would work on the stale SQLite data.
@@ -63,11 +86,11 @@ failed() {
   printf '\n\033[31mDEPLOY FAILED at line %s.\033[0m\n' "$1" >&2
   cat >&2 <<EOF
 To roll back:
-  cd $COMPOSE_DIR && docker compose stop api worker web training ai-gateway
+  cd $COMPOSE_DIR && docker compose stop ${CONTAINERS:-api worker web training training-worker ai-gateway}
   tar -xzf $BACKUP/code.tar.gz -C $APP_DIR
   # only if a migration changed the database:
   docker compose exec -T postgres pg_restore -U brt360 -d brt360 --clean --if-exists < backups/pre-deploy-$STAMP.dump
-  docker compose up -d --build
+  docker compose up -d --build ${CONTAINERS:+--no-deps $CONTAINERS}
 EOF
 }
 trap 'failed $LINENO' ERR
@@ -77,8 +100,14 @@ step "Extracting $BUNDLE -> $APP_DIR"
 tar -xzf "$BUNDLE" -C "$APP_DIR"
 
 # ---------- 3. build + replace ----------
-step "Building images and replacing the containers (migrations run first)"
-docker compose up -d --build --remove-orphans
+if [[ -n "$CONTAINERS" ]]; then
+  step "Building and replacing only: $CONTAINERS (everything else keeps running as it is)"
+  # shellcheck disable=SC2086
+  docker compose up -d --build --no-deps $CONTAINERS
+else
+  step "Building images and replacing the containers (migrations run first)"
+  docker compose up -d --build --remove-orphans
+fi
 
 # ---------- 4. health ----------
 WEB_PORT="$(grep -E '^WEB_PORT=' .env | cut -d= -f2)"

@@ -30,3 +30,14 @@ def test_one_failing_job_does_not_stop_the_others(monkeypatch):
     monkeypatch.setattr(scheduler, "JOBS", (("broken", broken), ("next", lambda: ran.append("next"))))
     scheduler.run_jobs_once()
     assert ran == ["next"]
+
+
+def test_a_split_service_runs_its_own_jobs(monkeypatch):
+    names = lambda jobs: [name for name, _ in jobs]  # noqa: E731
+    settings = scheduler.get_settings()
+    monkeypatch.setattr(settings, "split_services", "")
+    assert "Training scheduler" in names(scheduler.jobs_for())  # one app: the worker runs everything
+    monkeypatch.setattr(settings, "split_services", "training")
+    assert "Training scheduler" not in names(scheduler.jobs_for())  # the training worker has it
+    assert "Inventory scheduler" in names(scheduler.jobs_for())
+    assert names(scheduler.jobs_for("training")) == ["Training scheduler"]
