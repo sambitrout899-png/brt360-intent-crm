@@ -61,3 +61,10 @@ def build_int34_steps(db, tenant_id, execution_id, entities):
         event_bus.publish(db, execution_id, "inventory.check_types_synced", result)
         return result
     return [SagaStep("sync_inventory_check_types", run)]
+
+
+# The intents this module carries out (app/capabilities.py).
+BUILDERS = {
+    "INT-18": build_int18_steps,
+    "INT-34": build_int34_steps,
+}

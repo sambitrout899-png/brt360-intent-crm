@@ -77,6 +77,9 @@ counter_table = Table("brt_id_counter", MetaData(), Column("id", Integer, primar
 
 # Who is acting - set per request (auth), so records know who created them.
 current_user: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar("brt_current_user", default=None)
+# ...and as which position and department, once the request has worked
+# that out (access_service.actor_for) - preferred over current_user.
+current_actor: contextvars.ContextVar[dict[str, int | None] | None] = contextvars.ContextVar("current_actor", default=None)
 
 
 def prefix_for(table: str) -> str:
@@ -221,8 +224,6 @@ def _before_insert(mapper, connection, target) -> None:
 
 
 def _actor() -> dict[str, Any]:
-    from app.crm_core.access_service import current_actor
-
     return current_actor.get() or current_user.get() or {}
 
 

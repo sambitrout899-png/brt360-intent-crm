@@ -234,3 +234,12 @@ def build_int50_steps(db: Session, tenant_id: int, execution_id: int, entities: 
                 "provisioning_delta": provisioning}
 
     return [SagaStep("check_change_against_model", load_and_check), SagaStep("apply_delta", apply)]
+
+
+# The intents this module carries out (app/capabilities.py).
+BUILDERS = {
+    "INT-47": build_int47_steps,
+    "INT-48": build_int48_steps,
+    "INT-49": build_int49_steps,
+    "INT-50": build_int50_steps,
+}

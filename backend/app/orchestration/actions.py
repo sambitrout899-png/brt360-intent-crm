@@ -225,3 +225,11 @@ def build_int03_steps(db: Session, tenant_id: int, execution_id: int, entities: 
         SagaStep("trigger_migration_notification", step3),
         SagaStep("retain_history", step4),
     ]
+
+
+# The intents this module carries out (app/capabilities.py).
+BUILDERS = {
+    "INT-01": build_int01_steps,
+    "INT-02": build_int02_steps,
+    "INT-03": build_int03_steps,
+}

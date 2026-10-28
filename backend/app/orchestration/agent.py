@@ -448,7 +448,7 @@ def prerun_scan(db: Session, tenant_id: int, user: User, steps: list[dict], flow
 def annotate(db: Session, tenant_id: int, steps: list[dict], context: dict | None, catalog: dict | None = None) -> list[dict]:
     """Label, icon, required fields - and for each missing one, the earlier
     step that will supply it (or that the user has to)."""
-    from app.experience.routes_intent import _required_fields
+    from app.intent_engine.intent_registry import requirements
 
     supplied: dict[str, int] = {}
     if context and context.get("entity_type") and context.get("entity_id"):
@@ -461,7 +461,7 @@ def annotate(db: Session, tenant_id: int, steps: list[dict], context: dict | Non
             from app.intent_engine import intent_registry
 
             entry = intent_registry.entry(db, tenant_id, code)
-        required, label = _required_fields(db, tenant_id, code) if code else ([], None)
+        required, label = requirements(db, tenant_id, code) if code else ([], None)
         entities = dict(step.get("entities") or {})
         needs = []
         for f in required:
@@ -628,7 +628,7 @@ def run(db: Session, tenant_id: int, user: User, access, steps: list[dict], mode
         context: dict | None = None, goal: str = "") -> dict:
     """Runs the steps in one transaction. mode "rehearse" always rolls back;
     "execute" commits only when every step went through."""
-    from app.experience.routes_intent import _handle, _required_fields
+    from app.experience.routes_intent import _handle
     from app.intent_engine import intent_registry
     from app.orchestration import rehearsal
     from app.schemas.intent import IntentContext, IntentRequest, StructuredIntent
@@ -654,7 +654,7 @@ def run(db: Session, tenant_id: int, user: User, access, steps: list[dict], mode
                 break
             entities = _resolve_refs(dict(step.get("entities") or {}), outputs)
             entry = intent_registry.entry(db, tenant_id, code)
-            wanted = set(_required_fields(db, tenant_id, code)[0]) | {f["key"] for f in (entry or {}).get("fields", [])}
+            wanted = set(intent_registry.requirements(db, tenant_id, code)[0]) | {f["key"] for f in (entry or {}).get("fields", [])}
             filled = []
             for key in sorted(wanted):
                 empty = entities.get(key) in (None, "", [], {})

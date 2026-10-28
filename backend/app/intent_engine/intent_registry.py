@@ -674,6 +674,21 @@ def label_of(db: Session, tenant_id: int, code: str | None) -> str | None:
     return found["label"] if found else None
 
 
+def requirements(db: Session, tenant_id: int, code: str | None) -> tuple[list[str], str | None]:
+    """(the fields an intent needs, its label) - a Flow Studio flow's own
+    fields when the code is a flow's, otherwise the built-in intent's."""
+    if not code:
+        return [], None
+    from app.intent_engine import classifier
+    from app.orchestration import flow_engine
+
+    flow = flow_engine.flow_from_intent_code(db, tenant_id, code)
+    if flow is not None:
+        return flow_engine.required_fields(flow), label_of(db, tenant_id, code) or flow.name
+    label = label_of(db, tenant_id, code) or classifier.INTENT_LABELS.get(code)
+    return reasoning.required_fields_for(code), label
+
+
 def extra_phrase_specs(db: Session, tenant_id: int) -> list[dict[str, Any]]:
     """Admin-added phrases for built-in intents, in the classifier's
     custom-intent spec shape - so "raise a PO" can mean INT-24."""

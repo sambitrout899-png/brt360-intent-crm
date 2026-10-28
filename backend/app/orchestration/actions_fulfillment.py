@@ -352,3 +352,15 @@ def build_int28_steps(db: Session, tenant_id: int, execution_id: int, entities: 
         return result
 
     return [SagaStep("close_acceptance_letter_work_order", step1), SagaStep("finalize_fulfillment", step2)]
+
+
+# The intents this module carries out (app/capabilities.py).
+BUILDERS = {
+    "INT-22": build_int22_steps,
+    "INT-23": build_int23_steps,
+    "INT-24": build_int24_steps,
+    "INT-25": build_int25_steps,
+    "INT-26": build_int26_steps,
+    "INT-27": build_int27_steps,
+    "INT-28": build_int28_steps,
+}

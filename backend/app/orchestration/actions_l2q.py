@@ -551,3 +551,16 @@ def build_int116_steps(db: Session, tenant_id: int, execution_id: int, entities:
         return result
 
     return [SagaStep("remove_price_override" if remove else "override_quote_price", step1)]
+
+
+# The intents this module carries out (app/capabilities.py).
+BUILDERS = {
+    "INT-04": build_int04_steps,
+    "INT-05": build_int05_steps,
+    "INT-06": build_int06_steps,
+    "INT-16": build_int16_steps,
+    "INT-17": build_int17_steps,
+    "INT-19": build_int19_steps,
+    "INT-20": build_int20_steps,
+    "INT-116": build_int116_steps,
+}

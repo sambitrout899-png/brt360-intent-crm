@@ -268,3 +268,12 @@ def build_custom_flow_steps(db: Session, tenant_id: int, execution_id: int, enti
         return out
 
     return [SagaStep(f"flow:{flow.name}", action)]
+
+
+# The intents this module carries out (app/capabilities.py).
+BUILDERS = {
+    "INT-29": build_int29_steps,
+    "INT-30": build_int30_steps,
+    "INT-31": build_int31_steps,
+    "INT-32": build_int32_steps,
+}

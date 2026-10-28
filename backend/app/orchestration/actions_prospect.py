@@ -230,3 +230,10 @@ def build_int46_steps(db: Session, tenant_id: int, execution_id: int, entities: 
         return out
 
     return [SagaStep("check_lead", step1), SagaStep("generate_lead", step2)]
+
+
+# The intents this module carries out (app/capabilities.py).
+BUILDERS = {
+    "INT-15": build_int15_steps,
+    "INT-46": build_int46_steps,
+}

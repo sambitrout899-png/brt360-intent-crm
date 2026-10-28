@@ -31,29 +31,9 @@ from app.intent_engine import (
 )
 from app.models.auth import User, UserRole
 from app.models.intent_log import IntentExecutionLog
-from app.orchestration import (
-    actions,
-    actions_b2c,
-    actions_c360,
-    actions_comm,
-    actions_config,
-    actions_feasibility,
-    actions_fulfillment,
-    actions_identity,
-    actions_om,
-    actions_l2q,
-    actions_lifecycle,
-    actions_o2a,
-    actions_configurator,
-    actions_pages,
-    actions_prospect,
-    actions_sales,
-    actions_site,
-    actions_t2r,
-    conflicts,
-    flow_engine,
-    rehearsal,
-)
+from app import capabilities
+from app.orchestration import actions_lifecycle, conflicts, flow_engine, rehearsal
+from app.orchestration import fulfillment_engine as _fulfillment_engine
 from app.orchestration.orchestrator import SagaStep, run_saga
 from app.schemas.intent import (
     IntentAssistRequest,
@@ -72,81 +52,6 @@ router = APIRouter(
     prefix="/api/intents", tags=["intents"], dependencies=[Depends(require_roles(UserRole.admin, UserRole.agent))]
 )
 
-_STEP_BUILDERS = {
-    "INT-01": actions.build_int01_steps,
-    "INT-02": actions.build_int02_steps,
-    "INT-03": actions.build_int03_steps,
-    "INT-04": actions_l2q.build_int04_steps,
-    "INT-05": actions_l2q.build_int05_steps,
-    "INT-06": actions_l2q.build_int06_steps,
-    "INT-07": actions_o2a.build_int07_steps,
-    "INT-08": actions_o2a.build_int08_steps,
-    "INT-09": actions_o2a.build_int09_steps,
-    "INT-10": actions_t2r.build_int10_steps,
-    "INT-11": actions_t2r.build_int11_steps,
-    "INT-12": actions_t2r.build_int12_steps,
-    "INT-13": actions_identity.build_int13_steps,
-    "INT-14": actions_site.build_int14_steps,
-    "INT-15": actions_prospect.build_int15_steps,
-    "INT-16": actions_l2q.build_int16_steps,
-    "INT-17": actions_l2q.build_int17_steps,
-    "INT-18": actions_feasibility.build_int18_steps,
-    "INT-34": actions_feasibility.build_int34_steps,
-    "INT-19": actions_l2q.build_int19_steps,
-    "INT-20": actions_l2q.build_int20_steps,
-    "INT-22": actions_fulfillment.build_int22_steps,
-    "INT-23": actions_fulfillment.build_int23_steps,
-    "INT-24": actions_fulfillment.build_int24_steps,
-    "INT-25": actions_fulfillment.build_int25_steps,
-    "INT-26": actions_fulfillment.build_int26_steps,
-    "INT-27": actions_fulfillment.build_int27_steps,
-    "INT-28": actions_fulfillment.build_int28_steps,
-    "INT-21": actions_o2a.build_int21_steps,
-    "INT-29": actions_lifecycle.build_int29_steps,
-    "INT-30": actions_lifecycle.build_int30_steps,
-    "INT-31": actions_lifecycle.build_int31_steps,
-    "INT-32": actions_lifecycle.build_int32_steps,
-    "INT-33": actions_c360.build_int33_steps,
-    # Sales-to-Order / B2C additions (see actions_sales.py)
-    "INT-35": actions_sales.build_int35_steps,
-    "INT-36": actions_sales.build_int36_steps,
-    "INT-37": actions_sales.build_int37_steps,
-    "INT-38": actions_sales.build_int38_steps,
-    "INT-39": actions_sales.build_int39_steps,
-    "INT-40": actions_sales.build_int40_steps,
-    "INT-41": actions_sales.build_int41_steps,
-    "INT-109": actions_sales.build_int109_steps,
-    # Product configuration (see actions_config.py)
-    "INT-42": actions_config.build_int42_steps,
-    "INT-43": actions_config.build_int43_steps,
-    "INT-44": actions_config.build_int44_steps,
-    "INT-45": actions_config.build_int45_steps,
-    "INT-46": actions_prospect.build_int46_steps,
-    "INT-47": actions_configurator.build_int47_steps,
-    "INT-48": actions_configurator.build_int48_steps,
-    "INT-49": actions_configurator.build_int49_steps,
-    "INT-50": actions_configurator.build_int50_steps,
-}
-# Order Management (INT-51..71)
-_STEP_BUILDERS.update(actions_om.BUILDERS)
-# Communications (INT-72..102)
-_STEP_BUILDERS.update(actions_comm.BUILDERS)
-# Configuration (INT-103)
-_STEP_BUILDERS.update(actions_pages.BUILDERS)
-# B2C direct order (INT-104..105)
-_STEP_BUILDERS.update(actions_b2c.BUILDERS)
-# Quote price override (INT-116)
-_STEP_BUILDERS["INT-116"] = actions_l2q.build_int116_steps
-# Fulfillment - COM / SOM / TOM (INT-117..119)
-from app.orchestration import fulfillment_engine as _fulfillment_engine  # noqa: E402
-
-_STEP_BUILDERS.update({"INT-117": _fulfillment_engine.build_int117_steps, "INT-118": _fulfillment_engine.build_int118_steps,
-                       "INT-119": _fulfillment_engine.build_int119_steps})
-# Inventory - the network record (INT-120..128)
-from app.orchestration import actions_inventory as _actions_inventory  # noqa: E402
-
-_STEP_BUILDERS.update(_actions_inventory.BUILDERS)
-
 
 MAX_STATE_FLOW_CASCADE = 3
 
@@ -161,22 +66,12 @@ def _normalize_entities(intent_type: str | None, entities: dict) -> dict:
     return understanding.normalize_list_fields(dict(entities))
 
 
-def _required_fields(db: Session, tenant_id: int, intent_type: str | None) -> tuple[list[str], str | None]:
-    if not intent_type:
-        return [], None
-    flow = flow_engine.flow_from_intent_code(db, tenant_id, intent_type)
-    if flow is not None:
-        return flow_engine.required_fields(flow), intent_registry.label_of(db, tenant_id, intent_type) or flow.name
-    label = intent_registry.label_of(db, tenant_id, intent_type) or classifier.INTENT_LABELS.get(intent_type)
-    return reasoning.required_fields_for(intent_type), label
-
-
 def _suggestions(db: Session, tenant_id: int, codes: list[str], user: User | None = None) -> list[IntentSuggestion]:
     out = []
     for code in codes:
         if user is not None and intent_registry.availability(db, tenant_id, user, code):
             continue
-        required, label = _required_fields(db, tenant_id, code)
+        required, label = intent_registry.requirements(db, tenant_id, code)
         if label:
             out.append(IntentSuggestion(intent_type=code, label=label, required_fields=required))
     return out
@@ -398,7 +293,7 @@ def _handle(
     # 1. Intent Capture (classification) - skipped for a structured intent
     # from an in-page form, which already states the intent precisely.
     if request.structured is not None:
-        known = request.structured.intent_type in _STEP_BUILDERS or flow_engine.flow_from_intent_code(
+        known = capabilities.has_steps(request.structured.intent_type) or flow_engine.flow_from_intent_code(
             db, tenant_id, request.structured.intent_type
         )
         entities = {k: v for k, v in request.structured.entities.items() if not str(k).startswith("_")}
@@ -414,7 +309,7 @@ def _handle(
     if request.structured is None:
         filled = understanding.apply_context(
             classification.intent_type, classification.entities, _context_dict(request),
-            _required_fields(db, tenant_id, classification.intent_type)[0],
+            intent_registry.requirements(db, tenant_id, classification.intent_type)[0],
         )
         if filled:
             classification.rationale += f" Filled {', '.join(filled)} from the record you are viewing."
@@ -438,7 +333,7 @@ def _handle(
             status="failed",
             plan=[],
             suggestions=_suggestions(db, tenant_id, classification.alternatives, user),
-            intent_label=_required_fields(db, tenant_id, classification.intent_type)[1],
+            intent_label=intent_registry.requirements(db, tenant_id, classification.intent_type)[1],
         )
 
     # Data visibility: an intent may only act on records the caller's
@@ -505,7 +400,7 @@ def _handle(
             events=[],
             missing_fields=[f for f in reasoning_result.missing_fields if f != "intent_type"],
             suggestions=_suggestions(db, tenant_id, classification.alternatives, user),
-            intent_label=_required_fields(db, tenant_id, classification.intent_type)[1],
+            intent_label=intent_registry.requirements(db, tenant_id, classification.intent_type)[1],
             intent_icon=_icon(db, tenant_id, classification.intent_type),
         )
 
@@ -513,7 +408,7 @@ def _handle(
     if custom_flow is not None:
         core_steps = actions_lifecycle.build_custom_flow_steps(db, tenant_id, log.id, build_entities, custom_flow)
     else:
-        core_steps = _STEP_BUILDERS[classification.intent_type](db, tenant_id, log.id, build_entities)
+        core_steps = capabilities.step_builder(classification.intent_type)(db, tenant_id, log.id, build_entities)
     saga_steps, collected = _compose_steps(db, tenant_id, log.id, classification.intent_type, build_entities, core_steps)
     saga_result = run_saga(db, saga_steps)
     # The lifecycle hook runs after every intent, but only belongs in the
@@ -550,7 +445,7 @@ def _handle(
             plan=plan_steps,
             result=None,
             events=events,
-            intent_label=_required_fields(db, tenant_id, classification.intent_type)[1],
+            intent_label=intent_registry.requirements(db, tenant_id, classification.intent_type)[1],
             intent_icon=_icon(db, tenant_id, classification.intent_type),
             summary=f"Nothing was changed: {saga_result.error}" + (f" (handled by: {', '.join(handled)})" if handled else ""),
             error=error,
@@ -591,7 +486,7 @@ def _handle(
         plan=plan_steps,
         result=saga_result.result,
         events=events,
-        intent_label=_required_fields(db, tenant_id, classification.intent_type)[1],
+        intent_label=intent_registry.requirements(db, tenant_id, classification.intent_type)[1],
         intent_icon=_icon(db, tenant_id, classification.intent_type),
         **view,
     )
@@ -627,7 +522,7 @@ def assist_intent(
             intent_type=None, intent_label=None, confidence=0.0, rationale=blocked, entities={},
             required_fields=[], missing_fields=[], suggestions=_suggestions(db, tenant_id, alternatives, user),
         )
-    required, label = _required_fields(db, tenant_id, classification.intent_type)
+    required, label = intent_registry.requirements(db, tenant_id, classification.intent_type)
     understanding.apply_context(classification.intent_type, classification.entities, context, required)
     copilot.fill_from_records(db, tenant_id, classification.intent_type, classification.entities)
     missing = [

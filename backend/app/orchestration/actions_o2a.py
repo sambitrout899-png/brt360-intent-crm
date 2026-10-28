@@ -604,3 +604,12 @@ def build_int21_steps(db: Session, tenant_id: int, execution_id: int, entities: 
         SagaStep("check_ponr", step1),
         SagaStep("apply_revision", step2),
     ]
+
+
+# The intents this module carries out (app/capabilities.py).
+BUILDERS = {
+    "INT-07": build_int07_steps,
+    "INT-08": build_int08_steps,
+    "INT-09": build_int09_steps,
+    "INT-21": build_int21_steps,
+}

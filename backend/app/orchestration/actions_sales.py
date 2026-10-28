@@ -712,3 +712,16 @@ approval_service.on_decided("party", "account", _account_decided)
 approval_service.on_decided("opportunity", "feasible", _feasibility_decided)
 approval_service.on_decided("order", "discount", _consumer_order_decided)
 approval_service.on_decided("*", "*", _state_decided)
+
+
+# The intents this module carries out (app/capabilities.py).
+BUILDERS = {
+    "INT-35": build_int35_steps,
+    "INT-36": build_int36_steps,
+    "INT-37": build_int37_steps,
+    "INT-38": build_int38_steps,
+    "INT-39": build_int39_steps,
+    "INT-40": build_int40_steps,
+    "INT-41": build_int41_steps,
+    "INT-109": build_int109_steps,
+}

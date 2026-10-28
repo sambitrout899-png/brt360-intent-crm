@@ -369,7 +369,8 @@ def differences(tenant_map: dict[str, Any]) -> list[dict[str, str]]:
 def _auto_check(db: Session, tenant_id: int, a: dict[str, Any], b: dict[str, Any]) -> tuple[str | None, str | None, dict[str, Any]]:
     """(problem, warning, what B is given) for "after A, run B automatically"."""
     from app.crm_core.lifecycle_service import ENTITY_MODELS
-    from app.experience.routes_intent import _STEP_BUILDERS, _required_fields
+    from app import capabilities
+    from app.intent_engine.intent_registry import requirements
     from app.orchestration.flow_engine import _CHILDREN, _PARENTS
 
     ta, tb = a.get("target"), b.get("target")
@@ -378,7 +379,7 @@ def _auto_check(db: Session, tenant_id: int, a: dict[str, Any], b: dict[str, Any
     if ta not in ENTITY_MODELS:
         return (f"“{a['label']}” doesn't work on one customer, lead, opportunity, quote or order, so nothing can run automatically after it"
                 f" - keep it as a suggested next step"), None, {}
-    if b["code"] not in _STEP_BUILDERS:
+    if not capabilities.has_steps(b["code"]):
         return f"“{b['label']}” can't run inside an automation", None, {}
     model = ENTITY_MODELS[ta]
 
@@ -393,7 +394,7 @@ def _auto_check(db: Session, tenant_id: int, a: dict[str, Any], b: dict[str, Any
     if "decision" in {f["key"] for f in b.get("fields", [])} and _AUTO_DECISION.get(b["code"], "approve"):
         entities["decision"] = _AUTO_DECISION.get(b["code"], "approve")
     given = {"entity_type", "entity_id", *entities}
-    required = [f for f in _required_fields(db, tenant_id, b["code"])[0] if " or " not in f]
+    required = [f for f in requirements(db, tenant_id, b["code"])[0] if " or " not in f]
     unknown = [f.replace("_", " ") for f in required if f not in given and not derivable(f)]
     notes = []
     if unknown:

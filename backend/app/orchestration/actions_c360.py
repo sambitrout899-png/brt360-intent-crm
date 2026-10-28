@@ -69,3 +69,9 @@ def build_int33_steps(db: Session, tenant_id: int, execution_id: int, entities: 
         SagaStep("connect_systems", connect),
         SagaStep("save_customer_360_layout", save),
     ]
+
+
+# The intents this module carries out (app/capabilities.py).
+BUILDERS = {
+    "INT-33": build_int33_steps,
+}

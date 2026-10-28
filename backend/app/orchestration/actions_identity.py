@@ -53,3 +53,9 @@ def build_int13_steps(db: Session, tenant_id: int, execution_id: int, entities: 
         SagaStep("resolve_party", step1),
         SagaStep("submit_identity_verification", step2),
     ]
+
+
+# The intents this module carries out (app/capabilities.py).
+BUILDERS = {
+    "INT-13": build_int13_steps,
+}

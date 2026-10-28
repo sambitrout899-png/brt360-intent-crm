@@ -269,3 +269,12 @@ def build_int45_steps(db: Session, tenant_id: int, execution_id: int, entities: 
 
 def party_of(db: Session, opportunity: Opportunity | None) -> Party | None:
     return opportunity.lead.party if opportunity is not None and opportunity.lead is not None else None
+
+
+# The intents this module carries out (app/capabilities.py).
+BUILDERS = {
+    "INT-42": build_int42_steps,
+    "INT-43": build_int43_steps,
+    "INT-44": build_int44_steps,
+    "INT-45": build_int45_steps,
+}

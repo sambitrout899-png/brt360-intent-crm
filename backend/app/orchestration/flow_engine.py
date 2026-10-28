@@ -324,13 +324,13 @@ def run_action(db: Session, tenant_id: int, execution_id: int, flow: FlowDefinit
     """Runs an intent's own steps inside the flow (same transaction, under a
     savepoint). The flow's record fills what the action needs; ids it makes
     are added to the flow's results for later nodes ({{result.quote_id}})."""
-    from app.experience.routes_intent import _STEP_BUILDERS, _required_fields
+    from app import capabilities
     from app.intent_engine import intent_registry
 
     code = str(config.get("intent") or "")
     from app.licensing import require_module, intent_module
     require_module(db, tenant_id, intent_module(code))
-    builder = _STEP_BUILDERS.get(code)
+    builder = capabilities.step_builder(code)
     if builder is None:
         raise ValueError(f"Flow '{flow.name}': '{code}' is not an action that can run in a flow")
     given = config.get("entities") or {}
@@ -340,7 +340,7 @@ def run_action(db: Session, tenant_id: int, execution_id: int, flow: FlowDefinit
         except json.JSONDecodeError as exc:
             raise ValueError("Action values must be a valid JSON object") from exc
     entities = {k: render(v, ctx) for k, v in (given if isinstance(given, dict) else {}).items()}
-    wanted = set(_required_fields(db, tenant_id, code)[0]) | {f["key"] for f in (intent_registry.entry(db, tenant_id, code) or {}).get("fields", [])}
+    wanted = set(intent_registry.requirements(db, tenant_id, code)[0]) | {f["key"] for f in (intent_registry.entry(db, tenant_id, code) or {}).get("fields", [])}
     filled = []
     for key in sorted(wanted):
         if entities.get(key) in (None, "", [], {}):
@@ -350,7 +350,7 @@ def run_action(db: Session, tenant_id: int, execution_id: int, flow: FlowDefinit
                 filled.append(key)
     if "entity_type" in wanted and not entities.get("entity_type") and entity_type and record is not None:
         entities.update(entity_type=entity_type, entity_id=record.id)
-    required = _required_fields(db, tenant_id, code)[0]
+    required = intent_registry.requirements(db, tenant_id, code)[0]
     # INT-07 also places a consumer order directly, without a quote.
     # Validate that branch's inputs before invoking the same action builder.
     if code == "INT-07" and not entities.get("quote_id"):

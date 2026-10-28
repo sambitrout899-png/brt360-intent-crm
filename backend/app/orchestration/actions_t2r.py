@@ -200,3 +200,11 @@ def _build_int12_completion_steps(db: Session, execution_id: int, entities: dict
         SagaStep("arrive_on_site", step1),
         SagaStep("capture_completion_evidence_and_close", step2),
     ]
+
+
+# The intents this module carries out (app/capabilities.py).
+BUILDERS = {
+    "INT-10": build_int10_steps,
+    "INT-11": build_int11_steps,
+    "INT-12": build_int12_steps,
+}

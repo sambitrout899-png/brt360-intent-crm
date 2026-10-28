@@ -24,13 +24,13 @@ before the org structure is set up.
 
 from __future__ import annotations
 
-import contextvars
 from dataclasses import dataclass, field
 from typing import Any
 
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
+from app import brt_id
 from app.models.auth import User, UserRole
 from app.licensing import licensed_pages
 from app.models.crm import Lead, Opportunity, Quote
@@ -119,8 +119,8 @@ class Access:
 
 # The acting user for the current request - lets the lifecycle hook stamp
 # created_by_* on records an intent creates without threading it through
-# every step builder.
-current_actor: contextvars.ContextVar[dict[str, int | None] | None] = contextvars.ContextVar("current_actor", default=None)
+# every step builder. It lives in the chassis (brt_id stamps records too).
+current_actor = brt_id.current_actor
 
 
 # ---------------------------------------------------------------- pages

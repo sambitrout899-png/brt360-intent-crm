@@ -872,3 +872,11 @@ def preview(db: Session, tenant_id: int, pattern: FulfillmentPattern, crm_order=
             "order": data.get("order"),
             "note": "In AI mode the model picks, per order and per layer, which of these steps run and in what order - "
                     "within this design; mandatory steps always run." if pattern.mode == "llm" else ""}
+
+
+# The intents this module carries out (app/capabilities.py).
+BUILDERS = {
+    "INT-117": build_int117_steps,
+    "INT-118": build_int118_steps,
+    "INT-119": build_int119_steps,
+}
