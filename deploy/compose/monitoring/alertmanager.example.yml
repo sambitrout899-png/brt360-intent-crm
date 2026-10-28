@@ -1,6 +1,8 @@
 # Copy to monitoring/alertmanager.yml on the server and fill in the SMTP account the
-# alert emails are sent from (it holds a password: chmod 600, never in git).
-#   cp monitoring/alertmanager.example.yml monitoring/alertmanager.yml && chmod 600 monitoring/alertmanager.yml
+# alert emails are sent from. It holds a password: readable by Alertmanager's user
+# (nobody, uid 65534) and no one else, and never in git.
+#   cp monitoring/alertmanager.example.yml monitoring/alertmanager.yml
+#   chown 65534:65534 monitoring/alertmanager.yml && chmod 600 monitoring/alertmanager.yml
 # Gmail: smtp.gmail.com:587 with an app password (Google account -> Security -> App passwords).
 global:
   smtp_smarthost: "smtp.gmail.com:587"

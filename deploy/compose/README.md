@@ -296,14 +296,17 @@ while it lasts, and once more when it clears.
 Once, with the SMTP account the emails are sent from (Gmail: an app password):
 
 ```bash
-cp monitoring/alertmanager.example.yml monitoring/alertmanager.yml && chmod 600 monitoring/alertmanager.yml
+cp monitoring/alertmanager.example.yml monitoring/alertmanager.yml
+chown 65534:65534 monitoring/alertmanager.yml && chmod 600 monitoring/alertmanager.yml   # Alertmanager runs as "nobody"
 nano monitoring/alertmanager.yml                    # SMTP host, user, password, from, to
 docker compose --profile monitoring up -d
 docker compose restart prometheus                   # picks up the alert rules
 ```
 
 Test it: `docker compose stop web`, wait 3 minutes for the "site is not answering"
-email, then `docker compose start web` and look for the "resolved" email.
+email, then `docker compose start web` (the site is down until you do) and look for
+the "resolved" email. No email: `docker compose logs --tail 20 alertmanager` shows why
+(a config it can't read, or the SMTP server refusing the login).
 Current alerts: `docker compose exec prometheus wget -qO- localhost:9090/api/v1/alerts`.
 
 ### Staging - try changes before production
