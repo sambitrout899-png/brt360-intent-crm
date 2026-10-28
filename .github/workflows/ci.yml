@@ -114,6 +114,8 @@ jobs:
       - uses: actions/checkout@v4
       - run: docker build -t brt360-api:ci backend
       - run: docker build -t brt360-web:ci frontend
+      - name: Web container's nginx config is valid
+        run: docker run --rm brt360-web:ci nginx -t
       - name: Compose file is valid
         working-directory: deploy/compose
         run: |
