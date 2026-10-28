@@ -7,15 +7,23 @@
 #   - a database dump and a code backup are taken first; a failure prints the rollback
 #
 # Usage:
-#   powershell -ExecutionPolicy Bypass -File "D:\BRT 360\brt360-intent-crm\deploy\deploy_docker.ps1" [-Server root@187.127.132.149] [-AppDir /opt/brt360]
+#   powershell -ExecutionPolicy Bypass -File "D:\BRT 360\brt360-intent-crm\deploy\deploy_docker.ps1" [-Environment staging] [-Server root@187.127.132.149]
 #
-#   -DryRun   package only - nothing is sent
+#   -Environment  production (default, /opt/brt360) or staging (/opt/brt360-staging, made once by
+#                 deploy/compose/setup_staging.sh) - try a change on staging first
+#   -AppDir       overrides the folder the environment deploys to
+#   -DryRun       package only - nothing is sent
 
 param(
+    [ValidateSet("production", "staging")]
+    [string]$Environment = "production",
     [string]$Server = "root@187.127.132.149",
-    [string]$AppDir = "/opt/brt360",
+    [string]$AppDir = "",
     [switch]$DryRun
 )
+
+if (-not $AppDir) { $AppDir = @{ production = "/opt/brt360"; staging = "/opt/brt360-staging" }[$Environment] }
+Write-Host "==> Deploying to $Environment ($AppDir)" -ForegroundColor Cyan
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
@@ -33,6 +41,7 @@ try {
         --exclude "*/__pycache__" --exclude "*/.pytest_cache" --exclude "*.pyc" `
         --exclude "*.db" --exclude "*.sqlite" --exclude "*.db-journal" `
         --exclude "*/.env" --exclude "*/.env.*.local" --exclude "./deploy/compose/.env" --exclude "./deploy/compose/backups" `
+        --exclude "./deploy/compose/monitoring/alertmanager.yml" `
         --exclude "./*.tar.gz" --exclude "./.deploy_backups" --exclude "./sermon_output" `
         --exclude "*.pem" --exclude "./docs/deliverables" .   # keys stay on the server; demo videos (~1 GB) aren't the app
     if ($LASTEXITCODE -ne 0) { throw "tar failed" }
@@ -50,9 +59,9 @@ if ($DryRun) {
 }
 
 Write-Host "==> Uploading and applying on $Server" -ForegroundColor Cyan
-$remote = "set -e; cat > /tmp/brt360_docker_deploy.tar.gz; " +
-          "tar -xzf /tmp/brt360_docker_deploy.tar.gz -O ./deploy/compose/apply.sh | sed 's/\r$//' > /tmp/brt360_apply_docker.sh; " +
-          "bash /tmp/brt360_apply_docker.sh /tmp/brt360_docker_deploy.tar.gz $AppDir"
+$remote = "set -e; cat > /tmp/brt360_docker_deploy_$Environment.tar.gz; " +
+          "tar -xzf /tmp/brt360_docker_deploy_$Environment.tar.gz -O ./deploy/compose/apply.sh | sed 's/\r$//' > /tmp/brt360_apply_docker_$Environment.sh; " +
+          "bash /tmp/brt360_apply_docker_$Environment.sh /tmp/brt360_docker_deploy_$Environment.tar.gz $AppDir"
 # cmd.exe's "<" streams the file byte-for-byte (a PowerShell pipe would re-encode it)
 cmd /c "ssh -o ConnectTimeout=20 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 $Server `"$remote`" < `"$bundle`""
 $sshExit = $LASTEXITCODE

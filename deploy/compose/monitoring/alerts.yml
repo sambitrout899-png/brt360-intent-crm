@@ -1,0 +1,72 @@
+# Alert rules (Prometheus). Alertmanager emails them - monitoring/alertmanager.yml.
+groups:
+  - name: brt360
+    rules:
+      # checked from outside the app's containers, the way a user reaches it - a broken web
+      # container, nginx or certificate shows here even while the API itself is healthy
+      - alert: SiteDown
+        expr: probe_success{job="site"} == 0
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: "https://brt360-tech.com is not answering"
+          description: "The public health check has failed for 2 minutes. Check: cd /opt/brt360/deploy/compose && docker compose ps"
+
+      - alert: ApiDown
+        expr: up{job="brt360-api"} == 0
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: "The BRT 360 API is down"
+          description: "Prometheus can't reach the API container. Check: docker compose logs --tail 50 api"
+
+      - alert: HighErrorRate
+        expr: >
+          sum(rate(brt360_http_requests_total{status=~"5.."}[5m]))
+            / clamp_min(sum(rate(brt360_http_requests_total[5m])), 1e-9) > 0.05
+          and sum(rate(brt360_http_requests_total[5m])) > 0.02
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "More than 5% of requests fail with server errors"
+          description: "Grafana -> BRT 360 - API lists the failing routes. Logs: docker compose logs --tail 100 api"
+
+      - alert: SlowResponses
+        expr: histogram_quantile(0.95, sum by (le) (rate(brt360_http_request_duration_seconds_bucket[10m]))) > 2
+        for: 15m
+        labels: {severity: warning}
+        annotations:
+          summary: "Responses are slow (95% take over 2 s)"
+          description: "Grafana -> BRT 360 - API shows the slowest routes."
+
+      - alert: CertificateExpiresSoon
+        expr: (probe_ssl_earliest_cert_expiry{job="site"} - time()) / 86400 < 14
+        for: 1h
+        labels: {severity: warning}
+        annotations:
+          summary: "The HTTPS certificate expires in under 14 days"
+          description: "certbot should renew it by itself. Check: certbot renew --dry-run"
+
+      - alert: DiskAlmostFull
+        expr: (1 - node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) > 0.85
+        for: 15m
+        labels: {severity: warning}
+        annotations:
+          summary: "The server's disk is over 85% full"
+          description: "Check: df -h / and du -xh --max-depth=2 / | sort -rh | head"
+
+      - alert: MemoryLow
+        expr: node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes < 0.10
+        for: 15m
+        labels: {severity: warning}
+        annotations:
+          summary: "Less than 10% of the server's memory is free"
+          description: "Check: docker stats --no-stream"
+
+      - alert: BackupMissing
+        expr: time() - brt360_backup_last_success_timestamp_seconds > 26 * 3600
+        for: 30m
+        labels: {severity: critical}
+        annotations:
+          summary: "No database backup in the last 26 hours"
+          description: "Check: docker compose logs --tail 20 backup; run one now: docker compose exec backup sh /scripts/backup.sh"

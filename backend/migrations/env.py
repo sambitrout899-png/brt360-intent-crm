@@ -30,6 +30,11 @@ if config.config_file_name is not None:
 
 target_metadata = Base.metadata
 
+
+def include_object(obj, name, type_, reflected, compare_to):
+    # the BRT_ID register is made by its migration and app/brt_id.py, not a model - not drift
+    return not (type_ == "table" and name == "brt_id_counter")
+
 # other values from the config, defined by the needs of env.py,
 # can be acquired:
 # my_important_option = config.get_main_option("my_important_option")
@@ -75,7 +80,7 @@ def run_migrations_online() -> None:
 
     with connectable.connect() as connection:
         context.configure(
-            connection=connection, target_metadata=target_metadata
+            connection=connection, target_metadata=target_metadata, include_object=include_object
         )
 
         with context.begin_transaction():

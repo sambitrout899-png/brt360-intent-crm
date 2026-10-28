@@ -266,6 +266,76 @@ and carries over to Docker at the cutover (step C4 above keeps the certificate).
 
 Undo: `cp /etc/nginx/sites-available/brt360.pre-https /etc/nginx/sites-available/brt360 && nginx -t && systemctl reload nginx`.
 
+### Backups
+
+The `backup` service dumps the database every night at 02:00 UTC into
+`backups/nightly-YYYY-MM-DD.dump`. It checks each dump can be read back, keeps
+14 days, and records the time of the last good one for monitoring (the
+`BackupMissing` alert). Deploys also take a `backups/pre-deploy-*.dump` first.
+Everything stays on this server for now. Copying `backups/` off the server
+(for example to object storage) is the next step once real customer data
+exists.
+
+```bash
+docker compose exec backup sh /scripts/backup.sh     # one now
+ls -lh backups/                                      # what's there
+# restore one (replaces the current data - take a fresh dump first):
+docker compose stop api worker
+docker compose exec -T postgres pg_restore -U brt360 -d brt360 --clean --if-exists < backups/nightly-2026-11-01.dump
+docker compose up -d
+```
+
+### Alerts (email)
+
+Prometheus checks the rules in `monitoring/alerts.yml`, and Alertmanager emails them:
+the site down (checked from outside the containers), the API down, errors over 5%,
+slow responses, the certificate expiring within 14 days, the disk over 85% full,
+memory low, and no backup in 26 hours. Each alert is emailed again every 4 hours
+while it lasts, and once more when it clears.
+
+Once, with the SMTP account the emails are sent from (Gmail: an app password):
+
+```bash
+cp monitoring/alertmanager.example.yml monitoring/alertmanager.yml && chmod 600 monitoring/alertmanager.yml
+nano monitoring/alertmanager.yml                    # SMTP host, user, password, from, to
+docker compose --profile monitoring up -d
+docker compose restart prometheus                   # picks up the alert rules
+```
+
+Test it: `docker compose stop web`, wait 3 minutes for the "site is not answering"
+email, then `docker compose start web` and look for the "resolved" email.
+Current alerts: `docker compose exec prometheus wget -qO- localhost:9090/api/v1/alerts`.
+
+### Staging - try changes before production
+
+A second, separate copy on the same server, at https://staging.brt360-tech.com:
+its own code, database, secrets and signing key, behind a password on the pages.
+
+Once: point `staging.brt360-tech.com` at 187.127.132.149 (a DNS A record), then:
+
+```bash
+bash /opt/brt360/deploy/compose/setup_staging.sh staging.brt360-tech.com you@example.com
+```
+
+It prints the page password and the admin logins - write them down. From then on:
+
+```powershell
+deploy\deploy_docker.ps1 -Environment staging      # try it there first
+deploy\deploy_docker.ps1                           # then production
+```
+
+Staging starts empty. To try something on a copy of production's data:
+
+```bash
+cd /opt/brt360/deploy/compose && docker compose exec -T postgres pg_dump -U brt360 -Fc brt360 > /tmp/prod.dump
+cd /opt/brt360-staging/deploy/compose && docker compose stop api worker
+docker compose exec -T postgres pg_restore -U brt360 -d brt360 --clean --if-exists < /tmp/prod.dump; rm /tmp/prod.dump
+docker compose up -d
+```
+
+Production's logins then work on staging too, but tokens don't cross over:
+each environment signs with its own key.
+
 ### Tenant isolation in the database (row-level security)
 
 Every table with a `tenant_id` carries the policy `tenant_isolation`. Inside a
@@ -307,7 +377,7 @@ remove both lines. Once every session from before RS256 has expired, set
 |---|---|
 | Status | `docker compose ps` |
 | Logs | `docker compose logs -f api worker` |
-| Deploy new code | from your PC: `deploy\deploy_docker.ps1`. It takes a database dump and a code backup, rebuilds, runs migrations first, then waits for health (`deploy/compose/apply.sh`) |
+| Deploy new code | from your PC: `deploy\deploy_docker.ps1 -Environment staging` first, then `deploy\deploy_docker.ps1` for production. Each takes a database dump and a code backup, rebuilds, runs migrations first, then waits for health (`deploy/compose/apply.sh`) |
 | Database backup | `docker compose exec postgres pg_dump -U brt360 -Fc brt360 > backups/brt360-$(date +%F).dump` |
 | psql shell | `docker compose exec postgres psql -U brt360 brt360` |
 

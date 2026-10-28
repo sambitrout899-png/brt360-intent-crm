@@ -338,7 +338,9 @@ def read(db: Session, tenant_id: int, access: Any, m: Model, keys: Iterable[str]
     for f in filters:
         if f.get("op", "eq") not in OPERATORS:
             raise ValueError(f"Unknown filter operator “{f.get('op')}”")
-    keys = _needs(m, [*keys, *(f["field"] for f in filters)])
+    from app.analytics import services
+
+    keys = _needs(m, services.required(m.entity.key, [*keys, *(f["field"] for f in filters)]))
     sql_keys = [k for k in keys if m.fields[k].column is not None]
     # an empty select still needs a column: the record id
     cols = [m.fields[k].column.label(f"c{i}") for i, k in enumerate(sql_keys)] or [m.aliases[""].id.label("c0")]
@@ -365,6 +367,8 @@ def read(db: Session, tenant_id: int, access: Any, m: Model, keys: Iterable[str]
     raw = db.execute(stmt).all()
     truncated = len(raw) > max_rows
     rows = [{k: plain(r[i]) for i, k in enumerate(sql_keys)} for r in raw[:max_rows]]
+    # a completed order's service lives on as an asset: its rows take the service's state (analytics/services.py)
+    services.apply(db, tenant_id, m.entity.key, rows)
     _load_custom(db, tenant_id, m, [k for k in keys if m.fields[k].custom], rows)
     for k in keys:
         f = m.fields[k]

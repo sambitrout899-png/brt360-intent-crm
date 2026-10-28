@@ -18,7 +18,11 @@ docs/deliverables/
 
 # Docker (deploy/compose): its secrets and database dumps stay on the server
 deploy/compose/.env
+deploy/compose/.env.*
+!deploy/compose/.env.example
+!deploy/compose/.env.staging.example
 deploy/compose/backups/
+deploy/compose/monitoring/alertmanager.yml
 
 # Node / frontend
 frontend/node_modules/

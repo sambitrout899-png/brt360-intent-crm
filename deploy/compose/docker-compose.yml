@@ -2,8 +2,12 @@
 #
 #   cd /opt/brt360/deploy/compose
 #   docker compose up -d --build                         the app
-#   docker compose --profile monitoring up -d            + Prometheus and Grafana
+#   docker compose --profile monitoring up -d            + Prometheus, Grafana, alerts
 #   (README.md here has the first-time steps)
+#
+# Staging is a second copy of all of this in /opt/brt360-staging (setup_staging.sh):
+# its own code, database, secrets and port; its deploy/compose/.env sets
+# COMPOSE_PROJECT_NAME and IMAGE_PREFIX so nothing is shared with production.
 #
 # The host nginx stays the front door (it also serves the server's other
 # sites): it passes BRT 360's traffic to the web container on 127.0.0.1:$WEB_PORT.
@@ -27,7 +31,8 @@ x-app-env: &app-env
   LOCAL_LLM_BASE_URL: http://host.docker.internal:11434/v1
 
 x-app: &app
-  image: brt360-api:${BRT_VERSION:-local}
+  # IMAGE_PREFIX keeps staging's images apart from production's (both are built on this server)
+  image: ${IMAGE_PREFIX:-brt360}-api:${BRT_VERSION:-local}
   build: ../../backend
   restart: unless-stopped
   # the app's own settings and secrets (BRT_ID, OpenAI, SMTP...) - the same file the
@@ -59,6 +64,23 @@ services:
     deploy:
       resources:
         limits: {cpus: "1.0", memory: 1536M}
+
+  # nightly database dump at 02:00 UTC into ./backups, newest 14 days kept (backup.sh)
+  backup:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-14}
+    volumes:
+      - ./backups:/backups
+      - ./backup.sh:/scripts/backup.sh:ro
+    entrypoint: ["sh", "-c", "echo '0 2 * * * sh /scripts/backup.sh >> /proc/1/fd/1 2>&1' | crontab - && exec crond -f -l 8"]
+    depends_on:
+      postgres: {condition: service_healthy}
+    deploy:
+      resources:
+        limits: {cpus: "0.5", memory: 256M}
 
   # shared rate-limit counters for every API worker (nothing durable lives here)
   redis:
@@ -108,7 +130,7 @@ services:
         limits: {cpus: "0.5", memory: 512M}
 
   web:
-    image: brt360-web:${BRT_VERSION:-local}
+    image: ${IMAGE_PREFIX:-brt360}-web:${BRT_VERSION:-local}
     build: ../../frontend
     restart: unless-stopped
     ports:
@@ -127,10 +149,48 @@ services:
     command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.retention.time=15d"]
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro
       - prometheus:/prometheus
     deploy:
       resources:
         limits: {cpus: "0.5", memory: 512M}
+
+  # emails the alerts (monitoring/alerts.yml) - its SMTP account is in monitoring/alertmanager.yml,
+  # made on the server from alertmanager.example.yml (README.md, "Alerts")
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    profiles: [monitoring]
+    restart: unless-stopped
+    command: ["--config.file=/etc/alertmanager/alertmanager.yml", "--storage.path=/alertmanager"]
+    volumes:
+      - ./monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager:/alertmanager
+    deploy:
+      resources:
+        limits: {cpus: "0.25", memory: 128M}
+
+  # checks the public site from outside the app's containers (job "site")
+  blackbox:
+    image: prom/blackbox-exporter:v0.25.0
+    profiles: [monitoring]
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits: {cpus: "0.25", memory: 64M}
+
+  # the server's disk, memory and CPU, plus the backup's last-success time (backups/metrics)
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    profiles: [monitoring]
+    restart: unless-stopped
+    pid: host
+    command: ["--path.rootfs=/host", "--collector.textfile.directory=/textfile"]
+    volumes:
+      - /:/host:ro,rslave
+      - ./backups/metrics:/textfile:ro
+    deploy:
+      resources:
+        limits: {cpus: "0.25", memory: 64M}
 
   grafana:
     image: grafana/grafana:11.3.1
@@ -153,3 +213,4 @@ volumes:
   pgdata:
   prometheus:
   grafana:
+  alertmanager:

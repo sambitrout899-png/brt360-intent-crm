@@ -3,12 +3,40 @@ global:
   scrape_interval: 15s
   evaluation_interval: 15s
 
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
 scrape_configs:
   # every API worker's request counts and latency, added up (app/observability.py)
   - job_name: brt360-api
     metrics_path: /metrics
     static_configs:
       - targets: ["api:8000"]
+
+  # the public site, checked the way a user reaches it (DNS, host nginx, certificate, web, API)
+  - job_name: site
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+      - targets: ["https://brt360-tech.com/api/health"]
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox:9115
+
+  # the server itself: disk, memory, CPU - and the backup's last success (backup.sh writes it)
+  - job_name: node
+    static_configs:
+      - targets: ["node-exporter:9100"]
 
   - job_name: prometheus
     static_configs:
