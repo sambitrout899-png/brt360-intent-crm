@@ -11,6 +11,10 @@ settings = get_settings()
 
 connect_args = {"check_same_thread": False} if settings.database_url.startswith("sqlite") else {}
 engine = create_engine(settings.database_url, connect_args=connect_args)
+if settings.database_app_role and settings.database_url.startswith("postgresql"):
+    from app import rls
+
+    rls.use_role(engine, settings.database_app_role)  # the plain role row-level security applies to
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 

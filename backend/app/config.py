@@ -33,6 +33,11 @@ class Settings(BaseSettings):
     scheduler_mode: str = "embedded"
     scheduler_lock_file: str = ""
 
+    # Postgres: the plain role the app's connections switch to (SET ROLE) so
+    # row-level security applies to them - superusers bypass it (app/rls.py).
+    # Empty = connect as the configured user. The Docker setup sets brt360_app.
+    database_app_role: str = ""
+
     # Shared state for every worker (rate limits). Empty = each worker keeps
     # its own; the Docker setup points this at its Redis container.
     redis_url: str = ""

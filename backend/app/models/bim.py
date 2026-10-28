@@ -47,7 +47,9 @@ class BimJob(Base):
     entity: Mapped[str] = mapped_column(String(40))
     channel: Mapped[str] = mapped_column(String(10), default="batch")  # batch | api
     file_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
-    status: Mapped[str] = mapped_column(String(20), default="running")  # running | completed | completed_with_errors | failed
+    # running | completed | completed_with_errors | failed - 30: "completed_with_errors" is 21
+    # characters, which SQLite stored in a String(20) but Postgres refuses
+    status: Mapped[str] = mapped_column(String(30), default="running")
     dry_run: Mapped[bool] = mapped_column(Boolean, default=False)
     total: Mapped[int] = mapped_column(Integer, default=0)
     inserted: Mapped[int] = mapped_column(Integer, default=0)

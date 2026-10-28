@@ -22,6 +22,7 @@ from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
+from app import rls
 from app.config import get_settings
 from app.db import get_db
 from app.models.auth import User, UserRole
@@ -126,6 +127,8 @@ def get_current_user(
     user = db.get(User, int(payload["sub"]))
     if user is None or not user.is_active:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "User not found or deactivated")
+    # the rest of this request sees only this user's tenant, in the database too (app/rls.py)
+    rls.scope(db, user.tenant_id)
     return user
 
 

@@ -18,6 +18,9 @@ name: brt360
 # what every app container (migrate, api, worker) is told on top of backend/.env
 x-app-env: &app-env
   DATABASE_URL: postgresql+psycopg://brt360:${POSTGRES_PASSWORD}@postgres:5432/brt360
+  # the app works as this plain role, which row-level security applies to (app/rls.py);
+  # migrations and scripts keep the owner
+  DATABASE_APP_ROLE: brt360_app
   REDIS_URL: redis://redis:6379/0
   JWT_PRIVATE_KEY_FILE: /run/secrets/jwt_private.pem
   # the host's Ollama (deploy/local_llm.sh) - see README.md, "Local LLM"
@@ -71,11 +74,12 @@ services:
       resources:
         limits: {cpus: "0.25", memory: 128M}
 
-  # one-shot: schema up to date + reference data, before the API starts
+  # one-shot before the API starts: schema up to date, tenant isolation policies on
+  # every tenant table (app/rls.py - new tables included), reference data
   migrate:
     <<: *app
     restart: "no"
-    command: ["sh", "-c", "alembic upgrade head && python -m app.seed"]
+    command: ["sh", "-c", "alembic upgrade head && python -m app.rls && python -m app.seed"]
     depends_on:
       postgres: {condition: service_healthy}
 

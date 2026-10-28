@@ -39,13 +39,20 @@ def test_an_expired_quote_is_not_ordered(client):
     import pytest
 
     from app.integration import order_adapter
-    from app.models.crm import Quote
+    from app.models.crm import Lead, Opportunity, Quote
     from app.models.order_mgmt import OmQuoteDetail
     from app.models.orders import OrderType
 
     _, _, party = _installed(client)
     with client.TestSessionLocal() as db:
-        quote = Quote(tenant_id=1, opportunity_id=1, total_price=500)
+        # a real opportunity behind the quote (Postgres enforces the link; SQLite never did)
+        lead = Lead(tenant_id=1, party_id=party, source="test", owner_name="Test", propensity_score=0.5)
+        db.add(lead)
+        db.flush()
+        opportunity = Opportunity(tenant_id=1, lead_id=lead.id, name="Old deal")
+        db.add(opportunity)
+        db.flush()
+        quote = Quote(tenant_id=1, opportunity_id=opportunity.id, total_price=500)
         db.add(quote)
         db.flush()
         db.add(OmQuoteDetail(tenant_id=1, quote_id=quote.id, quote_number="Q-OLD", effective_from=dt.date(2020, 1, 1),

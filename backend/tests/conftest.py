@@ -7,12 +7,13 @@ import os
 os.environ["BCRYPT_ROUNDS"] = "4"
 
 import pytest
-from fastapi import Header
+from fastapi import Depends, Header
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy import create_engine, text
+from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app import rls
 from app.auth import get_current_user
 from app.db import Base, get_db
 from app.main import app
@@ -23,20 +24,60 @@ from app.tenancy import DEFAULT_TENANT_SLUG
 DEFAULT_TEST_ADMIN_EMAIL = "test-admin@default.local"
 DEFAULT_TEST_PLATFORM_ADMIN_EMAIL = "test-platform-admin@brt360.local"
 
+# TEST_DATABASE_URL=postgresql+psycopg://... runs the whole suite on Postgres - an
+# empty database to throw away (it is wiped). TEST_RLS=1 also turns the row-level
+# security policies on (app/rls.py), and every request works as its user's tenant.
+POSTGRES_URL = os.environ.get("TEST_DATABASE_URL", "")
+RLS_ROLE = "brt360_app_test"
+_postgres = None  # the owner: builds and empties the schema
+_postgres_app = None  # what the tests' sessions use - the plain role under RLS, as in production
+
+
+def _postgres_engine():
+    """Built once per run (schema, BRT_ID register, policies); emptied before each test."""
+    global _postgres, _postgres_app
+    if _postgres is None:
+        _postgres = _postgres_app = create_engine(POSTGRES_URL)
+        with _postgres.begin() as conn:
+            conn.execute(text("DROP SCHEMA public CASCADE"))
+            conn.execute(text("CREATE SCHEMA public"))
+            Base.metadata.create_all(bind=conn)
+            if os.environ.get("TEST_RLS") == "1":
+                rls.enable(conn, RLS_ROLE)
+        if os.environ.get("TEST_RLS") == "1":
+            _postgres_app = create_engine(POSTGRES_URL)
+            rls.use_role(_postgres_app, RLS_ROLE)
+    else:
+        # the tables the last test wrote to, emptied and their ids restarted - with DELETE: TRUNCATE
+        # makes new files for every table (~2 s a test). The BRT_ID register stays, so codes are
+        # unique across tests.
+        with _postgres.begin() as conn:
+            probe = " UNION ALL ".join(f"SELECT '{t.name}' WHERE EXISTS (SELECT 1 FROM \"{t.name}\")" for t in Base.metadata.sorted_tables)
+            used = list(conn.execute(text(probe)).scalars())
+            conn.execute(text("SET LOCAL session_replication_role = replica"))  # foreign keys: any order
+            for name in used:
+                conn.execute(text(f'DELETE FROM "{name}"'))
+                if "id" in Base.metadata.tables[name].c:  # some tables are keyed otherwise
+                    conn.execute(text(f"SELECT setval(s, 1, false) FROM pg_get_serial_sequence('\"{name}\"', 'id') AS s WHERE s IS NOT NULL"))
+    return _postgres_app
+
 
 @pytest.fixture()
 def client():
-    # StaticPool pins every caller (including FastAPI's test-request thread)
-    # to the same single SQLite connection, so the in-memory DB and its
-    # schema/seed data are actually shared across threads - without it each
-    # thread opens its own empty ":memory:" database.
-    engine = create_engine(
-        "sqlite:///:memory:",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
+    if POSTGRES_URL:
+        engine = _postgres_engine()
+    else:
+        # StaticPool pins every caller (including FastAPI's test-request thread)
+        # to the same single SQLite connection, so the in-memory DB and its
+        # schema/seed data are actually shared across threads - without it each
+        # thread opens its own empty ":memory:" database.
+        engine = create_engine(
+            "sqlite:///:memory:",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        Base.metadata.create_all(bind=engine)
     TestSession = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-    Base.metadata.create_all(bind=engine)
 
     db = TestSession()
     tenant = get_or_create_tenant(db, DEFAULT_TENANT_SLUG, "Default Tenant")
@@ -78,7 +119,7 @@ def client():
         finally:
             session.close()
 
-    def override_get_current_user(x_test_user_id: int | None = Header(default=None)) -> User:
+    def override_get_current_user(x_test_user_id: int | None = Header(default=None), db: Session = Depends(get_db)) -> User:
         session = TestSession()
         try:
             user_id = x_test_user_id or default_user_id
@@ -86,9 +127,10 @@ def client():
             if user is None:
                 raise ValueError(f"Test user {user_id} not found - did the test create it before using it?")
             session.expunge(user)
-            return user
         finally:
             session.close()
+        rls.scope(db, user.tenant_id)  # as the real get_current_user does: the request's session works as the user's tenant
+        return user
 
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_current_user] = override_get_current_user

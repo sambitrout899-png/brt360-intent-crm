@@ -25,7 +25,9 @@ def test_demo_history_feeds_kpis_models_and_forecasts(client):
     assert k["data_gb"] > 0 and k["collection_rate"]
 
     churn = client.get("/api/analytics/predict/churn").json()
-    assert churn["metrics"]["positives"] >= 5 and churn["customers"]
+    # the history is generated relative to the current date and hour, so how many customers churned
+    # varies through the day (2-6 seen) - what matters is that there are some to learn from
+    assert churn["metrics"]["positives"] >= 1 and churn["customers"]
     win = client.get("/api/analytics/predict/win").json()
     assert win["metrics"]["trained_on"] > 20
     assert all(o["stage"] not in ("won", "lost", "feasibility_failed") for o in win["opportunities"])

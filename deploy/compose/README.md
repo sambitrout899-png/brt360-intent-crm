@@ -266,6 +266,24 @@ and carries over to Docker at the cutover (step C4 above keeps the certificate).
 
 Undo: `cp /etc/nginx/sites-available/brt360.pre-https /etc/nginx/sites-available/brt360 && nginx -t && systemctl reload nginx`.
 
+### Tenant isolation in the database (row-level security)
+
+Every table with a `tenant_id` carries the policy `tenant_isolation`. Inside a
+signed-in user's request, Postgres shows and accepts only that tenant's rows.
+The app connects as the restricted role `brt360_app` (`DATABASE_APP_ROLE`),
+because Postgres never applies the policies to a superuser. The `migrate`
+service reapplies the policies after every migration (`python -m app.rls`),
+so new tables are covered automatically.
+
+```bash
+# check: one policy per tenant table
+docker compose exec -T postgres psql -U brt360 -d brt360 -tAc "select count(*) from pg_policies where policyname = 'tenant_isolation'"
+# switch it off (the rollback) - the app keeps working exactly as before the policies
+docker compose run --rm --no-deps api python -m app.rls --off
+# switch it on again
+docker compose run --rm --no-deps api python -m app.rls
+```
+
 ### Token signing key rotation (yearly, or if the key may have leaked)
 
 ```bash
