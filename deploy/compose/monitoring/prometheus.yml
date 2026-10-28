@@ -23,6 +23,15 @@ scrape_configs:
   - job_name: brt360-training
     static_configs:
       - targets: ["training:8000"]
+  - job_name: brt360-bim
+    static_configs:
+      - targets: ["bim:8000"]
+  - job_name: brt360-product
+    static_configs:
+      - targets: ["product:8000"]
+  - job_name: brt360-metadata
+    static_configs:
+      - targets: ["metadata:8000"]
   - job_name: brt360-ai-gateway
     static_configs:
       - targets: ["ai-gateway:8000"]

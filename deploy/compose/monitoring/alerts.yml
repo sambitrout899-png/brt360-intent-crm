@@ -21,12 +21,12 @@ groups:
           description: "Prometheus can't reach the API container. Check: docker compose logs --tail 50 api"
 
       - alert: ServiceDown
-        expr: up{job=~"brt360-training|brt360-ai-gateway"} == 0
+        expr: up{job=~"brt360-training|brt360-bim|brt360-product|brt360-metadata|brt360-ai-gateway"} == 0
         for: 2m
         labels: {severity: critical}
         annotations:
           summary: "The {{ $labels.job }} container is down"
-          description: "Training pages, or every AI feature (they fall back to rules), are affected. Check: docker compose ps; docker compose logs --tail 50 training ai-gateway"
+          description: "That service's pages fail (for the AI gateway: AI features fall back to rules). Check: docker compose ps; docker compose logs --tail 50 <service>"
 
       - alert: AiCallsFailing
         expr: >

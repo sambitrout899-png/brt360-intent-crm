@@ -357,9 +357,17 @@ docker compose run --rm --no-deps api python -m app.rls --off
 docker compose run --rm --no-deps api python -m app.rls
 ```
 
-### Split services: training and the AI gateway
+### Split services
 
-Two services run in their own containers, from the same image as the API:
+Besides the API, these services run in their own containers, built from the same code:
+
+- **`bim`**, **`product`** and **`metadata`** serve BIM (`/api/bim`); the catalog,
+  Product Modeller and configurator; and Page Designer, custom records and the
+  record APIs. Each service's `PREFIXES` are listed in `backend/app/services/<name>.py`,
+  and the web container routes those prefixes to the service (`frontend/nginx.conf`).
+  They run one worker each (`BIM_WORKERS`, `PRODUCT_WORKERS`, `METADATA_WORKERS`
+  in `.env`). The product TMF APIs (`/tmf-api/...`) are served there too, but are not
+  published, as before. If one of them is down, only its pages fail.
 
 - **`training`** (`app/services/training_app.py`) serves `/api/training`,
   `/api/assessments` and `/api/p` (the public participant pages). The web
@@ -390,10 +398,9 @@ docker compose logs --tail 50 ai-gateway
 docker compose exec -T ai-gateway python -c "import urllib.request as u; print(u.urlopen('http://127.0.0.1:8000/metrics').read().decode())" | grep brt360_ai_calls_total
 ```
 
-To put training back into the API: remove `SPLIT_SERVICES: training` from
-`x-app-env` in `docker-compose.yml`, and the three `/api/training/`,
-`/api/assessments/` and `/api/p/` blocks from `frontend/nginx.conf`, then
-deploy. To stop using the gateway, remove `AI_GATEWAY_URL` and
+To put a service back into the API: remove its name from `SPLIT_SERVICES` in
+`x-app-env` in `docker-compose.yml`, and its location blocks from
+`frontend/nginx.conf`, then deploy. To stop using the gateway, remove `AI_GATEWAY_URL` and
 `OPENAI_API_KEY: ""` from `x-app-env`.
 
 ### Sign-in security: lockout and two-step sign-in
@@ -464,7 +471,7 @@ remove both lines. Once every session from before RS256 has expired, set
 | Status | `docker compose ps` |
 | Logs | `docker compose logs -f api worker training training-worker ai-gateway` |
 | Deploy new code | from your PC: `deploy\deploy_docker.ps1 -Environment staging` first, then `deploy\deploy_docker.ps1` for production. Each takes a database dump and a code backup, rebuilds, runs migrations first, then waits for health (`deploy/compose/apply.sh`) |
-| Release one service only | add `-Service training` (training + training-worker), `ai-gateway`, `api` (api + worker) or `web`: only those containers are rebuilt and replaced, the rest keep running. Refused when the release brings a database migration - deploy everything then. The code on the server is still updated as a whole, so the next full deploy also brings the other services' changes |
+| Release one service only | add `-Service training` (training + training-worker), `bim`, `product`, `metadata`, `ai-gateway`, `api` (api + worker) or `web`: only those containers are rebuilt and replaced, the rest keep running. Refused when the release brings a database migration - deploy everything then. The code on the server is still updated as a whole, so the next full deploy also brings the other services' changes |
 | Database backup | `docker compose exec postgres pg_dump -U brt360 -Fc brt360 > backups/brt360-$(date +%F).dump` |
 | psql shell | `docker compose exec postgres psql -U brt360 brt360` |
 

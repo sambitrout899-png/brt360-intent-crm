@@ -13,7 +13,8 @@
 #                 deploy/compose/setup_staging.sh) - try a change on staging first
 #   -AppDir       overrides the folder the environment deploys to
 #   -Service      release one service only, the rest keep running untouched:
-#                 training (training + training-worker), ai-gateway, api (api + worker), web.
+#                 training (training + training-worker), bim, product, metadata, ai-gateway,
+#                 api (api + worker), web.
 #                 Refused when the release has a database migration - deploy everything then.
 #                 Default: all.
 #   -DryRun       package only - nothing is sent
@@ -21,7 +22,7 @@
 param(
     [ValidateSet("production", "staging")]
     [string]$Environment = "production",
-    [ValidateSet("all", "training", "ai-gateway", "api", "web")]
+    [ValidateSet("all", "training", "bim", "product", "metadata", "ai-gateway", "api", "web")]
     [string]$Service = "all",
     [string]$Server = "root@187.127.132.149",
     [string]$AppDir = "",

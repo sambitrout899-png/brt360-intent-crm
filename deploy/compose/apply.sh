@@ -43,10 +43,13 @@ case "$SERVICE" in
   all)        CONTAINERS="" ;;
   training)   CONTAINERS="training training-worker" ;;
   ai-gateway) CONTAINERS="ai-gateway" ;;
+  bim|product|metadata) CONTAINERS="$SERVICE" ;;
   api)        CONTAINERS="api worker" ;;
   web)        CONTAINERS="web" ;;
-  *) die "SERVICE must be all, training, ai-gateway, api or web (got '$SERVICE')" ;;
+  *) die "SERVICE must be all, training, bim, product, metadata, ai-gateway, api or web (got '$SERVICE')" ;;
 esac
+# the split services' web containers, which must report healthy after a deploy
+HEALTHCHECKED="training bim product metadata ai-gateway"
 if [[ -n "$CONTAINERS" ]]; then
   # a migration changes the database every service shares: release everything together then
   new_migrations=""
@@ -86,7 +89,7 @@ failed() {
   printf '\n\033[31mDEPLOY FAILED at line %s.\033[0m\n' "$1" >&2
   cat >&2 <<EOF
 To roll back:
-  cd $COMPOSE_DIR && docker compose stop ${CONTAINERS:-api worker web training training-worker ai-gateway}
+  cd $COMPOSE_DIR && docker compose stop ${CONTAINERS:-api worker web training training-worker bim product metadata ai-gateway}
   tar -xzf $BACKUP/code.tar.gz -C $APP_DIR
   # only if a migration changed the database:
   docker compose exec -T postgres pg_restore -U brt360 -d brt360 --clean --if-exists < backups/pre-deploy-$STAMP.dump
@@ -112,10 +115,14 @@ fi
 # ---------- 4. health ----------
 WEB_PORT="$(grep -E '^WEB_PORT=' .env | cut -d= -f2)"
 step "Waiting for http://127.0.0.1:${WEB_PORT:-8081}/api/health"
+all_healthy() {
+  local svc
+  for svc in $HEALTHCHECKED; do
+    [[ "$(docker inspect -f '{{.State.Health.Status}}' "$(docker compose ps -q "$svc")" 2>/dev/null)" == healthy ]] || return 1
+  done
+}
 for _ in $(seq 1 90); do  # containers report healthy after their first check (~30 s)
-  if curl -fsS "http://127.0.0.1:${WEB_PORT:-8081}/api/health" >/dev/null 2>&1 \
-     && [[ "$(docker inspect -f '{{.State.Health.Status}}' "$(docker compose ps -q training)" 2>/dev/null)" == healthy ]] \
-     && [[ "$(docker inspect -f '{{.State.Health.Status}}' "$(docker compose ps -q ai-gateway)" 2>/dev/null)" == healthy ]]; then
+  if curl -fsS "http://127.0.0.1:${WEB_PORT:-8081}/api/health" >/dev/null 2>&1 && all_healthy; then
     trap - ERR
     docker compose ps
     # prune: the newest KEEP_BACKUPS code backups and database dumps stay
@@ -127,5 +134,6 @@ for _ in $(seq 1 90); do  # containers report healthy after their first check (~
   sleep 2
 done
 docker compose ps >&2
-docker compose logs --tail 30 api training ai-gateway >&2
+# shellcheck disable=SC2086
+docker compose logs --tail 30 api $HEALTHCHECKED >&2
 false  # health never came up: the ERR trap prints the rollback

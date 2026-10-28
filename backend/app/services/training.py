@@ -13,7 +13,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 # The URL prefixes this service answers - what the web container routes to it.
-PREFIXES = ("/api/training", "/api/assessments", "/api/p/")
+PREFIXES = ("/api/training/", "/api/assessments/", "/api/p/")
 
 
 def routers() -> list[APIRouter]:

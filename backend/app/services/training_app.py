@@ -3,9 +3,6 @@
     gunicorn app.services.training_app:app -k uvicorn.workers.UvicornWorker
 """
 
-from app import service
-from app.services import training
+from app.services import split_app
 
-app = service.new_app("BRT 360 — Training")
-service.include(app, *training.routers())
-service.finish(app)
+app = split_app.create("training")

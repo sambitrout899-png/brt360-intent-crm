@@ -94,6 +94,20 @@ chain over finished intent runs and training audit entries, append-only on
 Postgres, which `/api/admin/audit-chain/verify` checks. It reads those two logs
 directly (two recorded crossings) until an event stream feeds it.
 
+**Phase 3: bim, product and metadata in their own containers.** Each split
+service is `app/services/<name>.py` (`PREFIXES` and `routers()`), run by
+`app/services/split_app.py` with `BRT_SERVICE=<name>`. `main.py` leaves out the
+routes of every service named in `SPLIT_SERVICES`. The tests check, per service,
+that its prefixes cover exactly its routes, that no route belongs to two services,
+and that the web container routes each prefix to the right container. Metadata's
+admin settings that live in the shared `routes_admin.py` stay in the API until
+that file is divided by module.
+
+Licences stay checked against the tenant row per request rather than carried as
+token claims: the row is already loaded for the idle timeout, so claims would save
+nothing here, and a licence change would take up to a session's 8 hours to apply.
+Claims become worth it when a gateway in front enforces licences without the database.
+
 **Not split yet: notifications.** `notification_adapter.send` only records a
 `notification.sent` event in the outbox; nothing delivers it, because no email
 or SMS provider is chosen. The notices bar (`/api/notices`) is a read of

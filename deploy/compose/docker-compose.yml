@@ -29,8 +29,8 @@ x-app-env: &app-env
   JWT_PRIVATE_KEY_FILE: /run/secrets/jwt_private.pem
   # the host's Ollama (deploy/local_llm.sh) - see README.md, "Local LLM"
   LOCAL_LLM_BASE_URL: http://host.docker.internal:11434/v1
-  # training runs in its own container; the API leaves its routes to it
-  SPLIT_SERVICES: training
+  # these run in their own containers (backend/app/services/); the API leaves their routes to them
+  SPLIT_SERVICES: training,bim,product,metadata
   # every model call goes through the AI gateway, the only container with the model key
   AI_GATEWAY_URL: http://ai-gateway:8000
   AI_GATEWAY_TOKEN: ${AI_GATEWAY_TOKEN:?set AI_GATEWAY_TOKEN in deploy/compose/.env - apply.sh creates it}
@@ -167,6 +167,61 @@ services:
     deploy:
       resources:
         limits: {cpus: "0.25", memory: 256M}
+
+  # BIM bulk loads and the BRT_ID register (backend/app/services/bim.py) - a large load
+  # runs here, never in the API's workers
+  bim:
+    <<: *app
+    image: ${IMAGE_PREFIX:-brt360}-bim:${BRT_VERSION:-local}
+    command: ["gunicorn", "app.services.split_app:app", "-k", "uvicorn.workers.UvicornWorker", "-b", "0.0.0.0:8000",
+              "--timeout", "120", "--access-logfile", "-", "--forwarded-allow-ips", "*"]
+    environment:
+      <<: *app-env
+      BRT_SERVICE: bim
+      WEB_CONCURRENCY: ${BIM_WORKERS:-1}
+      SCHEDULER_MODE: "off"
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+    deploy:
+      resources:
+        limits: {cpus: "1.0", memory: 1G}
+
+  # catalog, Product Modeller, configurator, product configuration (backend/app/services/product.py)
+  product:
+    <<: *app
+    image: ${IMAGE_PREFIX:-brt360}-product:${BRT_VERSION:-local}
+    command: ["gunicorn", "app.services.split_app:app", "-k", "uvicorn.workers.UvicornWorker", "-b", "0.0.0.0:8000",
+              "--timeout", "120", "--access-logfile", "-", "--forwarded-allow-ips", "*"]
+    environment:
+      <<: *app-env
+      BRT_SERVICE: product
+      WEB_CONCURRENCY: ${PRODUCT_WORKERS:-1}
+      SCHEDULER_MODE: "off"
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+    deploy:
+      resources:
+        limits: {cpus: "1.0", memory: 768M}
+
+  # Page Designer, custom records, the generic record APIs (backend/app/services/metadata.py)
+  metadata:
+    <<: *app
+    image: ${IMAGE_PREFIX:-brt360}-metadata:${BRT_VERSION:-local}
+    command: ["gunicorn", "app.services.split_app:app", "-k", "uvicorn.workers.UvicornWorker", "-b", "0.0.0.0:8000",
+              "--timeout", "120", "--access-logfile", "-", "--forwarded-allow-ips", "*"]
+    environment:
+      <<: *app-env
+      BRT_SERVICE: metadata
+      WEB_CONCURRENCY: ${METADATA_WORKERS:-1}
+      SCHEDULER_MODE: "off"
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+    deploy:
+      resources:
+        limits: {cpus: "1.0", memory: 768M}
 
   # the one way out to a language model (backend/app/services/ai_gateway.py): it alone gets
   # OPENAI_API_KEY (from backend/.env); the app containers have it blanked above

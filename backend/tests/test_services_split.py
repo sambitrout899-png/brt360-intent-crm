@@ -1,6 +1,7 @@
 """Phase 2: services in their own containers - the training service
 (app/services/training.py) and the AI gateway (app/services/ai_gateway.py)."""
 
+import importlib
 import json
 import pathlib
 
@@ -12,7 +13,7 @@ from app.config import get_settings
 from app.crm_core import llm
 from app.main import app as main_app
 from app.models.ai_settings import AiSettings
-from app.services import ai_gateway, training, training_app
+from app.services import ai_gateway, split_app, training_app
 
 
 def _paths(app) -> set[str]:
@@ -32,14 +33,35 @@ def _paths(app) -> set[str]:
 # ---------------------------------------------------------------- training
 
 
-def test_training_service_owns_exactly_its_prefixes():
-    """The web container routes these prefixes to the training container, so
-    every route under them must be training's, and training's must all be
-    under them - or a request lands where its route isn't."""
-    under = {p for p in _paths(main_app) if p.startswith(training.PREFIXES)}
-    own = {p for p in _paths(training_app.app) if p not in ("/api/health", "/metrics")
-           and not p.startswith(("/docs", "/openapi", "/redoc"))}
-    assert under == own and len(own) > 50
+SPLIT = list(split_app.SERVICES)
+
+
+def _own(app) -> set[str]:
+    return {p for p in _paths(app) if p not in ("/api/health", "/metrics") and not p.startswith(("/docs", "/openapi", "/redoc"))}
+
+
+def _prefixes(name):
+    return importlib.import_module(f"app.services.{name}").PREFIXES
+
+
+@pytest.mark.parametrize("name", SPLIT)
+def test_each_service_owns_exactly_its_prefixes(name):
+    """The web container routes a service's prefixes to its container, so
+    every route under them must be the service's, and the service's must all
+    be under them - or a request lands where its route isn't."""
+    module = importlib.import_module(f"app.services.{name}")
+    prefixes = module.PREFIXES + getattr(module, "INTERNAL_PREFIXES", ())
+    under = {p for p in _paths(main_app) if p.startswith(prefixes)}
+    own = _own(split_app.create(name))
+    assert under == own and own
+
+
+def test_services_share_no_route():
+    seen: dict[str, str] = {}
+    for name in SPLIT:
+        for path in _own(split_app.create(name)):
+            assert path not in seen, f"{path} is served by both {seen.get(path)} and {name}"
+            seen[path] = name
 
 
 def test_training_service_answers_on_its_own(client):
@@ -49,11 +71,12 @@ def test_training_service_answers_on_its_own(client):
         assert svc.get("/api/crm/leads").status_code == 404  # nothing but training here
 
 
-def test_web_container_sends_training_prefixes_to_training():
+@pytest.mark.parametrize("name", SPLIT)
+def test_web_container_sends_each_prefix_to_its_service(name):
     conf = (pathlib.Path(__file__).resolve().parents[2] / "frontend" / "nginx.conf").read_text(encoding="utf-8")
-    for prefix in training.PREFIXES:
-        location = prefix if prefix.endswith("/") else prefix + "/"
-        assert f"location {location} {{\n        proxy_pass $training;" in conf, prefix
+    assert f"set ${name} http://{name}:8000;" in conf
+    for prefix in _prefixes(name):
+        assert f"location {prefix} {{\n        proxy_pass ${name};" in conf, prefix
 
 
 # ---------------------------------------------------------------- AI gateway

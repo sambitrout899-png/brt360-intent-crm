@@ -51,7 +51,7 @@ MODULES: tuple[Module, ...] = (
     )),
     # Wires everything together - the one place allowed to import it all
     # (app.models gathers every table for the migrations).
-    Module("assembly", ("main", "seed", "scheduler", "models")),
+    Module("assembly", ("main", "seed", "scheduler", "models", "services.split_app", "services.training_app")),
     Module("audit", ("data_intelligence.audit", "crm_core.audit_*", "models.audit_chain")),
     Module("ai", ("crm_core.llm", "crm_core.ai_settings_service", "models.ai_settings", "services.ai_*")),
     Module("notification", (
@@ -70,7 +70,7 @@ MODULES: tuple[Module, ...] = (
         "crm_core.approval_service", "models.pages", "models.custom_*", "models.attributes",
         "models.lifecycle", "models.approval", "experience.routes_pages", "experience.routes_custom_records",
         "experience.routes_records", "experience.routes_admin", "schemas.custom_records", "schemas.admin",
-        "orchestration.actions_pages", "orchestration.actions_lifecycle",
+        "orchestration.actions_pages", "orchestration.actions_lifecycle", "services.metadata",
     ), uses=("identity", "audit", "ai")),
     # Catalog, Product Modeller, configurator, pricing.
     Module("product", (
@@ -78,9 +78,9 @@ MODULES: tuple[Module, ...] = (
         "crm_core.model_lifecycle", "crm_core.instance_service", "models.catalog", "models.product_*",
         "experience.routes_catalog", "experience.routes_product_*", "experience.routes_configurator",
         "schemas.catalog", "orchestration.actions", "orchestration.actions_config",
-        "orchestration.actions_configurator", "integration.tmf620_adapter",
+        "orchestration.actions_configurator", "integration.tmf620_adapter", "services.product",
     ), uses=("metadata", "audit", "ai")),
-    Module("bim", ("crm_core.bim_service", "models.bim", "experience.routes_bim"), uses=("product", "metadata", "ai")),
+    Module("bim", ("crm_core.bim_service", "models.bim", "experience.routes_bim", "services.bim"), uses=("product", "metadata", "ai")),
     Module("training", (
         "crm_core.training_*", "models.training", "experience.routes_training*", "schemas.training", "services.training*",
     ), uses=("identity", "notification", "metadata", "ai")),

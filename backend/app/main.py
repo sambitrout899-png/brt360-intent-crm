@@ -27,15 +27,11 @@ from app.experience import (
     routes_agent,
     routes_assistant,
     routes_auth,
-    routes_bim,
     routes_builder,
     routes_c360,
-    routes_catalog,
     routes_comms,
-    routes_configurator,
     routes_conflicts,
     routes_crm,
-    routes_custom_records,
     routes_field_service,
     routes_function_map,
     routes_intent,
@@ -45,11 +41,7 @@ from app.experience import (
     routes_org,
     routes_fulfillment,
     routes_inventory,
-    routes_pages,
     routes_process,
-    routes_product_config,
-    routes_product_model,
-    routes_records,
     routes_studio,
     routes_tenants,
 )
@@ -68,31 +60,16 @@ service.include(
     routes_auth.router,
     routes_intent.router,
     routes_intent_admin.router,
-    routes_catalog.router,
     routes_crm.router,
     routes_admin.router,
     routes_tenants.router,
-    routes_records.router,
     routes_studio.router,
-    routes_custom_records.admin_router,
-    routes_custom_records.router,
     routes_org.router,
     routes_org.access_router,
     routes_c360.router,
     routes_c360.admin_router,
     routes_process.admin_router,
     routes_process.router,
-    routes_product_config.router,
-    routes_product_config.admin_router,
-    routes_configurator.router,
-    routes_configurator.tmf_router,
-    routes_configurator.admin_router,
-    routes_configurator.classes_router,
-    routes_product_model.router,
-    routes_product_model.admin_router,
-    routes_pages.router,
-    routes_pages.admin_router,
-    routes_bim.router,
     routes_field_service.router,
     routes_order_mgmt.router,
     routes_order_mgmt.admin_router,
@@ -121,8 +98,12 @@ from app.experience import routes_modules  # noqa: E402
 
 service.include(app, routes_modules.router)
 
-# Training runs in its own container when SPLIT_SERVICES names it (app/services/training.py).
-if not service.split("training"):
-    from app.services import training as _training
+# Services that run in their own container when SPLIT_SERVICES names them
+# (app/services/<name>.py); otherwise this app serves their routes too.
+import importlib  # noqa: E402
 
-    service.include(app, *_training.routers())
+from app.services.split_app import SERVICES as _SPLITTABLE  # noqa: E402
+
+for _name in _SPLITTABLE:
+    if not service.split(_name):
+        service.include(app, *importlib.import_module(f"app.services.{_name}").routers())
