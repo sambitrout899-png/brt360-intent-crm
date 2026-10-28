@@ -864,19 +864,25 @@ def reset_user_mfa(user_id: int, db: Session = Depends(get_db), tenant_id: int =
 @router.get("/security", response_model=SecurityPolicy)
 def get_security(db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> SecurityPolicy:
     tenant = db.get(Tenant, tenant_id)
-    return SecurityPolicy(mfa_required=bool(tenant and tenant.mfa_required))
+    return SecurityPolicy(mfa_required=bool(tenant and tenant.mfa_required),
+                          idle_timeout_minutes=tenant.idle_timeout_minutes if tenant else None)
 
 
 @router.put("/security", response_model=SecurityPolicy)
 def set_security(payload: SecurityPolicy, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id),
                  user: User = Depends(get_current_user)) -> SecurityPolicy:
-    """Require two-step sign-in of everyone in the company. Turning it on asks
-    the admin to have it on first, so they can't lock themselves out of it."""
+    """Require two-step sign-in of everyone in the company (turning it on asks
+    the admin to have it on first, so they can't lock themselves out of it),
+    and the idle timeout. A field left out keeps its value."""
     tenant = db.get(Tenant, tenant_id)
     if tenant is None:
         raise HTTPException(404, "Tenant not found")
-    if payload.mfa_required and not user.mfa_enabled:
+    if payload.mfa_required and not tenant.mfa_required and not user.mfa_enabled:
         raise HTTPException(400, "Turn on two-step sign-in for your own account first (Account security)")
+    if payload.idle_timeout_minutes is not None and 0 < payload.idle_timeout_minutes < 5:
+        raise HTTPException(400, "The idle timeout must be at least 5 minutes (or off)")
     tenant.mfa_required = payload.mfa_required
+    if "idle_timeout_minutes" in payload.model_fields_set:
+        tenant.idle_timeout_minutes = payload.idle_timeout_minutes or None
     db.commit()
-    return SecurityPolicy(mfa_required=tenant.mfa_required)
+    return SecurityPolicy(mfa_required=tenant.mfa_required, idle_timeout_minutes=tenant.idle_timeout_minutes)

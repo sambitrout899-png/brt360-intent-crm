@@ -8,7 +8,8 @@ const INPUT = "mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-3 
 // password -> (a code from the authenticator app | setting it up, then the recovery codes) -> signed in
 type Stage = { kind: "password" } | { kind: "code"; stepToken: string } | { kind: "setup"; stepToken: string } | { kind: "codes"; codes: string[] };
 
-export default function LoginPage({ onLoggedIn }: { onLoggedIn: () => void }) {
+/** notice: why the last session ended, when it wasn't by signing out (the idle timeout). */
+export default function LoginPage({ onLoggedIn, notice }: { onLoggedIn: () => void; notice?: string | null }) {
   const [stage, setStage] = useState<Stage>({ kind: "password" });
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -73,6 +74,9 @@ export default function LoginPage({ onLoggedIn }: { onLoggedIn: () => void }) {
           <p className="mt-1 text-sm text-slate-400">{subtitle}</p>
         </div>
 
+        {stage.kind === "password" && notice && (
+          <p className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">{notice}</p>
+        )}
         {stage.kind === "password" && (
           <form onSubmit={submitPassword} className="space-y-5">
             <label className="block text-xs text-slate-400">

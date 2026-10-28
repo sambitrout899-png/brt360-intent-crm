@@ -408,6 +408,10 @@ deploy. To stop using the gateway, remove `AI_GATEWAY_URL` and
   does so at their next sign-in. Someone who lost their phone and their recovery
   codes gets **Reset two-step** from an admin. The secrets are stored encrypted
   with a key derived from `BRT_ID_SECRET`, which must therefore never change.
+- **Idle timeout:** Admin → Users → "Sign out after no activity for" (off by
+  default). The server refuses a session nobody has used for that long, with
+  two minutes' grace. The screens' own polling doesn't count as activity. A
+  minute before the limit, the browser offers "Stay signed in".
 - A platform admin (no tenant) who is locked out, or who lost their phone:
   ```bash
   docker compose exec -T api python -c "

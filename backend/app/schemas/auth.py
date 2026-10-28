@@ -56,6 +56,8 @@ class MfaDisableRequest(BaseModel):
 
 class SecurityPolicy(BaseModel):
     mfa_required: bool
+    # minutes without activity before sign-out; None or 0 = off (max 24 hours)
+    idle_timeout_minutes: int | None = Field(default=None, ge=0, le=1440)
 
 
 class CurrentUserOut(BaseModel):
@@ -64,6 +66,7 @@ class CurrentUserOut(BaseModel):
     email: str
     name: str
     role: str
+    idle_timeout_minutes: int | None = None  # the company's; the screens warn a minute before
 
     model_config = {"from_attributes": True}
 

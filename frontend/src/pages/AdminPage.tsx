@@ -44,6 +44,7 @@ import {
   setSecurityPolicy,
   triggerTestRun,
   unlockUser,
+  type SecurityPolicy,
 } from "../api/client";
 import { problem } from "../api/customRecords";
 import { ATTRIBUTE_DATA_TYPES, CONSTRAINT_OPERATORS, CONSTRAINT_RULE_TYPES, ORCHESTRATION_MODES, SLA_BREACH_ACTIONS, USER_ROLES } from "../api/types";
@@ -1051,35 +1052,52 @@ function UsersSection() {
   );
 }
 
-/** Company-wide: everyone signs in with a code from an authenticator app. */
+const IDLE_CHOICES: [number, string][] = [[0, "Off"], [15, "15 minutes"], [30, "30 minutes"], [60, "1 hour"], [120, "2 hours"], [240, "4 hours"]];
+
+/** Company-wide sign-in rules: two-step sign-in for everyone, and the idle timeout. */
 function SignInPolicy({ onError }: { onError: (message: string | null) => void }) {
-  const [required, setRequired] = useState<boolean | null>(null);
+  const [policy, setPolicy] = useState<SecurityPolicy | null>(null);
 
   useEffect(() => {
-    getSecurityPolicy().then((p) => setRequired(p.mfa_required)).catch(() => setRequired(null));
+    getSecurityPolicy().then(setPolicy).catch(() => setPolicy(null));
   }, []);
 
-  async function toggle(next: boolean) {
+  async function save(change: Partial<SecurityPolicy>) {
+    if (!policy) return;
     onError(null);
     try {
-      setRequired((await setSecurityPolicy(next)).mfa_required);
+      setPolicy(await setSecurityPolicy({ mfa_required: policy.mfa_required, ...change }));
     } catch (e) {
       onError(problem(e, "Couldn't change the sign-in policy."));
     }
   }
 
-  if (required === null) return null;
+  if (policy === null) return null;
+  const idle = policy.idle_timeout_minutes ?? 0;
   return (
-    <label className="flex items-start gap-3 rounded-xl border border-slate-700 bg-slate-900/60 p-4 text-sm">
-      <input type="checkbox" checked={required} onChange={(e) => toggle(e.target.checked)} className="mt-1" />
-      <span>
-        <span className="font-semibold text-slate-200">Require two-step sign-in for everyone</span>
-        <span className="block text-xs text-slate-400">
-          Everyone signs in with their password and a code from an authenticator app; whoever hasn't set it up does so at
-          their next sign-in. Turn it on for your own account first (click your name, top right).
+    <div className="space-y-4 rounded-xl border border-slate-700 bg-slate-900/60 p-4 text-sm">
+      <label className="flex items-start gap-3">
+        <input type="checkbox" checked={policy.mfa_required} onChange={(e) => save({ mfa_required: e.target.checked })} className="mt-1" />
+        <span>
+          <span className="font-semibold text-slate-200">Require two-step sign-in for everyone</span>
+          <span className="block text-xs text-slate-400">
+            Everyone signs in with their password and a code from an authenticator app; whoever hasn't set it up does so at
+            their next sign-in. Turn it on for your own account first (click your name, top right).
+          </span>
         </span>
-      </span>
-    </label>
+      </label>
+      <label className="flex flex-wrap items-center gap-3">
+        <span className="font-semibold text-slate-200">Sign out after no activity for</span>
+        <select value={idle} onChange={(e) => save({ idle_timeout_minutes: Number(e.target.value) })}
+          className="rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-sm text-slate-200">
+          {IDLE_CHOICES.map(([minutes, label]) => <option key={minutes} value={minutes}>{label}</option>)}
+          {!IDLE_CHOICES.some(([m]) => m === idle) && <option value={idle}>{idle} minutes</option>}
+        </select>
+        <span className="block w-full text-xs text-slate-400">
+          A minute before, the screen offers to keep you signed in. Off: sessions end only after 8 hours.
+        </span>
+      </label>
+    </div>
   );
 }
 

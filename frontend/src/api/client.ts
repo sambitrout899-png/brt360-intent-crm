@@ -318,12 +318,18 @@ export function resetUserMfa(id: number): Promise<User> {
   return request<User>(`/api/admin/users/${id}/reset-mfa`, { method: "POST" });
 }
 
-export function getSecurityPolicy(): Promise<{ mfa_required: boolean }> {
-  return request<{ mfa_required: boolean }>("/api/admin/security");
+export interface SecurityPolicy {
+  mfa_required: boolean;
+  idle_timeout_minutes: number | null;
 }
 
-export function setSecurityPolicy(mfaRequired: boolean): Promise<{ mfa_required: boolean }> {
-  return request<{ mfa_required: boolean }>("/api/admin/security", { method: "PUT", body: JSON.stringify({ mfa_required: mfaRequired }) });
+export function getSecurityPolicy(): Promise<SecurityPolicy> {
+  return request<SecurityPolicy>("/api/admin/security");
+}
+
+/** Only the fields given change. */
+export function setSecurityPolicy(policy: Partial<SecurityPolicy> & { mfa_required: boolean }): Promise<SecurityPolicy> {
+  return request<SecurityPolicy>("/api/admin/security", { method: "PUT", body: JSON.stringify(policy) });
 }
 
 export function listTenants(): Promise<Tenant[]> {
@@ -970,8 +976,11 @@ export function recordButtons(refs: string[]): Promise<Record<string, RecordButt
   return request<Record<string, RecordButton[]>>("/api/records/actions", { method: "POST", body: JSON.stringify({ refs: refs.slice(0, 500) }) });
 }
 
+// The screens' own polling: doesn't count as the user being active (the idle timeout, app/auth.py).
+const BACKGROUND = { headers: { "X-BRT-Background": "1" } };
+
 export function myNotices(place: string, partyId?: number): Promise<Notices> {
-  return request<Notices>(`/api/notices?place=${encodeURIComponent(place)}${partyId ? `&party_id=${partyId}` : ""}`);
+  return request<Notices>(`/api/notices?place=${encodeURIComponent(place)}${partyId ? `&party_id=${partyId}` : ""}`, BACKGROUND);
 }
 
 /** Message boxes a flow sent me (Flow Studio: Notify, channel "popup") that I haven't dismissed. */
@@ -986,7 +995,7 @@ export interface PopupMessage {
 }
 
 export function myPopups(): Promise<PopupMessage[]> {
-  return request<PopupMessage[]>("/api/notices/popups");
+  return request<PopupMessage[]>("/api/notices/popups", BACKGROUND);
 }
 
 export function popupsSeen(upTo: number): Promise<void> {

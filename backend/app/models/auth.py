@@ -52,3 +52,5 @@ class User(Base):
     mfa_secret_enc: Mapped[str | None] = mapped_column(String(300), nullable=True)
     mfa_last_step: Mapped[int | None] = mapped_column(Integer, nullable=True)  # a code works once
     mfa_recovery_hashes: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON list of SHA-256
+    # Last signed-in request (to the minute) - what the tenant's idle timeout is measured from.
+    last_seen_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)

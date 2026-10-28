@@ -62,10 +62,12 @@ def failed(user: User) -> None:
 def succeeded(user: User) -> None:
     user.failed_logins = 0
     user.locked_until = None
+    user.last_seen_at = utcnow()  # a fresh sign-in starts the idle clock again
 
 
 def unlock(user: User) -> None:
-    succeeded(user)
+    user.failed_logins = 0
+    user.locked_until = None
 
 
 # ---------------------------------------------------------------- TOTP

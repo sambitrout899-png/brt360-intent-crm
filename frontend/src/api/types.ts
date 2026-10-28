@@ -9,6 +9,7 @@ export interface CurrentUser {
   email: string;
   name: string;
   role: "platform_admin" | "admin" | "agent" | "viewer";
+  idle_timeout_minutes?: number | null; // the company's: signed out after this long without activity
 }
 
 export interface User {

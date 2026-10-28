@@ -154,8 +154,8 @@ def test_a_company_can_require_two_step_sign_in(client):
     assert client.put("/api/admin/security", headers=boss, json={"mfa_required": True}).status_code == 400
     secret = client.post("/api/auth/mfa/setup", headers=boss).json()["secret"]
     client.post("/api/auth/mfa/enable", headers=boss, json={"code": _code(secret)})
-    assert client.put("/api/admin/security", headers=boss, json={"mfa_required": True}).json() == {"mfa_required": True}
-    assert client.get("/api/admin/security", headers=boss).json() == {"mfa_required": True}
+    assert client.put("/api/admin/security", headers=boss, json={"mfa_required": True}).json()["mfa_required"] is True
+    assert client.get("/api/admin/security", headers=boss).json()["mfa_required"] is True
 
     first = _login(client, "agent@example.com").json()
     assert first["access_token"] is None and first["mfa_setup_required"]
@@ -184,3 +184,49 @@ def test_turning_it_off_needs_password_and_code_and_an_admin_can_reset_it(client
     reset = client.post(f"/api/admin/users/{user_id}/reset-mfa", headers=_admin(client)).json()  # lost phone and codes
     assert reset["mfa_enabled"] is False
     assert _login(client).json()["access_token"]
+
+
+def test_idle_timeout_ends_a_session_left_alone(client):
+    import datetime as dt
+
+    from app.timeutils import utcnow
+
+    user_id = _user(client)
+    me = _session(client, user_id)
+    admin = _admin(client)
+    assert client.put("/api/admin/security", headers=admin, json={"mfa_required": False, "idle_timeout_minutes": 3}).status_code == 400
+    policy = client.put("/api/admin/security", headers=admin, json={"mfa_required": False, "idle_timeout_minutes": 30}).json()
+    assert policy == {"mfa_required": False, "idle_timeout_minutes": 30}
+    assert client.get("/api/auth/me", headers=me).json()["idle_timeout_minutes"] == 30  # the screens warn from this
+
+    def seen(minutes_ago):
+        db = client.TestSessionLocal()
+        db.get(User, user_id).last_seen_at = utcnow() - dt.timedelta(minutes=minutes_ago)
+        db.commit()
+        db.close()
+
+    def last_seen():
+        db = client.TestSessionLocal()
+        value = db.get(User, user_id).last_seen_at
+        db.close()
+        return value
+
+    seen(10)
+    background = {**me, "X-BRT-Background": "1"}
+    assert client.get("/api/auth/me", headers=background).status_code == 200
+    assert utcnow() - last_seen() > dt.timedelta(minutes=9)  # the screens' polling doesn't keep a session alive
+    assert client.get("/api/auth/me", headers=me).status_code == 200
+    assert utcnow() - last_seen() < dt.timedelta(minutes=1)  # what the user does does
+
+    seen(31)
+    assert client.get("/api/auth/me", headers=me).status_code == 200  # within the 2-minute grace
+    seen(33)
+    resp = client.get("/api/auth/me", headers=me)
+    assert resp.status_code == 401 and resp.json()["detail"] == "Signed out after 30 minutes without activity"
+    assert _login(client).json()["access_token"]  # signing in again starts the clock afresh
+    assert client.get("/api/auth/me", headers=me).status_code == 200
+
+    off = client.put("/api/admin/security", headers=admin, json={"mfa_required": False, "idle_timeout_minutes": 0}).json()
+    assert off["idle_timeout_minutes"] is None
+    seen(600)
+    assert client.get("/api/auth/me", headers=me).status_code == 200  # off: only the token's own expiry counts

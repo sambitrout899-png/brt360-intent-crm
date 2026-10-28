@@ -132,9 +132,32 @@ def get_current_user(
     user = db.get(User, int(payload["sub"]))
     if user is None or not user.is_active:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "User not found or deactivated")
+    _idle_check(db, user, background=request.headers.get("x-brt-background") == "1")
     # the rest of this request sees only this user's tenant, in the database too (app/rls.py)
     rls.scope(db, user.tenant_id)
     return user
+
+
+SEEN_EVERY = dt.timedelta(minutes=1)
+# last_seen_at moves once a minute and the screens report activity once a minute, so it
+# can trail the user by up to two: the browser signs out on time, the server just after.
+IDLE_GRACE = dt.timedelta(minutes=2)
+
+
+def _idle_check(db: Session, user: User, background: bool) -> None:
+    """The tenant's idle timeout: no signed-in request for that long ends the
+    session. last_seen_at moves at most once a minute, and not for the
+    screens' own polling (X-BRT-Background: 1) - only for what the user does."""
+    from app.models.tenant import Tenant
+
+    now = utcnow()
+    tenant = db.get(Tenant, user.tenant_id) if user.tenant_id is not None else None
+    limit = tenant.idle_timeout_minutes if tenant is not None else None
+    if limit and user.last_seen_at is not None and now - user.last_seen_at > dt.timedelta(minutes=limit) + IDLE_GRACE:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, f"Signed out after {limit} minutes without activity")
+    if not background and (user.last_seen_at is None or now - user.last_seen_at >= SEEN_EVERY):
+        user.last_seen_at = now
+        db.commit()
 
 
 def user_for_step(token: str, purpose: str, db: Session) -> User:

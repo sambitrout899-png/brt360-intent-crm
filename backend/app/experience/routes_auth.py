@@ -183,8 +183,10 @@ def jwks() -> dict:
 
 
 @router.get("/me", response_model=CurrentUserOut)
-def me(user: User = Depends(get_current_user)) -> User:
-    return user
+def me(user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> CurrentUserOut:
+    tenant = db.get(Tenant, user.tenant_id) if user.tenant_id else None
+    return CurrentUserOut(id=user.id, tenant_id=user.tenant_id, email=user.email, name=user.name, role=user.role.value,
+                          idle_timeout_minutes=(tenant.idle_timeout_minutes or None) if tenant else None)
 
 
 @router.get("/branding", response_model=BrandingOut)

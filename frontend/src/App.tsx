@@ -11,6 +11,7 @@ import PaneKit from "./components/layout/PaneKit";
 import RecordPanel from "./components/RecordPanel";
 import AboutRecordModal from "./components/AboutRecordModal";
 import AccountSecurity from "./components/shell/AccountSecurity";
+import IdleWatch from "./components/shell/IdleWatch";
 import { BrtEmblem, BrtFooter, PoweredByBrt } from "./components/shell/BrtBrand";
 import NavIcon from "./components/shell/NavIcon";
 import PopupMessages from "./components/shell/PopupMessages";
@@ -472,6 +473,12 @@ function CrmApp({ user, onLoggedOut }: { user: CurrentUser; onLoggedOut: () => v
 
 export default function App() {
   const [user, setUser] = useState<CurrentUser | null | undefined>(undefined); // undefined = still checking
+  const [signedOutNote, setSignedOutNote] = useState<string | null>(null); // why the last session ended, if not by choice
+
+  const signedOut = useCallback((reason?: string) => {
+    setSignedOutNote(reason ?? null);
+    setUser(null);
+  }, []);
 
   function refreshSession() {
     if (!getAccessToken()) {
@@ -496,12 +503,18 @@ export default function App() {
   }
 
   if (user === null) {
-    return <LoginPage onLoggedIn={refreshSession} />;
+    return <LoginPage notice={signedOutNote} onLoggedIn={() => { setSignedOutNote(null); refreshSession(); }} />;
   }
 
+  const idleWatch = user.idle_timeout_minutes ? <IdleWatch minutes={user.idle_timeout_minutes} onSignedOut={signedOut} /> : null;
   if (user.role === "platform_admin") {
     return <PlatformAdminPage onLoggedOut={refreshSession} />;
   }
 
-  return <CrmApp user={user} onLoggedOut={refreshSession} />;
+  return (
+    <>
+      {idleWatch}
+      <CrmApp user={user} onLoggedOut={refreshSession} />
+    </>
+  );
 }
