@@ -5,6 +5,9 @@ import os
 # suite that creates several users per test purely as fixtures, not as
 # anything a test is actually verifying. Production must never set this.
 os.environ["BCRYPT_ROUNDS"] = "4"
+# Every test client signs in from the same address; the per-IP sign-in limit
+# would trip on the suite, not on anything under test (test_login_security turns it on).
+os.environ["LOGIN_IP_PER_MINUTE"] = "0"
 
 import pytest
 from fastapi import Depends, Header

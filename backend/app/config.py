@@ -80,6 +80,13 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_expiry_minutes: int = 480
 
+    # Sign-in lockout (app/crm_core/login_security.py): this many wrong
+    # passwords or codes in a row lock the account for this many minutes.
+    login_max_failures: int = 5
+    login_lock_minutes: int = 15
+    # Sign-in attempts per client IP per minute, whatever the account.
+    login_ip_per_minute: int = 20
+
     # RS256 signing (app/auth.py). With a private key file set, new tokens are
     # signed with it (header kid = the key's fingerprint) and other services can
     # verify them from /api/auth/jwks. Rotation: put the old key's PUBLIC pem in

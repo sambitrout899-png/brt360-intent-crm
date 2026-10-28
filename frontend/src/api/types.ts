@@ -18,6 +18,8 @@ export interface User {
   role: string;
   is_active: boolean;
   created_at: string;
+  mfa_enabled: boolean;
+  locked_until: string | null;
 }
 
 export interface Tenant {

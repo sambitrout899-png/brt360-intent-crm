@@ -197,18 +197,83 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-export async function login(email: string, password: string): Promise<void> {
-  const res = await fetch(`${API_BASE}/api/auth/login`, {
+/** What sign-in needs next: nothing (signed in), a code from the
+ * authenticator app, or setting two-step sign-in up first (the company
+ * requires it). stepToken is good for that one step, for a few minutes. */
+export type LoginStep = { kind: "done" } | { kind: "code"; stepToken: string } | { kind: "setup"; stepToken: string };
+
+async function signInCall(path: string, payload: unknown, token?: string): Promise<Record<string, unknown>> {
+  const res = await fetch(`${API_BASE}${path}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email, password }),
+    headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    body: JSON.stringify(payload),
   });
+  const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
   if (!res.ok) {
-    throw new Error("Incorrect email or password.");
+    const detail = typeof body.detail === "string" ? body.detail : "";
+    throw new Error(res.status === 401 && path === "/api/auth/login" ? "Incorrect email or password." : detail || "Sign-in failed.");
   }
-  const body = (await res.json()) as { access_token: string };
-  setAccessToken(body.access_token);
+  return body;
+}
+
+function signedIn(accessToken: string): void {
+  setAccessToken(accessToken);
   setWorkContext({ positionId: null, scope: null }); // every sign-in opens in the primary position
+}
+
+export async function login(email: string, password: string): Promise<LoginStep> {
+  const body = await signInCall("/api/auth/login", { email, password });
+  if (typeof body.access_token === "string") {
+    signedIn(body.access_token);
+    return { kind: "done" };
+  }
+  return { kind: body.mfa_setup_required ? "setup" : "code", stepToken: String(body.step_token) };
+}
+
+export async function loginWithCode(stepToken: string, code: string): Promise<void> {
+  const body = await signInCall("/api/auth/login/mfa", { step_token: stepToken, code });
+  signedIn(String(body.access_token));
+}
+
+export interface MfaStatus {
+  enabled: boolean;
+  required: boolean;
+  recovery_codes_left: number;
+}
+
+export interface MfaSetup {
+  secret: string;
+  otpauth_uri: string;
+  qr_data_url: string;
+}
+
+export function mfaStatus(): Promise<MfaStatus> {
+  return request<MfaStatus>("/api/auth/mfa");
+}
+
+/** stepToken: setting it up during sign-in; without it, for the signed-in user. */
+export async function mfaSetup(stepToken?: string): Promise<MfaSetup> {
+  if (stepToken) return (await signInCall("/api/auth/mfa/setup", {}, stepToken)) as unknown as MfaSetup;
+  return request<MfaSetup>("/api/auth/mfa/setup", { method: "POST" });
+}
+
+/** Confirms the first code; returns the recovery codes (shown once). During
+ * sign-in it also completes the sign-in. */
+export async function mfaEnable(code: string, stepToken?: string): Promise<string[]> {
+  if (stepToken) {
+    const body = await signInCall("/api/auth/mfa/enable", { code }, stepToken);
+    signedIn(String(body.access_token));
+    return body.recovery_codes as string[];
+  }
+  return (await request<{ recovery_codes: string[] }>("/api/auth/mfa/enable", { method: "POST", body: JSON.stringify({ code }) })).recovery_codes;
+}
+
+export function mfaDisable(password: string, code: string): Promise<void> {
+  return request<void>("/api/auth/mfa/disable", { method: "POST", body: JSON.stringify({ password, code }) });
+}
+
+export async function mfaNewRecoveryCodes(code: string): Promise<string[]> {
+  return (await request<{ recovery_codes: string[] }>("/api/auth/mfa/recovery-codes", { method: "POST", body: JSON.stringify({ code }) })).recovery_codes;
 }
 
 export function logout(): void {
@@ -243,6 +308,22 @@ export function createUser(payload: { email: string; password: string; name: str
 
 export function deactivateUser(id: number): Promise<User> {
   return request<User>(`/api/admin/users/${id}/deactivate`, { method: "PATCH" });
+}
+
+export function unlockUser(id: number): Promise<User> {
+  return request<User>(`/api/admin/users/${id}/unlock`, { method: "POST" });
+}
+
+export function resetUserMfa(id: number): Promise<User> {
+  return request<User>(`/api/admin/users/${id}/reset-mfa`, { method: "POST" });
+}
+
+export function getSecurityPolicy(): Promise<{ mfa_required: boolean }> {
+  return request<{ mfa_required: boolean }>("/api/admin/security");
+}
+
+export function setSecurityPolicy(mfaRequired: boolean): Promise<{ mfa_required: boolean }> {
+  return request<{ mfa_required: boolean }>("/api/admin/security", { method: "PUT", body: JSON.stringify({ mfa_required: mfaRequired }) });
 }
 
 export function listTenants(): Promise<Tenant[]> {

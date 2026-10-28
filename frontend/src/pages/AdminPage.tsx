@@ -23,6 +23,7 @@ import {
   deleteOrchestrationPolicy,
   deletePonrPolicy,
   deleteSlaPolicy,
+  getSecurityPolicy,
   getTestRun,
   intentCatalog,
   listAttributeConstraintRules,
@@ -38,9 +39,13 @@ import {
   listTestRuns,
   listUsers,
   processDueSlaClocks,
+  resetUserMfa,
   setAttributeValue,
+  setSecurityPolicy,
   triggerTestRun,
+  unlockUser,
 } from "../api/client";
+import { problem } from "../api/customRecords";
 import { ATTRIBUTE_DATA_TYPES, CONSTRAINT_OPERATORS, CONSTRAINT_RULE_TYPES, ORCHESTRATION_MODES, SLA_BREACH_ACTIONS, USER_ROLES } from "../api/types";
 import type {
   AttributeConstraintRule,
@@ -962,6 +967,18 @@ function UsersSection() {
     load();
   }
 
+  async function act(run: () => Promise<unknown>) {
+    setError(null);
+    try {
+      await run();
+      load();
+    } catch (e) {
+      setError(problem(e, "That didn't work."));
+    }
+  }
+
+  const locked = (u: User) => !!u.locked_until && new Date(u.locked_until.endsWith("Z") ? u.locked_until : `${u.locked_until}Z`) > new Date();
+
   return (
     <div className="space-y-6">
       <p className="text-sm text-slate-400">
@@ -971,17 +988,34 @@ function UsersSection() {
         is read-only everywhere.
       </p>
 
+      <SignInPolicy onError={setError} />
+
       <div className="space-y-2">
         {users.map((u) => (
           <div key={u.id} className={`flex flex-wrap items-center gap-3 rounded-lg border px-4 py-3 text-sm ${u.is_active ? "border-slate-700 bg-slate-900/60" : "border-slate-800 bg-slate-950/60 opacity-60"}`}>
             <span className="font-semibold text-slate-200">{u.name}</span>
             <span className="font-mono text-xs text-slate-500">{u.email}</span>
             <span className="rounded-md bg-slate-800 px-2 py-0.5 text-xs text-slate-300">{u.role}</span>
+            {u.mfa_enabled && <span className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-xs text-emerald-400">two-step</span>}
+            {locked(u) && <span className="rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-xs text-amber-400">locked</span>}
             {!u.is_active && <span className="rounded-md border border-slate-700 px-2 py-0.5 text-xs text-slate-500">deactivated</span>}
             {u.is_active && (
-              <button onClick={() => deactivate(u.id)} className="ml-auto rounded-md border border-slate-700 px-2.5 py-1 text-xs font-bold text-slate-300 hover:border-red-500 hover:text-red-400">
-                Deactivate
-              </button>
+              <span className="ml-auto flex gap-2">
+                {locked(u) && (
+                  <button onClick={() => act(() => unlockUser(u.id))} className="rounded-md border border-slate-700 px-2.5 py-1 text-xs font-bold text-slate-300 hover:border-sky-500 hover:text-sky-300">
+                    Unlock
+                  </button>
+                )}
+                {u.mfa_enabled && (
+                  <button onClick={() => act(() => resetUserMfa(u.id))} title="For a user who lost their phone and recovery codes: they set two-step sign-in up again"
+                    className="rounded-md border border-slate-700 px-2.5 py-1 text-xs font-bold text-slate-300 hover:border-amber-500 hover:text-amber-300">
+                    Reset two-step
+                  </button>
+                )}
+                <button onClick={() => deactivate(u.id)} className="rounded-md border border-slate-700 px-2.5 py-1 text-xs font-bold text-slate-300 hover:border-red-500 hover:text-red-400">
+                  Deactivate
+                </button>
+              </span>
             )}
           </div>
         ))}
@@ -1014,6 +1048,38 @@ function UsersSection() {
 
       {error && <p className="text-xs text-red-400">{error}</p>}
     </div>
+  );
+}
+
+/** Company-wide: everyone signs in with a code from an authenticator app. */
+function SignInPolicy({ onError }: { onError: (message: string | null) => void }) {
+  const [required, setRequired] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    getSecurityPolicy().then((p) => setRequired(p.mfa_required)).catch(() => setRequired(null));
+  }, []);
+
+  async function toggle(next: boolean) {
+    onError(null);
+    try {
+      setRequired((await setSecurityPolicy(next)).mfa_required);
+    } catch (e) {
+      onError(problem(e, "Couldn't change the sign-in policy."));
+    }
+  }
+
+  if (required === null) return null;
+  return (
+    <label className="flex items-start gap-3 rounded-xl border border-slate-700 bg-slate-900/60 p-4 text-sm">
+      <input type="checkbox" checked={required} onChange={(e) => toggle(e.target.checked)} className="mt-1" />
+      <span>
+        <span className="font-semibold text-slate-200">Require two-step sign-in for everyone</span>
+        <span className="block text-xs text-slate-400">
+          Everyone signs in with their password and a code from an authenticator app; whoever hasn't set it up does so at
+          their next sign-in. Turn it on for your own account first (click your name, top right).
+        </span>
+      </span>
+    </label>
   );
 }
 

@@ -58,7 +58,7 @@ MODULES: tuple[Module, ...] = (
         "crm_core.notice_service", "integration.notification_adapter", "experience.routes_notices",
     ), uses=("audit", "identity")),
     Module("identity", (
-        "access", "crm_core.identity_service", "crm_core.access_service", "crm_core.org_policy",
+        "access", "crm_core.identity_service", "crm_core.login_*", "crm_core.access_service", "crm_core.org_policy",
         "models.identity", "models.org", "experience.routes_auth", "experience.routes_org",
         "experience.routes_tenants", "schemas.auth", "schemas.org", "orchestration.actions_identity",
     ), uses=("audit",)),

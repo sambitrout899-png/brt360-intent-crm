@@ -180,7 +180,7 @@ def test_change_password_requires_correct_current_password(client):
             json={"current_password": "not-the-right-one", "new_password": "new-password-123"},
             headers=auth_header,
         )
-        assert wrong_resp.status_code == 401
+        assert wrong_resp.status_code == 400  # not 401: that would read as "signed out"
 
         ok_resp = client.post(
             "/api/auth/change-password",

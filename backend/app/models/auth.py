@@ -14,7 +14,7 @@ from __future__ import annotations
 import datetime as dt
 import enum
 
-from sqlalchemy import Boolean, Enum, ForeignKey, Integer, String
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
@@ -40,3 +40,15 @@ class User(Base):
     role: Mapped[UserRole] = mapped_column(Enum(UserRole))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[dt.datetime] = mapped_column(default=utcnow)
+
+    # Sign-in security (app/crm_core/login_security.py).
+    # Lockout: wrong passwords or codes in a row; at the limit the account
+    # is locked until locked_until, and an admin can unlock it sooner.
+    failed_logins: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    locked_until: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    # Two-step sign-in with an authenticator app (TOTP). The secret is
+    # encrypted; it is set before mfa_enabled while the user is enrolling.
+    mfa_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    mfa_secret_enc: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    mfa_last_step: Mapped[int | None] = mapped_column(Integer, nullable=True)  # a code works once
+    mfa_recovery_hashes: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON list of SHA-256

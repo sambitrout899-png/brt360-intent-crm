@@ -3,7 +3,7 @@ from __future__ import annotations
 import datetime as dt
 import enum
 
-from sqlalchemy import Enum, String, Text, JSON
+from sqlalchemy import Boolean, Enum, String, Text, JSON
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
@@ -45,3 +45,6 @@ class Tenant(Base):
     created_at: Mapped[dt.datetime] = mapped_column(default=utcnow)
     # NULL preserves pre-licensing installations; [] explicitly disables all modules.
     licensed_modules: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    # Every user must sign in with an authenticator code; one who has none
+    # sets it up at their next sign-in (app/crm_core/login_security.py).
+    mfa_required: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")

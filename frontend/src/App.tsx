@@ -10,6 +10,7 @@ import { ApprovalBell, LoginApprovals, NoticeTicker } from "./components/NoticeB
 import PaneKit from "./components/layout/PaneKit";
 import RecordPanel from "./components/RecordPanel";
 import AboutRecordModal from "./components/AboutRecordModal";
+import AccountSecurity from "./components/shell/AccountSecurity";
 import { BrtEmblem, BrtFooter, PoweredByBrt } from "./components/shell/BrtBrand";
 import NavIcon from "./components/shell/NavIcon";
 import PopupMessages from "./components/shell/PopupMessages";
@@ -75,6 +76,7 @@ function CrmApp({ user, onLoggedOut }: { user: CurrentUser; onLoggedOut: () => v
   const [tab, setTab] = useState<Tab>("dashboard");
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const [navOpen, setNavOpen] = useState(false); // the menu as an overlay on small screens
+  const [securityOpen, setSecurityOpen] = useState(false); // Account security: password and two-step sign-in
   const [drawer, setDrawer] = useState<{
     open: boolean;
     text: string;
@@ -351,7 +353,8 @@ function CrmApp({ user, onLoggedOut }: { user: CurrentUser; onLoggedOut: () => v
                 </select>
               )}
               <span className="mx-1 hidden h-8 w-px bg-slate-800 sm:block" />
-              <span className="flex items-center gap-2.5" title={user.name}>
+              <button type="button" onClick={() => setSecurityOpen(true)} className="flex items-center gap-2.5 rounded-lg text-left hover:opacity-90"
+                title={`${user.name} - account security`} aria-label="Account security">
                 <span className="flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-br from-sky-600 to-indigo-600 text-xs font-bold text-white">
                   {initials(user.name)}
                 </span>
@@ -359,7 +362,8 @@ function CrmApp({ user, onLoggedOut }: { user: CurrentUser; onLoggedOut: () => v
                   <span className="block max-w-[160px] truncate text-sm font-semibold text-slate-100">{user.name}</span>
                   <span className="block max-w-[160px] truncate text-[11px] text-slate-500">{activePosition?.name ?? user.role}</span>
                 </span>
-              </span>
+              </button>
+              {securityOpen && <AccountSecurity onClose={() => setSecurityOpen(false)} />}
               <button
                 onClick={() => {
                   logout();

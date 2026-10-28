@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
-from app.auth import hash_password, require_roles
+from app.auth import get_current_user, hash_password, require_roles
 from app.config import get_settings
 from app.crm_core import ai_settings_service, attribute_service, llm, sla_service, test_runner_service
 from app.db import get_db
@@ -25,6 +25,7 @@ from app.models.identity import IdentityVerificationProvider
 from app.models.orchestration_policy import OrchestrationMode, OrchestrationPolicy
 from app.models.ponr import PonrPolicy
 from app.models.sla import SlaClock, SlaPolicy
+from app.models.tenant import Tenant
 from app.models.testing import TestRun
 from app.schemas.admin import (
     AiSettingsOut,
@@ -55,7 +56,7 @@ from app.schemas.admin import (
     TestRunOut,
     TestRunSummaryOut,
 )
-from app.schemas.auth import UserCreate, UserOut
+from app.schemas.auth import SecurityPolicy, UserCreate, UserOut
 from app.tenancy import get_current_tenant_id
 
 # Every route in this router is admin-only, within the caller's own
@@ -822,3 +823,60 @@ def deactivate_user(user_id: int, db: Session = Depends(get_db), tenant_id: int 
     db.commit()
     db.refresh(user)
     return user
+
+
+# ---------------------------------------------------------------- sign-in security (app/crm_core/login_security.py)
+
+
+def _tenant_user(db: Session, tenant_id: int, user_id: int) -> User:
+    user = db.get(User, user_id)
+    if user is None or user.tenant_id != tenant_id:
+        raise HTTPException(404, "User not found")
+    return user
+
+
+@router.post("/users/{user_id}/unlock", response_model=UserOut)
+def unlock_user(user_id: int, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> User:
+    """Lets a user locked out by wrong passwords or codes sign in again now."""
+    from app.crm_core import login_security
+
+    user = _tenant_user(db, tenant_id, user_id)
+    login_security.unlock(user)
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+@router.post("/users/{user_id}/reset-mfa", response_model=UserOut)
+def reset_user_mfa(user_id: int, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> User:
+    """Turns two-step sign-in off for a user who lost their phone and recovery
+    codes; they set it up again (at their next sign-in, if the company requires it)."""
+    from app.crm_core import login_security
+
+    user = _tenant_user(db, tenant_id, user_id)
+    login_security.disable(user)
+    login_security.unlock(user)
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+@router.get("/security", response_model=SecurityPolicy)
+def get_security(db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> SecurityPolicy:
+    tenant = db.get(Tenant, tenant_id)
+    return SecurityPolicy(mfa_required=bool(tenant and tenant.mfa_required))
+
+
+@router.put("/security", response_model=SecurityPolicy)
+def set_security(payload: SecurityPolicy, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id),
+                 user: User = Depends(get_current_user)) -> SecurityPolicy:
+    """Require two-step sign-in of everyone in the company. Turning it on asks
+    the admin to have it on first, so they can't lock themselves out of it."""
+    tenant = db.get(Tenant, tenant_id)
+    if tenant is None:
+        raise HTTPException(404, "Tenant not found")
+    if payload.mfa_required and not user.mfa_enabled:
+        raise HTTPException(400, "Turn on two-step sign-in for your own account first (Account security)")
+    tenant.mfa_required = payload.mfa_required
+    db.commit()
+    return SecurityPolicy(mfa_required=tenant.mfa_required)

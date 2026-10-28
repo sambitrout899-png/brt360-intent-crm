@@ -396,6 +396,26 @@ To put training back into the API: remove `SPLIT_SERVICES: training` from
 deploy. To stop using the gateway, remove `AI_GATEWAY_URL` and
 `OPENAI_API_KEY: ""` from `x-app-env`.
 
+### Sign-in security: lockout and two-step sign-in
+
+- **Lockout:** 5 wrong passwords or codes in a row lock an account for 15 minutes
+  (`LOGIN_MAX_FAILURES`, `LOGIN_LOCK_MINUTES` in `backend/.env`), and one address
+  gets 20 sign-in attempts a minute (`LOGIN_IP_PER_MINUTE`). A tenant admin
+  unlocks someone sooner under Admin → Users → Unlock.
+- **Two-step sign-in:** each user turns it on under their name (top right) →
+  Account security, using an authenticator app plus ten recovery codes. A tenant
+  admin can require it of everyone (Admin → Users), and whoever hasn't set it up
+  does so at their next sign-in. Someone who lost their phone and their recovery
+  codes gets **Reset two-step** from an admin. The secrets are stored encrypted
+  with a key derived from `BRT_ID_SECRET`, which must therefore never change.
+- A platform admin (no tenant) who is locked out, or who lost their phone:
+  ```bash
+  docker compose exec -T api python -c "
+  from app.db import SessionLocal; from app.models.auth import User; from app.crm_core import login_security
+  db = SessionLocal(); u = db.query(User).filter_by(email='platform-admin@brt360.local').one()
+  login_security.unlock(u); login_security.disable(u); db.commit(); print('unlocked, two-step off')"
+  ```
+
 ### Tamper-evident audit chain
 
 Every minute the worker chains each finished intent run and each training audit

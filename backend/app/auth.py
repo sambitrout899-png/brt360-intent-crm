@@ -80,7 +80,10 @@ def public_jwks() -> dict:
                      for kid, public in keys.items()]}
 
 
-def create_access_token(user: User) -> str:
+def create_access_token(user: User, purpose: str | None = None, minutes: int | None = None) -> str:
+    """A session token - or, with `purpose`, a short-lived token that is good
+    only for that one step (the code after the password, setting up two-step
+    sign-in) and never as a session (get_current_user refuses it)."""
     settings = get_settings()
     now = utcnow()
     payload = {
@@ -88,8 +91,10 @@ def create_access_token(user: User) -> str:
         "tenant_id": user.tenant_id,
         "role": user.role.value,
         "iat": now,
-        "exp": now + dt.timedelta(minutes=settings.jwt_expiry_minutes),
+        "exp": now + dt.timedelta(minutes=minutes or settings.jwt_expiry_minutes),
     }
+    if purpose:
+        payload["purpose"] = purpose
     if settings.jwt_private_key_file:  # RS256: anyone with the public key can verify, only this server can sign
         key, kid = _signing_key(settings.jwt_private_key_file)
         return jwt.encode(payload, key, algorithm="RS256", headers={"kid": kid})
@@ -121,13 +126,25 @@ def get_current_user(
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Not authenticated")
     # main.py's middleware already verified this request's token - reuse it
     payload = getattr(request.state, "token_payload", None) or decode_token(credentials.credentials)
-    if payload is None:
+    if payload is None or payload.get("purpose"):  # a one-step token (sign-in code, setup) is not a session
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or expired token")
 
     user = db.get(User, int(payload["sub"]))
     if user is None or not user.is_active:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "User not found or deactivated")
     # the rest of this request sees only this user's tenant, in the database too (app/rls.py)
+    rls.scope(db, user.tenant_id)
+    return user
+
+
+def user_for_step(token: str, purpose: str, db: Session) -> User:
+    """The user a one-step token (create_access_token(purpose=...)) was made for."""
+    payload = decode_token(token)
+    if payload is None or payload.get("purpose") != purpose:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "This sign-in step has expired - sign in again")
+    user = db.get(User, int(payload["sub"]))
+    if user is None or not user.is_active:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "User not found or deactivated")
     rls.scope(db, user.tenant_id)
     return user
 

@@ -46,7 +46,7 @@ def new_app(title: str, **kwargs: Any) -> FastAPI:
         payload = decode_token(token[7:]) if token.lower().startswith("bearer ") else None
         request.state.token_payload = payload
         try:
-            user_id = int(payload["sub"]) if payload else None
+            user_id = int(payload["sub"]) if payload and not payload.get("purpose") else None
         except (KeyError, TypeError, ValueError):
             user_id = None
         marker = brt_id.current_user.set({"user_id": user_id} if user_id else None)
