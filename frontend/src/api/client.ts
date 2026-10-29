@@ -11,7 +11,7 @@ import type {
   C360View,
   CustomerNetwork,
 } from "./c360Types";
-import type { FunctionMap, MapChange, MapDraft, MapPlan } from "./functionMapTypes";
+import type { FunctionMap, MapChange, MapDraft, MapPlan, MapVersions } from "./functionMapTypes";
 import type { Conflict, ConflictCondition, ConflictList, ScratchDraft } from "./conflictTypes";
 import type { FulfillmentCatalog, FulfillmentDraft, FulfillmentOrderSummary, FulfillmentOrderView, FulfillmentPattern, FulfillmentPatternInput, FulfillmentPreview } from "./types";
 import type {
@@ -423,25 +423,46 @@ export function assistantOutcome(journalId: number, status: string, summary = ""
   return request<void>(`/api/assistant/journal/${journalId}/outcome`, { method: "POST", body: JSON.stringify({ status, summary: summary.slice(0, 500) }) });
 }
 
-/** Functional Map - BRT's vanilla map (read-only) and the tenant's own, which re-orchestrates the intents when saved. */
+/** Functional Map - BRT's original map and the map in use are read-only; a
+ * tenant changes its map by activating one of its versions (drafts until then). */
 export function functionMapVanilla(): Promise<FunctionMap> {
   return request<FunctionMap>("/api/admin/function-map/vanilla");
 }
 
-export function functionMapMine(): Promise<FunctionMap> {
-  return request<FunctionMap>("/api/admin/function-map");
+export function functionMapMine(): Promise<FunctionMap & MapVersions> {
+  return request<FunctionMap & MapVersions>("/api/admin/function-map");
 }
 
-export function functionMapRestore(): Promise<FunctionMap> {
-  return request<FunctionMap>("/api/admin/function-map/restore");
+export function functionMapVersions(): Promise<MapVersions> {
+  return request<MapVersions>("/api/admin/function-map/versions");
 }
 
-export function functionMapPlan(draft: MapDraft): Promise<MapPlan> {
-  return request<MapPlan>("/api/admin/function-map/plan", { method: "POST", body: JSON.stringify(draft) });
+/** A new draft copied from BRT's original, the map in use or another version (its id). */
+export function functionMapNewVersion(source: "original" | "active" | number, name = ""): Promise<FunctionMap> {
+  return request<FunctionMap>("/api/admin/function-map/versions", { method: "POST", body: JSON.stringify({ source, name }) });
 }
 
-export function functionMapApply(draft: MapDraft): Promise<{ applied: MapChange[]; problems: MapPlan["problems"]; map: FunctionMap }> {
-  return request("/api/admin/function-map/apply", { method: "POST", body: JSON.stringify(draft) });
+export function functionMapVersion(id: number): Promise<FunctionMap> {
+  return request<FunctionMap>(`/api/admin/function-map/versions/${id}`);
+}
+
+export function functionMapSaveVersion(id: number, body: Partial<MapDraft> & { name?: string; notes?: string }): Promise<FunctionMap> {
+  return request<FunctionMap>(`/api/admin/function-map/versions/${id}`, { method: "PUT", body: JSON.stringify(body) });
+}
+
+export function functionMapDeleteVersion(id: number): Promise<void> {
+  return request<void>(`/api/admin/function-map/versions/${id}`, { method: "DELETE" });
+}
+
+/** What activating a version (or "original": BRT's map) would change - nothing is changed. */
+export function functionMapPlanActivation(id: number | "original"): Promise<MapPlan> {
+  const path = id === "original" ? "original" : `versions/${id}`;
+  return request<MapPlan>(`/api/admin/function-map/${path}/plan`, { method: "POST" });
+}
+
+export function functionMapActivate(id: number | "original"): Promise<{ applied: MapChange[]; problems: MapPlan["problems"]; map: FunctionMap } & MapVersions> {
+  const path = id === "original" ? "original" : `versions/${id}`;
+  return request(`/api/admin/function-map/${path}/activate`, { method: "POST" });
 }
 
 /** Conflicts - automations / actions that pull against each other, and the admin's priority and conditions. */

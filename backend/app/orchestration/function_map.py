@@ -2,18 +2,24 @@
 platform, in lanes by business area, joined by the hand-offs that make up
 the business processes - and, for a tenant, the levers behind it.
 
-Two maps:
-- The vanilla map is BRT's own. It is built from code only (the intent
-  registry and the copilot's "What's next" graph) - never stored, never
-  edited, the same for every tenant and always available.
+The maps:
+- The vanilla (original) map is BRT's own. It is built from code only (the
+  intent registry and the copilot's "What's next" graph) - never stored,
+  never edited by a tenant, the same for every tenant and always available.
+  A BRT release that changes it reaches every tenant.
 - A tenant's map is the vanilla map as that tenant runs it: read live from
   the engines (which intents are switched on, their names and areas, the
   Flow Studio automations between them) plus what the tenant's administrators
-  arranged on the picture (positions, the suggested next steps). Every save
-  is a new row in the audit store (FUNCTION-MAP) - nothing is overwritten.
+  arranged (positions, the suggested next steps). It is read-only.
+- Versions (models/function_map.py): a tenant customizes by copying the
+  original, the map in use or another version into a draft, working on it
+  and activating it. Each version remembers the release it was reconciled
+  with ("base"), so BRT's later hand-offs merge in without undoing the
+  tenant's own changes (release_merge). Every activation is a new row in the
+  audit store (FUNCTION-MAP) - nothing is overwritten.
 
-Re-orchestration: when an administrator changes the picture, the change is
-turned into the engines' own settings, shown first and applied on consent:
+Re-orchestration: activating a version turns its picture into the engines'
+own settings, shown first and applied on consent:
 - a function point taken off / put back  -> the intent is switched off / on
 - renamed                                 -> the intent's label
 - moved to another lane                   -> the intent's area (category)
@@ -177,9 +183,40 @@ def _load_saved(db: Session, tenant_id: int) -> dict[str, Any] | None:
         value = json.loads(row.context_json)
     except (TypeError, ValueError):
         return None
-    if not isinstance(value, dict) or value.get("version") != 1:
+    if not isinstance(value, dict) or value.get("version") not in (1, 2):
         return None
+    if isinstance(value.get("edges"), list) and value.get("base") is not None:
+        value["edges"] = release_merge(value["edges"], value["base"])[0]  # BRT's releases since it was activated
     return {**value, "id": row.id, "at": row.created_at.isoformat(timespec="seconds"), "user_id": row.user_id}
+
+
+def original_pairs() -> list[list[str]]:
+    """BRT's original hand-offs as they are in this release - what a tenant's
+    picture is reconciled with (its "base")."""
+    return [[e["source"], e["target"]] for e in _vanilla_edges()]
+
+
+def release_merge(edges: list[dict[str, Any]], base: list | None) -> tuple[list[dict[str, Any]], list[str]]:
+    """A tenant's links brought up to BRT's current release, keeping the
+    tenant's own changes: a hand-off BRT added since `base` is added, one BRT
+    retired since is dropped; links the tenant added or removed stay as the
+    tenant left them. (links, what changed in words)."""
+    if base is None:
+        return edges, []
+    from app.intent_engine.intent_registry import BUILTIN
+
+    now = {(e["source"], e["target"]): e for e in _vanilla_edges()}
+    was = {(p[0], p[1]) for p in base if isinstance(p, (list, tuple)) and len(p) == 2}
+    gone = was - now.keys()
+    label = lambda c: BUILTIN[c].label if c in BUILTIN else c  # noqa: E731
+    notes = [f"BRT no longer suggests “{label(b)}” after “{label(a)}”" for a, b in sorted(gone)
+             if any(e.get("kind", "next") == "next" and (e["source"], e["target"]) == (a, b) for e in edges)]
+    out = [e for e in edges if not (e.get("kind", "next") == "next" and (e["source"], e["target"]) in gone)]
+    have = {(e["source"], e["target"]) for e in out if e.get("kind", "next") == "next"}
+    for pair in sorted(now.keys() - was - have):
+        out.append({"source": pair[0], "target": pair[1], "kind": "next", "why": now[pair].get("why") or ""})
+        notes.append(f"New from BRT: “{label(pair[1])}” is suggested after “{label(pair[0])}”")
+    return out, notes
 
 
 _FIELD = re.compile(r"^(entities|result|record)\.[A-Za-z_][A-Za-z0-9_.]{0,80}$")
@@ -361,9 +398,9 @@ def differences(tenant_map: dict[str, Any]) -> list[dict[str, str]]:
         if a in names and b in names:
             out.append({"kind": "link_removed", "code": a, "text": f"“{names[b]}” is no longer suggested after “{names[a]}”"})
     for e in tenant_map["edges"]:
-        if e["kind"] == "next" and e.get("when"):
+        if e["kind"] == "next" and clean_when(e.get("when")):
             out.append({"kind": "conditioned", "code": e["source"],
-                        "text": f"After “{names.get(e['source'], e['source'])}”, “{names.get(e['target'], e['target'])}” is suggested only {describe_when(e['when'])}"})
+                        "text": f"After “{names.get(e['source'], e['source'])}”, “{names.get(e['target'], e['target'])}” is suggested only {describe_when(clean_when(e['when']))}"})
     for e in tenant_map["edges"]:
         if e["kind"] == "auto" and e["active"]:
             out.append({"kind": "automated", "code": e["source"],
@@ -649,7 +686,8 @@ def apply(db: Session, tenant_id: int, user_id: int | None, desired: dict[str, A
         log = audit.start_execution(db, tenant_id, f"[functional map] {len(done)} change(s)", channel="function_map")
         log.intent_type = KIND
         log.user_id = user_id
-        audit.record_context(log, {"version": 1, "edges": edges, "positions": positions})
+        # base: the release these links were reconciled with - later releases merge in (release_merge)
+        audit.record_context(log, {"version": 2, "edges": edges, "positions": positions, "base": original_pairs()})
         audit.record_plan(log, done)
         audit.complete(log, "executed")
         forget(db, ("function_map", tenant_id))
@@ -676,3 +714,212 @@ def restore_draft(db: Session, tenant_id: int) -> dict[str, Any]:
                       "dy": n["dy"] if n["lane"] != "custom" else bottom + (i // 8) * ROW})
     edges = [*van["edges"], *[e for e in now["edges"] if e["kind"] == "auto" and e["active"] and not e["by_map"]]]
     return {**now, "nodes": [{**next(x for x in now["nodes"] if x["code"] == n["code"]), **n} for n in nodes], "edges": edges}
+
+
+# ---------------------------------------------------------------- versions
+#
+# A tenant never edits the map it runs (current) - it makes versions, works on
+# drafts and activates one; activating is plan + apply of that version's picture.
+
+
+class VersionError(ValueError):
+    pass
+
+
+def _picture_of(m: dict[str, Any]) -> dict[str, Any]:
+    """A map as stored in a version: what the editor changes, nothing more."""
+    # a condition is kept as drawn - an incomplete one is reported when the version is activated (plan)
+    return {"nodes": [{k: n[k] for k in ("code", "label", "lane", "active", "x", "dy")} for n in m["nodes"]],
+            "edges": [{"source": e["source"], "target": e["target"], "kind": e.get("kind", "next"), "why": e.get("why") or "",
+                       **({"when": e["when"]} if isinstance(e.get("when"), dict) else {})}
+                      for e in m["edges"] if e.get("kind", "next") == "next" or e.get("active")],
+            "base": original_pairs()}
+
+
+def _clean_picture(draft: dict[str, Any]) -> dict[str, Any]:
+    nodes = []
+    for n in draft.get("nodes", []):
+        if isinstance(n, dict) and n.get("code"):
+            nodes.append({"code": str(n["code"]), "label": str(n.get("label") or "").strip()[:150], "lane": str(n.get("lane") or ""),
+                          "active": bool(n.get("active", True)), "x": int(n.get("x") or 0), "dy": max(0, int(n.get("dy") or 0))})
+    edges = [{"source": str(e["source"]), "target": str(e["target"]), "kind": "auto" if e.get("kind") == "auto" else "next",
+              "why": str(e.get("why") or "")[:200], **({"when": e["when"]} if isinstance(e.get("when"), dict) else {})}
+             for e in draft.get("edges", []) if isinstance(e, dict) and e.get("source") and e.get("target") and e["source"] != e["target"]]
+    return {"nodes": nodes, "edges": edges, "base": original_pairs()}
+
+
+def _read(v) -> dict[str, Any]:
+    try:
+        pic = json.loads(v.picture_json or "{}")
+    except ValueError:
+        pic = {}
+    return pic if isinstance(pic, dict) else {}
+
+
+def _get(db: Session, tenant_id: int, version_id: int):
+    from app.models.function_map import FunctionMapVersion
+
+    v = db.get(FunctionMapVersion, version_id)
+    if v is None or v.tenant_id != tenant_id:
+        raise LookupError("No such version of the map")
+    return v
+
+
+def _summary(db: Session, v) -> dict[str, Any]:
+    from app.models.auth import User
+
+    def who(uid):
+        user = db.get(User, uid) if uid else None
+        return user.name if user is not None else None
+
+    iso = lambda t: t.isoformat(timespec="seconds") if t else None  # noqa: E731
+    return {"id": v.id, "number": v.number, "name": v.name, "notes": v.notes or "", "status": v.status, "based_on": v.based_on,
+            "created_at": iso(v.created_at), "created_by": who(v.created_by_id), "updated_at": iso(v.updated_at),
+            "activated_at": iso(v.activated_at), "activated_by": who(v.activated_by_id)}
+
+
+def _new(db: Session, tenant_id: int, user_id: int | None, name: str, based_on: str, picture: dict[str, Any], status: str = "draft"):
+    from sqlalchemy import func
+
+    from app.models.function_map import FunctionMapVersion
+    from app.timeutils import utcnow
+
+    number = (db.query(func.max(FunctionMapVersion.number)).filter(FunctionMapVersion.tenant_id == tenant_id).scalar() or 0) + 1
+    now = utcnow()
+    v = FunctionMapVersion(tenant_id=tenant_id, number=number, name=(name.strip() or f"Version {number}")[:150], notes="",
+                           status=status, based_on=based_on, picture_json=json.dumps(picture), created_by_id=user_id,
+                           created_at=now, updated_at=now, activated_at=now if status == "active" else None,
+                           activated_by_id=user_id if status == "active" else None)
+    db.add(v)
+    db.flush()
+    return v
+
+
+def versions(db: Session, tenant_id: int) -> dict[str, Any]:
+    """Every version of this tenant's map, newest first, and which one runs
+    (none = BRT's original). A map arranged before versions existed becomes
+    version 1, active."""
+    from app.models.function_map import FunctionMapVersion
+
+    rows = (db.query(FunctionMapVersion).filter(FunctionMapVersion.tenant_id == tenant_id)
+            .order_by(FunctionMapVersion.number.desc()).all())
+    if not rows and saved(db, tenant_id) is not None:
+        mine = saved(db, tenant_id)
+        rows = [_new(db, tenant_id, mine.get("user_id"), "Version 1 - the map in use before versions", "active map",
+                     _picture_of(current(db, tenant_id)), status="active")]
+        db.commit()
+    active = next((v for v in rows if v.status == "active"), None)
+    return {"versions": [_summary(db, v) for v in rows], "active_id": active.id if active else None, "on_original": active is None}
+
+
+def create_version(db: Session, tenant_id: int, user_id: int | None, name: str, source: str | int) -> dict[str, Any]:
+    """A new draft: a copy of BRT's original ("original"), of the map in use
+    ("active") or of another version (its id)."""
+    if source == "original":
+        picture, based_on = _picture_of(restore_draft(db, tenant_id)), "BRT original"
+    elif source == "active":
+        picture, based_on = _picture_of(current(db, tenant_id)), "active map"
+    elif str(source).isdigit():
+        src = _get(db, tenant_id, int(source))
+        picture, based_on = _picture_of(_view(db, tenant_id, _read(src))[0]), f"version {src.number}"
+    else:
+        raise VersionError("Copy from 'original', 'active' or a version")
+    v = _new(db, tenant_id, user_id, name, based_on, picture)
+    db.commit()
+    return version_map(db, tenant_id, v.id)
+
+
+def _view(db: Session, tenant_id: int, picture: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """A version's picture laid over the map as the engines run it now: every
+    function point of the selected modules is there (one BRT released after
+    the version was made keeps its current state), links are brought up to
+    BRT's current release. (map, what the release brought in)."""
+    now = current(db, tenant_id)
+    pic_nodes = {n["code"]: n for n in picture.get("nodes", []) if isinstance(n, dict) and n.get("code")}
+    nodes = []
+    for n in now["nodes"]:
+        p = pic_nodes.get(n["code"])
+        nodes.append({**n, "label": p.get("label") or n["label"], "lane": p.get("lane") or n["lane"], "active": bool(p.get("active", True)),
+                      "x": int(p.get("x", n["x"])), "dy": int(p.get("dy", n["dy"]))} if p else n)
+    codes = {n["code"] for n in nodes}
+    edges, notes = release_merge([e for e in picture.get("edges", []) if isinstance(e, dict)], picture.get("base"))
+    live = {(a["source"], a["target"]): a for a in now["edges"] if a["kind"] == "auto"}
+    out_edges = []
+    for e in edges:
+        if e.get("source") not in codes or e.get("target") not in codes:
+            continue
+        when = clean_when(e.get("when")) or (e["when"] if isinstance(e.get("when"), dict) else None)  # an incomplete one stays to finish
+        edge = {"source": e["source"], "target": e["target"], "kind": e.get("kind", "next"), "why": e.get("why") or "", **({"when": when} if when else {})}
+        if edge["kind"] == "auto":
+            a = live.get((edge["source"], edge["target"]))
+            edge.update({"active": True, "by_map": a["by_map"] if a else True,
+                         **({"flow_id": a["flow_id"], "flow_name": a["flow_name"]} if a else {"flow_name": "made when this version is activated"})})
+        out_edges.append(edge)
+    view = {**now, "nodes": nodes, "edges": out_edges}
+    view["differences"] = differences(view)
+    return view, notes
+
+
+def version_map(db: Session, tenant_id: int, version_id: int) -> dict[str, Any]:
+    v = _get(db, tenant_id, version_id)
+    view, notes = _view(db, tenant_id, _read(v))
+    return {**view, "version": _summary(db, v), "release_notes": notes}
+
+
+def save_version(db: Session, tenant_id: int, version_id: int, user_id: int | None, payload: dict[str, Any]) -> dict[str, Any]:
+    """A draft's picture, name or notes - nothing changes in the engines."""
+    from app.timeutils import utcnow
+
+    v = _get(db, tenant_id, version_id)
+    if v.status != "draft":
+        raise VersionError(f"Version {v.number} is {v.status} - it can't be changed. Make a new version from it to work on.")
+    if payload.get("name") is not None:
+        v.name = str(payload["name"]).strip()[:150] or v.name
+    if payload.get("notes") is not None:
+        v.notes = str(payload["notes"])[:2000]
+    if payload.get("nodes") is not None:
+        v.picture_json = json.dumps(_clean_picture({"nodes": payload["nodes"], "edges": payload.get("edges") or []}))
+    v.updated_at = utcnow()
+    db.commit()
+    return version_map(db, tenant_id, v.id)
+
+
+def delete_version(db: Session, tenant_id: int, version_id: int) -> None:
+    v = _get(db, tenant_id, version_id)
+    if v.status == "active":
+        raise VersionError("The active version can't be deleted - activate another version (or BRT's original) first.")
+    db.delete(v)
+    db.commit()
+
+
+def _activation(db: Session, tenant_id: int, version_id: int | None) -> dict[str, Any]:
+    """What activating asks the engines for: the version's picture over every
+    function point (or BRT's original)."""
+    if version_id is None:
+        return _picture_of(restore_draft(db, tenant_id))
+    v = _get(db, tenant_id, version_id)
+    if v.status == "active":
+        raise VersionError(f"Version {v.number} is already active.")
+    return _picture_of(_view(db, tenant_id, _read(v))[0])
+
+
+def plan_activation(db: Session, tenant_id: int, version_id: int | None) -> dict[str, Any]:
+    """What activating this version (None: BRT's original) would change - nothing is changed."""
+    return plan(db, tenant_id, _activation(db, tenant_id, version_id))
+
+
+def activate(db: Session, tenant_id: int, version_id: int | None, user_id: int | None) -> dict[str, Any]:
+    """Re-orchestrates the engines to this version (None: BRT's original), all
+    together; the version it replaces is retired - kept, and can be activated
+    again."""
+    from app.models.function_map import FunctionMapVersion
+    from app.timeutils import utcnow
+
+    desired = _activation(db, tenant_id, version_id)
+    for old in db.query(FunctionMapVersion).filter(FunctionMapVersion.tenant_id == tenant_id, FunctionMapVersion.status == "active"):
+        old.status = "retired"
+    if version_id is not None:
+        v = _get(db, tenant_id, version_id)
+        v.status, v.activated_at, v.activated_by_id = "active", utcnow(), user_id
+    out = apply(db, tenant_id, user_id, desired)  # commits the statuses with the engines' changes, or rolls all back
+    return {"applied": out["applied"], "problems": out["problems"], "map": out["map"], **versions(db, tenant_id)}

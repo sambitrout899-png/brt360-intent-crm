@@ -1,6 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { functionMapApply, functionMapMine, functionMapPlan, functionMapRestore, functionMapVanilla } from "../api/client";
-import type { FunctionMap, MapChange, MapDraft, MapEdge, MapNode, MapPlan } from "../api/functionMapTypes";
+import {
+  functionMapActivate,
+  functionMapDeleteVersion,
+  functionMapMine,
+  functionMapNewVersion,
+  functionMapPlanActivation,
+  functionMapSaveVersion,
+  functionMapVanilla,
+  functionMapVersion,
+} from "../api/client";
+import type { FunctionMap, MapChange, MapDraft, MapEdge, MapNode, MapPlan, MapVersion, MapVersions } from "../api/functionMapTypes";
 import ConditionEditor from "./functionMap/ConditionEditor";
 import MiniMap from "./functionMap/MiniMap";
 import Navigator from "./functionMap/Navigator";
@@ -8,7 +17,14 @@ import FunctionPointPicker from "./functionMap/FunctionPointPicker";
 import { matchesFunctionPoint } from "./functionMap/search";
 import { GUTTER, H, PROCESS_COLORS, W, autoArrange, conditionText, edgeKey, laneBands, midpoint, path, snap, type Box } from "./functionMap/geometry";
 
-type Tab = "mine" | "vanilla";
+/** what is on screen: the map in use, BRT's original, or one of the tenant's versions (its id) */
+type Showing = "active" | "original" | number;
+
+const STATUS: Record<MapVersion["status"], { label: string; cls: string }> = {
+  draft: { label: "Draft", cls: "border-amber-500/40 bg-amber-500/10 text-amber-200" },
+  active: { label: "Active", cls: "border-emerald-500/40 bg-emerald-500/10 text-emerald-200" },
+  retired: { label: "Retired", cls: "border-slate-600 bg-slate-800/60 text-slate-400" },
+};
 type Selection = { node: string } | { edge: string } | null;
 type View = { x: number; y: number; k: number };
 type Snapshot = { nodes: MapNode[]; edges: MapEdge[] };
@@ -50,16 +66,20 @@ function toDraft(nodes: MapNode[], edges: MapEdge[]): MapDraft {
 
 /** Admin -> Functional Map: every function point of the platform in lanes by
  * business area, joined by the hand-offs of the business processes. BRT's
- * vanilla map is read-only and always here; the tenant's map is editable -
- * saving it shows what changes in the engines (intents on/off, names, areas,
- * next steps, automations) and applies it on one consent.
+ * original map and the map in use are read-only. The tenant customizes by
+ * making versions (from the original, the map in use or another version),
+ * working on drafts, and activating one - activating shows what changes in the
+ * engines (intents on/off, names, areas, next steps, automations) and applies
+ * it on one consent; the version it replaces is retired, kept to go back to.
  *
  * Getting around: drag the background to pan, Ctrl/⌘ + scroll to zoom, the
  * minimap to jump, the navigator to find a process or area; hovering or
  * selecting a card lights up only its links. */
 export default function AdminFunctionMap({ onOpenFlowStudio, onOpenIntents }: { onOpenFlowStudio?: () => void; onOpenIntents?: () => void }) {
   const prefs = useMemo(readPrefs, []);
-  const [tab, setTab] = useState<Tab>("mine");
+  const [showing, setShowing] = useState<Showing>("active");
+  const [versions, setVersions] = useState<MapVersions | null>(null);
+  const [planFor, setPlanFor] = useState<number | "original" | null>(null);
   const [vanilla, setVanilla] = useState<FunctionMap | null>(null);
   const [mine, setMine] = useState<FunctionMap | null>(null);
   const [nodes, setNodes] = useState<MapNode[]>([]);
@@ -98,10 +118,13 @@ export default function AdminFunctionMap({ onOpenFlowStudio, onOpenIntents }: { 
   const drag = useRef<{ code: string; offX: number; offY: number; bands: { key: string; top: number; height: number }[]; moved: boolean } | null>(null);
   const pan = useRef<{ sx: number; sy: number; x: number; y: number; z: number; moved: boolean } | null>(null);
 
-  const editable = tab === "mine";
-  const map = editable ? mine : vanilla;
-  const shownNodes = useMemo(() => (editable ? nodes : vanilla?.nodes ?? []), [editable, nodes, vanilla]);
-  const shownEdges = useMemo(() => (editable ? edges : vanilla?.edges ?? []), [editable, edges, vanilla]);
+  const isOriginal = showing === "original";
+  const version = typeof showing === "number" ? mine?.version : undefined;
+  // only a draft version is ever changed - the map in use and BRT's original are read-only
+  const editable = version?.status === "draft";
+  const map = isOriginal ? vanilla : mine;
+  const shownNodes = useMemo(() => (isOriginal ? vanilla?.nodes ?? [] : nodes), [isOriginal, nodes, vanilla]);
+  const shownEdges = useMemo(() => (isOriginal ? vanilla?.edges ?? [] : edges), [isOriginal, edges, vanilla]);
   const dirty = editable && mine !== null && JSON.stringify(toDraft(nodes, edges)) !== baseline;
 
   useEffect(() => {
@@ -123,13 +146,42 @@ export default function AdminFunctionMap({ onOpenFlowStudio, onOpenIntents }: { 
       setHistoryTick((t) => t + 1);
     };
     if (fresh) return take(fresh);
-    functionMapMine().then(take).catch((e) => setError(e instanceof Error ? e.message : "Couldn't load the map"));
-  }, []);
+    if (showing === "original") return;
+    const fail = (e: unknown) => setError(e instanceof Error ? e.message : "Couldn't load the map");
+    if (showing === "active") {
+      functionMapMine()
+        .then((m) => {
+          setVersions({ versions: m.versions, active_id: m.active_id, on_original: m.on_original });
+          take(m);
+        })
+        .catch(fail);
+    } else {
+      functionMapVersion(showing).then(take).catch(fail);
+    }
+  }, [showing]);
 
   useEffect(() => {
     load();
-    functionMapVanilla().then(setVanilla).catch(() => setVanilla(null));
   }, [load]);
+
+  useEffect(() => {
+    functionMapVanilla().then(setVanilla).catch(() => setVanilla(null));
+  }, []);
+
+  /** Switch what is on screen - unsaved draft changes are asked about first. */
+  function show(next: Showing) {
+    if (next === showing) return;
+    if (dirty && !window.confirm("This draft has unsaved changes. Leave without saving them?")) return;
+    setSelection(null);
+    setApplied(null);
+    setError("");
+    setShowing(next);
+  }
+
+  const refreshVersions = () =>
+    functionMapMine()
+      .then((m) => setVersions({ versions: m.versions, active_id: m.active_id, on_original: m.on_original }))
+      .catch(() => undefined);
 
   // ---------- undo / redo ----------
   /** Keep the map as it is now so the next change can be undone. Repeated
@@ -318,10 +370,10 @@ export default function AdminFunctionMap({ onOpenFlowStudio, onOpenIntents }: { 
     return !v || v.label !== n.label || v.lane !== n.lane || !n.active;
   };
   const removedLinks = useMemo(() => {
-    if (!editable || !compare || !vanilla) return [];
+    if (isOriginal || !compare || !vanilla) return [];
     const mineLinks = new Set(edges.filter((e) => e.kind === "next").map((e) => `${e.source}>${e.target}`));
     return vanilla.edges.filter((e) => !mineLinks.has(`${e.source}>${e.target}`) && drawn.has(e.source) && drawn.has(e.target));
-  }, [editable, compare, vanilla, edges, drawn]);
+  }, [isOriginal, compare, vanilla, edges, drawn]);
 
   function jumpTo(code: string) {
     setSelection({ node: code });
@@ -468,47 +520,88 @@ export default function AdminFunctionMap({ onOpenFlowStudio, onOpenIntents }: { 
     setAim({ codes: [code, ...near], mode: "fit", maxK: 1.1 });
   }
 
-  // ---------- saving ----------
-  async function review() {
+  // ---------- versions: save a draft, make one, activate one ----------
+  async function work<T>(job: () => Promise<T>, failed: string): Promise<T | undefined> {
     setBusy(true);
     setError("");
     try {
-      setPlan(await functionMapPlan(toDraft(nodes, edges)));
+      return await job();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Couldn't work out the changes");
+      setError(e instanceof Error ? e.message : failed);
+      return undefined;
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function saveDraft() {
+    if (typeof showing !== "number") return;
+    const out = await work(() => functionMapSaveVersion(showing, toDraft(nodes, edges)), "Saving the draft failed");
+    if (out) {
+      load(out);
+      refreshVersions();
+    }
+  }
+
+  /** A new draft copied from the original, the map in use or a version - then it is on screen to work on. */
+  async function newVersion(source: "original" | "active" | number) {
+    if (dirty && !window.confirm("This draft has unsaved changes. Leave without saving them?")) return;
+    const name = window.prompt("Name the new version", "")?.trim();
+    if (name === undefined) return;
+    const made = await work(() => functionMapNewVersion(source, name), "Couldn't make the version");
+    if (made?.version) {
+      await refreshVersions();
+      setSelection(null);
+      setApplied(null);
+      setShowing(made.version.id);
+    }
+  }
+
+  async function rename() {
+    if (!version) return;
+    const name = window.prompt("Rename this version", version.name)?.trim();
+    if (!name || name === version.name) return;
+    const out = await work(() => functionMapSaveVersion(version.id, { name }), "Renaming failed");
+    if (out) {
+      setMine(out);
+      refreshVersions();
+    }
+  }
+
+  async function removeVersion() {
+    if (!version || !window.confirm(`Delete “${version.name}”? This can't be undone.`)) return;
+    const ok = await work(() => functionMapDeleteVersion(version.id).then(() => true), "Deleting failed");
+    if (ok) {
+      await refreshVersions();
+      setShowing("active");
+    }
+  }
+
+  /** Shows what activating would change (a draft is saved first). */
+  async function review(target: number | "original") {
+    if (dirty && typeof showing === "number") {
+      const saved = await work(() => functionMapSaveVersion(showing, toDraft(nodes, edges)), "Saving the draft failed");
+      if (!saved) return;
+      load(saved);
+    }
+    const planned = await work(() => functionMapPlanActivation(target), "Couldn't work out the changes");
+    if (planned) {
+      setPlanFor(target);
+      setPlan(planned);
     }
   }
 
   async function confirm() {
-    setBusy(true);
-    setError("");
-    try {
-      const out = await functionMapApply(toDraft(nodes, edges));
+    if (planFor === null) return;
+    const out = await work(() => functionMapActivate(planFor), "Activating failed - nothing was changed");
+    if (out) {
       setApplied({ changes: out.applied, problems: out.problems });
+      setVersions({ versions: out.versions, active_id: out.active_id, on_original: out.on_original });
       setPlan(null);
-      load(out.map);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Saving failed - nothing was changed");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function restore() {
-    setBusy(true);
-    try {
-      const draft = await functionMapRestore();
-      remember();
-      setNodes(draft.nodes);
-      setEdges(draft.edges);
+      setPlanFor(null);
       setSelection(null);
-      setApplied(null);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Couldn't load the vanilla map");
-    } finally {
-      setBusy(false);
+      if (showing === "active") load(out.map);
+      else setShowing("active");
     }
   }
 
@@ -587,45 +680,109 @@ export default function AdminFunctionMap({ onOpenFlowStudio, onOpenIntents }: { 
         <div className="min-w-0 flex-1">
           <h2 className="text-lg font-semibold text-slate-100">🗺️ Functional Map</h2>
           <p className="text-xs text-slate-400">
-            Function points for your selected modules, by business area, joined by the hand-offs of your processes. Change the picture and the intents are
-            re-orchestrated to match - you see every change before it is made.
+            Function points for your selected modules, by business area, joined by the hand-offs of your processes. The map in use and BRT's original are
+            read-only: make a version, work on it as a draft, and activate it - you see every change in the engines before it is made.
           </p>
         </div>
-        <div className="flex rounded-lg border border-slate-700 p-0.5 text-xs font-semibold">
-          {(
-            [
-              ["mine", "Our map"],
-              ["vanilla", "🔒 BRT vanilla"],
-            ] as [Tab, string][]
-          ).map(([key, label]) => (
-            <button
-              key={key}
-              onClick={() => {
-                setTab(key);
-                setSelection(null);
-              }}
-              className={`rounded-md px-3 py-1.5 ${tab === key ? "bg-sky-600 text-white" : "text-slate-400 hover:text-slate-200"}`}
-            >
-              {label}
-              {key === "mine" && dirty && <span className="ml-1.5 inline-block h-1.5 w-1.5 rounded-full bg-amber-400 align-middle" />}
-            </button>
-          ))}
-        </div>
+        <label className="flex items-center gap-2 text-xs text-slate-400">
+          Showing
+          <select
+            value={String(showing)}
+            onChange={(e) => show(e.target.value === "active" || e.target.value === "original" ? e.target.value : Number(e.target.value))}
+            className="max-w-[22rem] rounded-md border border-slate-700 bg-slate-950 px-2.5 py-1.5 text-xs font-semibold text-slate-100 focus:border-sky-500 focus:outline-none"
+          >
+            <option value="active">▶ The map in use</option>
+            <option value="original">🔒 BRT original</option>
+            {(versions?.versions ?? []).map((v) => (
+              <option key={v.id} value={v.id}>
+                v{v.number} · {v.name} - {STATUS[v.status].label}
+              </option>
+            ))}
+          </select>
+        </label>
       </div>
 
-      {tab === "vanilla" ? (
-        <p className="rounded-lg border border-slate-700 bg-slate-900/60 px-3 py-2 text-xs text-slate-400">
-          🔒 BRT's vanilla map - the standard function points and processes for your selected modules. It can't be changed and is always here to compare with or go
-          back to (Our map → <span className="text-slate-200">Restore vanilla</span>).
-        </p>
-      ) : (
-        mine && (
-          <p className="text-[11px] text-slate-500">
-            {mine.customized ? `Last arranged ${ago(mine.saved_at)}${mine.saved_by ? ` by ${mine.saved_by}` : ""}` : "Not changed yet - this is the vanilla map, as your engines run it"}
-            {" · "}
-            {(mine.differences ?? []).length} difference(s) from vanilla
-          </p>
-        )
+      {/* ---------- what is on screen, and what can be done with it ---------- */}
+      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-700 bg-slate-900/60 px-3 py-2 text-xs text-slate-400">
+        {showing === "active" && (
+          <>
+            <span className="min-w-0 flex-1">
+              🔒 <span className="font-semibold text-slate-200">The map your business runs</span> - read-only.{" "}
+              {versions && !versions.on_original
+                ? (() => {
+                    const a = versions.versions.find((v) => v.id === versions.active_id);
+                    return a ? `Version ${a.number} “${a.name}”, activated ${ago(a.activated_at)}${a.activated_by ? ` by ${a.activated_by}` : ""}.` : "";
+                  })()
+                : "It is BRT's original map - BRT's releases reach it as they come."}{" "}
+              {(mine?.differences ?? []).length} difference(s) from the original.
+            </span>
+            <button onClick={() => newVersion("active")} disabled={busy} className={btn}>
+              ＋ New version from this map
+            </button>
+          </>
+        )}
+        {isOriginal && (
+          <>
+            <span className="min-w-0 flex-1">
+              🔒 <span className="font-semibold text-slate-200">BRT's original map</span> - the standard function points and processes for your selected modules.
+              It is never changed by an organization; BRT's releases update it for everyone.
+            </span>
+            <button onClick={() => newVersion("original")} disabled={busy} className={btn}>
+              ＋ New version from the original
+            </button>
+            {versions && !versions.on_original && (
+              <button onClick={() => review("original")} disabled={busy} className={`${btn} hover:border-amber-500/60`}>
+                ↺ Go back to the original…
+              </button>
+            )}
+          </>
+        )}
+        {version && (
+          <>
+            <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${STATUS[version.status].cls}`}>{STATUS[version.status].label}</span>
+            <span className="min-w-0 flex-1">
+              <span className="font-semibold text-slate-200">
+                v{version.number} · {version.name}
+              </span>{" "}
+              - from {version.based_on}
+              {version.status === "draft" && `, saved ${ago(version.updated_at)}${dirty ? " · unsaved changes" : ""}. Nothing runs from a draft until it is activated.`}
+              {version.status === "active" && ` - active since ${ago(version.activated_at)}. Read-only: to change it, make a new version from it.`}
+              {version.status === "retired" && " - no longer in use; kept to activate again."}
+            </span>
+            {version.status === "draft" && (
+              <button onClick={rename} disabled={busy} className={btn}>
+                Rename
+              </button>
+            )}
+            <button onClick={() => newVersion(version.id)} disabled={busy} className={btn}>
+              ＋ Copy as a new version
+            </button>
+            {version.status !== "active" && (
+              <>
+                <button onClick={removeVersion} disabled={busy} className={`${btn} hover:border-red-500/60 hover:text-red-300`}>
+                  Delete
+                </button>
+                <button
+                  onClick={() => review(version.id)}
+                  disabled={busy}
+                  className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-500 disabled:opacity-40"
+                >
+                  {version.status === "retired" ? "Activate again…" : "Activate…"}
+                </button>
+              </>
+            )}
+          </>
+        )}
+      </div>
+      {(mine?.release_notes ?? []).length > 0 && !isOriginal && (
+        <div className="rounded-lg border border-sky-500/30 bg-sky-500/10 px-3 py-2 text-xs text-sky-100">
+          <p className="font-semibold">BRT has released changes since this version was saved - they are already in it:</p>
+          <ul className="mt-1 list-disc space-y-0.5 pl-5">
+            {mine!.release_notes!.map((t, i) => (
+              <li key={i}>{t}</li>
+            ))}
+          </ul>
+        </div>
       )}
 
       {error && <p className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">{error}</p>}
@@ -633,7 +790,7 @@ export default function AdminFunctionMap({ onOpenFlowStudio, onOpenIntents }: { 
         <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200">
           <div className="flex items-start gap-2">
             <p className="flex-1 font-semibold">
-              ✓ Saved{applied.changes.length ? ` - ${applied.changes.length} change(s) made in the engines` : " - the layout"}
+              ✓ Activated - the business runs on it now{applied.changes.length ? `; ${applied.changes.length} change(s) made in the engines` : ""}
             </p>
             <button onClick={() => setApplied(null)} className="text-emerald-300/70 hover:text-emerald-100">
               ✕
@@ -729,9 +886,9 @@ export default function AdminFunctionMap({ onOpenFlowStudio, onOpenIntents }: { 
           <label className="flex items-center gap-1 text-xs text-slate-400">
             <input type="checkbox" checked={showAuto} onChange={(e) => setShowAuto(e.target.checked)} /> ⚡ Automations
           </label>
-          {editable && (
-            <label className="flex items-center gap-1 text-xs text-slate-400" title="Mark what differs from BRT's vanilla map">
-              <input type="checkbox" checked={compare} onChange={(e) => setCompare(e.target.checked)} /> Compare with vanilla
+          {!isOriginal && (
+            <label className="flex items-center gap-1 text-xs text-slate-400" title="Mark what differs from BRT's original map">
+              <input type="checkbox" checked={compare} onChange={(e) => setCompare(e.target.checked)} /> Compare with the original
             </label>
           )}
           <div className="ml-auto flex items-center gap-1 text-xs text-slate-400">
@@ -762,21 +919,18 @@ export default function AdminFunctionMap({ onOpenFlowStudio, onOpenIntents }: { 
               <button onClick={tidy} className={btn} title="Line the cards up by the order of the hand-offs, area by area. Undo puts them back.">
                 ✨ Tidy up
               </button>
-              <button onClick={restore} disabled={busy} className={`${btn} hover:border-amber-500/60`}>
-                ↺ Restore vanilla
-              </button>
-              <span className="ml-auto" />
+              <span className="ml-auto text-[11px] text-slate-500">Editing a draft - nothing changes in the engines until it is activated</span>
               {dirty && (
                 <button onClick={() => load()} className={btn}>
                   Discard
                 </button>
               )}
               <button
-                onClick={review}
+                onClick={saveDraft}
                 disabled={!dirty || busy}
                 className="rounded-md bg-sky-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-sky-500 disabled:opacity-40"
               >
-                {busy ? "Working…" : "Save & re-orchestrate"}
+                {busy ? "Working…" : "Save draft"}
               </button>
             </div>
           )}
@@ -893,7 +1047,7 @@ export default function AdminFunctionMap({ onOpenFlowStudio, onOpenIntents }: { 
                             ? near ? 1 : links === "focus" ? 0 : 0.07
                             : links === "focus" ? 0 : e.kind === "auto" ? 0.85 : 0.5;
                       if (!opacity) return null;
-                      const yours = editable && compare && e.kind === "next" && !vanillaLinks.has(`${e.source}>${e.target}`);
+                      const yours = !isOriginal && compare && e.kind === "next" && !vanillaLinks.has(`${e.source}>${e.target}`);
                       const color = e.kind === "auto" ? "#fbbf24" : selected || near ? "#38bdf8" : yours ? "#a78bfa" : inProc ? processColor[process] : "#64748b";
                       const marker = e.kind === "auto" ? "auto" : selected || near ? "hot" : yours ? "mine" : inProc ? `p-${process}` : "next";
                       const d = path(a.left + W, a.top + H / 2, b.left, b.top + H / 2);
@@ -973,7 +1127,7 @@ export default function AdminFunctionMap({ onOpenFlowStudio, onOpenIntents }: { 
                     const p = place(n);
                     const selected = selectedNode?.code === n.code;
                     const dim = (process && !inProcess.has(n.code)) || (related && !related.has(n.code));
-                    const changed = editable && compare && changedFromVanilla(n);
+                    const changed = !isOriginal && compare && changedFromVanilla(n);
                     const procs = processesOf[n.code] ?? [];
                     const step = process ? steps.indexOf(n.code) + 1 : 0;
                     return (
@@ -1126,11 +1280,14 @@ export default function AdminFunctionMap({ onOpenFlowStudio, onOpenIntents }: { 
       {plan && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4" onClick={() => !busy && setPlan(null)}>
           <div className="max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-slate-700 bg-slate-900 p-5 shadow-2xl" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-base font-semibold text-slate-100">Re-orchestrate to this map?</h3>
+            <h3 className="text-base font-semibold text-slate-100">
+              {planFor === "original" ? "Go back to BRT's original map?" : `Activate “${versions?.versions.find((v) => v.id === planFor)?.name ?? "this version"}”?`}
+            </h3>
             <p className="mt-1 text-xs text-slate-400">
               {plan.changes.length
-                ? `${plan.changes.length} change(s) will be made in the engines, all together. Nothing is deleted - switched-off steps and automations are kept and can be switched back on.`
-                : "Only the layout changed - nothing changes in the engines."}
+                ? `${plan.changes.length} change(s) will be made in the engines, all together, and the business runs on it from then on. Nothing is deleted - switched-off steps and automations are kept and can be switched back on.`
+                : "Only the layout differs - nothing changes in the engines."}{" "}
+              {versions && !versions.on_original && "The version in use now is retired - kept, to activate again."}
             </p>
             {Object.entries(
               plan.changes.reduce<Record<string, MapChange[]>>((g, c) => {
@@ -1164,10 +1321,10 @@ export default function AdminFunctionMap({ onOpenFlowStudio, onOpenIntents }: { 
             )}
             <div className="mt-5 flex justify-end gap-2">
               <button onClick={() => setPlan(null)} disabled={busy} className="rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-300 hover:border-slate-500">
-                Keep editing
+                Not now
               </button>
-              <button onClick={confirm} disabled={busy} className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-500 disabled:opacity-40">
-                {busy ? "Applying…" : plan.changes.length ? `Apply ${plan.changes.length} change(s)` : "Save the layout"}
+              <button onClick={confirm} disabled={busy} className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-40">
+                {busy ? "Activating…" : plan.changes.length ? `Activate - ${plan.changes.length} change(s)` : "Activate"}
               </button>
             </div>
           </div>
@@ -1299,7 +1456,7 @@ function NodePanel({
           </label>
         </div>
       ) : (
-        vanilla && <p className="mt-3 text-[11px] text-slate-500">🔒 Vanilla - switch to Our map to change it.</p>
+        <p className="mt-3 text-[11px] text-slate-500">🔒 Read-only - change it in a draft version, then activate the version.</p>
       )}
 
       <div className="mt-4 grid gap-3 border-t border-slate-800 pt-3">
@@ -1445,7 +1602,7 @@ function OverviewPanel({
   onProcess: (key: string) => void;
   onFocus: (code: string) => void;
 }) {
-  const diffs = editable ? map?.differences ?? [] : [];
+  const diffs = map?.vanilla ? [] : map?.differences ?? [];
   const off = nodes.filter((n) => !n.active).length;
   return (
     <>
@@ -1495,13 +1652,23 @@ function OverviewPanel({
             <li>Give a link a condition (Only when… / Otherwise) to branch: e.g. after Approve a quote, Send a proposal if the decision is approve, Revise the quote otherwise. Conditions show as purple pills.</li>
             <li>Click a card to rename it or switch it off.</li>
             <li>Tidy up lines the cards up by the order of the hand-offs; Undo (Ctrl+Z) takes back any change.</li>
-            <li>Save shows every change before anything is made.</li>
+            <li>Save draft keeps your work - nothing runs from a draft. Activate… shows every change in the engines before anything is made.</li>
+          </ul>
+        </div>
+      )}
+      {!editable && !map?.vanilla && (
+        <div className={panel}>
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">How to change it</p>
+          <ul className="mt-1.5 list-disc space-y-1 pl-4 text-xs text-slate-400">
+            <li>This map is read-only. Make a new version from it (or from BRT's original), work on the draft, then activate it.</li>
+            <li>The version it replaces is retired, not lost - activate it again to go back.</li>
+            <li>BRT's releases reach every version: new hand-offs are added and retired ones dropped, without undoing your own changes.</li>
           </ul>
         </div>
       )}
       {diffs.length > 0 && (
         <div className={panel}>
-          <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Different from vanilla ({diffs.length})</p>
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Different from the original ({diffs.length})</p>
           <ul className="mt-1.5 max-h-72 space-y-1 overflow-y-auto">
             {diffs.map((d, i) => (
               <li key={i}>

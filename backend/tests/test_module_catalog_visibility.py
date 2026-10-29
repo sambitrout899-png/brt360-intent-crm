@@ -16,6 +16,13 @@ def select_modules(client, *modules):
         return tenant.id
 
 
+def _activate(client, graph):
+    """The map as shown, saved as a version and activated (the only way to change the map in use)."""
+    vid = client.post('/api/admin/function-map/versions', json={'source': 'active'}).json()['version']['id']
+    client.put(f'/api/admin/function-map/versions/{vid}', json={'nodes': graph['nodes'], 'edges': graph['edges']})
+    return client.post(f'/api/admin/function-map/versions/{vid}/activate')
+
+
 def test_training_only_filters_all_admin_surfaces(client):
     tid = select_modules(client, 'training_management')
     with client.TestSessionLocal() as db:
@@ -32,7 +39,8 @@ def test_training_only_filters_all_admin_surfaces(client):
     assert {e['key'] for e in pages['entities']} == {'training_program'}
     assert not pages['segments']
     assert client.get('/api/admin/pages/rules/all').json()['rules'] == []
-    for suffix in ['', '/vanilla', '/restore']:
+    from_original = client.post('/api/admin/function-map/versions', json={'source': 'original'}).json()['version']['id']
+    for suffix in ['', '/vanilla', f'/versions/{from_original}']:
         graph = client.get('/api/admin/function-map' + suffix).json()
         codes = {n['code'] for n in graph['nodes']}
         assert codes == {'INT-103'}
@@ -51,7 +59,11 @@ def test_direct_edit_paths_reject_unlicensed_content(client):
     assert client.get('/api/admin/pages/catalog/party').status_code==403
     assert client.post('/api/admin/pages',json={'entity_type':'party','name':'No'}).status_code==403
     assert client.delete('/api/admin/pages/party.B2B').status_code==404
-    assert client.post('/api/admin/function-map/apply',json={'nodes':[{'code':'INT-01','active':False}],'edges':[]}).status_code==403
+    # a version can't reach a function point outside the selected modules: it isn't on the map
+    vid=client.post('/api/admin/function-map/versions',json={'source':'active'}).json()['version']['id']
+    client.put(f'/api/admin/function-map/versions/{vid}',json={'nodes':[{'code':'INT-01','active':False}],'edges':[]})
+    assert all(n['code']!='INT-01' for n in client.get(f'/api/admin/function-map/versions/{vid}').json()['nodes'])
+    assert not any(c.get('code')=='INT-01' for c in client.post(f'/api/admin/function-map/versions/{vid}/plan').json()['changes'])
 
 
 def test_module_reactivation_restores_pages_settings_and_map_layout(client):
@@ -60,14 +72,14 @@ def test_module_reactivation_restores_pages_settings_and_map_layout(client):
     graph=client.get('/api/admin/function-map').json()
     node=next(n for n in graph['nodes'] if n['code']=='INT-01')
     node['x']=777
-    response=client.post('/api/admin/function-map/apply',json={'nodes':graph['nodes'],'edges':graph['edges']})
+    response=_activate(client,graph)
     assert response.status_code==200,response.text
     with client.TestSessionLocal() as db:
         db.add(PageLayout(tenant_id=tid,page_key='party.saved',entity_type='party',name='Saved CRM page',is_default=False))
         db.commit()
     select_modules(client,'training_management')
     filtered=client.get('/api/admin/function-map').json()
-    assert client.post('/api/admin/function-map/apply',json={'nodes':filtered['nodes'],'edges':filtered['edges']}).status_code==200
+    assert _activate(client,filtered).status_code==200
     select_modules(client,'telecom_crm','training_management')
     graph=client.get('/api/admin/function-map').json()
     node=next(n for n in graph['nodes'] if n['code']=='INT-01')
@@ -104,7 +116,7 @@ def test_custom_flow_action_cannot_leak_unselected_module(client):
 def test_first_filtered_map_save_preserves_other_modules_default_connections(client):
     select_modules(client,'training_management')
     graph=client.get('/api/admin/function-map').json()
-    assert client.post('/api/admin/function-map/apply',json={'nodes':graph['nodes'],'edges':graph['edges']}).status_code==200
+    assert _activate(client,graph).status_code==200
     select_modules(client,'telecom_crm')
     graph=client.get('/api/admin/function-map').json()
     assert any(e['source']=='INT-15' and e['target']=='INT-46' for e in graph['edges'])

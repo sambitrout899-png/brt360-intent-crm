@@ -74,6 +74,33 @@ export interface FunctionMap {
   saved_by?: string | null;
   customized?: boolean;
   differences?: MapDifference[];
+  /** set when this is one of the tenant's versions */
+  version?: MapVersion;
+  /** what BRT released since the version was last saved, merged in */
+  release_notes?: string[];
+}
+
+/** One of the tenant's versions of the map: drafts are worked on, the active
+ * one drives the business, retired ones are kept to activate again. */
+export interface MapVersion {
+  id: number;
+  number: number;
+  name: string;
+  notes: string;
+  status: "draft" | "active" | "retired";
+  based_on: string;
+  created_at: string | null;
+  created_by: string | null;
+  updated_at: string | null;
+  activated_at: string | null;
+  activated_by: string | null;
+}
+
+export interface MapVersions {
+  versions: MapVersion[];
+  active_id: number | null;
+  /** no version active - the tenant runs BRT's original map */
+  on_original: boolean;
 }
 
 export interface MapChange {

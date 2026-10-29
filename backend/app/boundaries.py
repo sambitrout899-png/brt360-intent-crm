@@ -116,7 +116,7 @@ MODULES: tuple[Module, ...] = (
     Module("flow", (
         "orchestration.flow_*", "orchestration.process_*", "orchestration.function_map",
         "crm_core.process_service", "crm_core.orchestration_mode_service", "crm_core.test_runner_service",
-        "models.flows", "models.process", "models.orchestration_policy", "models.testing",
+        "models.flows", "models.process", "models.orchestration_policy", "models.testing", "models.function_map",
         "experience.routes_studio", "experience.routes_process", "experience.routes_function_map",
         "experience.routes_builder", "schemas.studio", "services.flow",
     ), uses=("metadata", "intent", "identity", "audit", "notification", "ai")),
