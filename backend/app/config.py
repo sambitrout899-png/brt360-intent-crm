@@ -80,6 +80,16 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_expiry_minutes: int = 480
 
+    # Notifications by email (app/crm_core/notification_delivery.py): "off" records
+    # what would have been sent; "smtp" sends through this account.
+    notify_email: str = "off"
+    smtp_host: str = ""
+    smtp_port: int = 465
+    smtp_ssl: bool = True  # 465 = SSL from the start; False = STARTTLS (usually port 587)
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from: str = "BRT 360 <no-reply@localhost>"
+
     # Sign-in lockout (app/crm_core/login_security.py): this many wrong
     # passwords or codes in a row lock the account for this many minutes.
     login_max_failures: int = 5

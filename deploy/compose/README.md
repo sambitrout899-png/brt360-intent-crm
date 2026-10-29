@@ -359,7 +359,24 @@ docker compose run --rm --no-deps api python -m app.rls
 
 ### Split services
 
-Besides the API, these services run in their own containers, built from the same code:
+Every service runs from the same builder (`app/services/split_app.py`,
+`BRT_SERVICE=<name>`). The `api` container is the **core** service:
+everything not split out (CRM, orders, fulfilment, inventory, field service,
+communications, C360, analytics, admin settings, sign-in). `app.main`, which
+holds everything in one app, is only for development and the tests. Besides core,
+these services run in their own containers:
+
+- **`notification`** serves the notices bar, message boxes, broadcasts and the
+  delivery log. **`notification-worker`** delivers what flows and actions record:
+  - shown in-app;
+  - by email when `NOTIFY_EMAIL=smtp` is set and `SMTP_*` are filled in
+    `backend/.env` (Hostinger: `smtp.hostinger.com`, 465, SSL, the same account
+    as the alerts);
+  - other channels (SMS, WhatsApp) are logged as "no provider".
+
+  Until email is switched on, nothing leaves the server, and Admin → Broadcasts →
+  delivery log shows whom it would have gone to. Notifications older than a day
+  when delivery starts are never sent.
 
 - **`intent`** serves the command bar's pipeline, the agent and the assistant (two
   workers, `INTENT_WORKERS`). **`flow`** serves Flow Studio, paused runs and approvals,
@@ -492,7 +509,7 @@ remove both lines. Once every session from before RS256 has expired, set
 | Status | `docker compose ps` |
 | Logs | `docker compose logs -f api worker training training-worker ai-gateway` |
 | Deploy new code | from your PC: `deploy\deploy_docker.ps1 -Environment staging` first, then `deploy\deploy_docker.ps1` for production. Each takes a database dump and a code backup, rebuilds, runs migrations first, then waits for health (`deploy/compose/apply.sh`) |
-| Release one service only | add `-Service training` (training + training-worker), `bim`, `product`, `metadata`, `intent`, `flow` (flow + flow-worker), `ai-gateway`, `api` (api + worker) or `web`: only those containers are rebuilt and replaced, the rest keep running. Refused when the release brings a database migration - deploy everything then. The code on the server is still updated as a whole, so the next full deploy also brings the other services' changes |
+| Release one service only | add `-Service training` (training + training-worker), `bim`, `product`, `metadata`, `intent`, `flow` (flow + flow-worker), `notification` (+ notification-worker), `ai-gateway`, `api` (core + worker) or `web`: only those containers are rebuilt and replaced, the rest keep running. Refused when the release brings a database migration - deploy everything then. The code on the server is still updated as a whole, so the next full deploy also brings the other services' changes |
 | Database backup | `docker compose exec postgres pg_dump -U brt360 -Fc brt360 > backups/brt360-$(date +%F).dump` |
 | psql shell | `docker compose exec postgres psql -U brt360 brt360` |
 

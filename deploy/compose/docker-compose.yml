@@ -30,7 +30,7 @@ x-app-env: &app-env
   # the host's Ollama (deploy/local_llm.sh) - see README.md, "Local LLM"
   LOCAL_LLM_BASE_URL: http://host.docker.internal:11434/v1
   # these run in their own containers (backend/app/services/); the API leaves their routes to them
-  SPLIT_SERVICES: training,bim,product,metadata,intent,flow
+  SPLIT_SERVICES: training,bim,product,metadata,intent,flow,notification
   # every model call goes through the AI gateway, the only container with the model key
   AI_GATEWAY_URL: http://ai-gateway:8000
   AI_GATEWAY_TOKEN: ${AI_GATEWAY_TOKEN:?set AI_GATEWAY_TOKEN in deploy/compose/.env - apply.sh creates it}
@@ -111,10 +111,15 @@ services:
     depends_on:
       postgres: {condition: service_healthy}
 
+  # the core service (backend/app/services/core.py): every /api path no other service claims -
+  # built like the others; app.main (everything in one app) is for development
   api:
     <<: *app
+    command: ["gunicorn", "app.services.split_app:app", "-k", "uvicorn.workers.UvicornWorker", "-b", "0.0.0.0:8000",
+              "--timeout", "120", "--access-logfile", "-", "--forwarded-allow-ips", "*"]
     environment:
       <<: *app-env
+      BRT_SERVICE: core
       WEB_CONCURRENCY: ${API_WORKERS:-3}
       SCHEDULER_MODE: "off"   # the worker container runs the background jobs
     depends_on:
@@ -124,8 +129,8 @@ services:
       resources:
         limits: {cpus: "2.0", memory: 2G}
 
-  # background jobs (inventory sync, reservation expiry) - exactly one copy; split services'
-  # jobs run in their own workers (training-worker)
+  # background jobs (inventory sync, reservation expiry, audit chain) - exactly one copy; split
+  # services' jobs run in their own workers (training-, flow-, notification-worker)
   worker:
     <<: *app
     command: ["python", "-m", "app.scheduler"]
@@ -272,6 +277,37 @@ services:
     deploy:
       resources:
         limits: {cpus: "0.5", memory: 384M}
+
+  # the notices bar, message boxes, broadcasts and the delivery log (backend/app/services/notification.py)
+  notification:
+    <<: *app
+    image: ${IMAGE_PREFIX:-brt360}-notification:${BRT_VERSION:-local}
+    command: ["gunicorn", "app.services.split_app:app", "-k", "uvicorn.workers.UvicornWorker", "-b", "0.0.0.0:8000",
+              "--timeout", "120", "--access-logfile", "-", "--forwarded-allow-ips", "*"]
+    environment:
+      <<: *app-env
+      BRT_SERVICE: notification
+      WEB_CONCURRENCY: ${NOTIFICATION_WORKERS:-1}
+      SCHEDULER_MODE: "off"
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+    deploy:
+      resources:
+        limits: {cpus: "0.5", memory: 512M}
+
+  # delivers the notifications the platform records: in-app, and by email when NOTIFY_EMAIL=smtp
+  # (SMTP_* in backend/.env) - otherwise it logs what it would have sent
+  notification-worker:
+    <<: *app
+    image: ${IMAGE_PREFIX:-brt360}-notification:${BRT_VERSION:-local}
+    command: ["python", "-m", "app.scheduler", "--service", "notification"]
+    healthcheck: {disable: true}
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    deploy:
+      resources:
+        limits: {cpus: "0.25", memory: 256M}
 
   # the one way out to a language model (backend/app/services/ai_gateway.py): it alone gets
   # OPENAI_API_KEY (from backend/.env); the app containers have it blanked above

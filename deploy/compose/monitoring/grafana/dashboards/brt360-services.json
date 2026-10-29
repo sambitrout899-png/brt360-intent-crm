@@ -1,0 +1,75 @@
+{
+  "uid": "brt360-services",
+  "title": "BRT 360 - Services",
+  "description": "Every service side by side: is it up, how busy, how fast, how many errors. The evidence for splitting core further (Phase 5): a part of core worth its own container shows here as load or slowness of its own.",
+  "tags": ["brt360"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "1m",
+  "time": {"from": "now-24h", "to": "now"},
+  "panels": [
+    {
+      "id": 1, "type": "table", "title": "Up (1 = answering)",
+      "gridPos": {"x": 0, "y": 0, "w": 8, "h": 9},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "up{job=~\"brt360-.*\"}", "instant": true, "format": "table"}],
+      "transformations": [{"id": "organize", "options": {"excludeByName": {"Time": true, "__name__": true, "instance": true}}}]
+    },
+    {
+      "id": 2, "type": "table", "title": "Requests per service, last 24 hours",
+      "gridPos": {"x": 8, "y": 0, "w": 8, "h": 9},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "sort_desc(sum by (job) (increase(brt360_http_requests_total[24h])))", "instant": true, "format": "table"}],
+      "transformations": [{"id": "organize", "options": {"excludeByName": {"Time": true}}}]
+    },
+    {
+      "id": 3, "type": "table", "title": "p95 response time per service, last hour (s)",
+      "gridPos": {"x": 16, "y": 0, "w": 8, "h": 9},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "sort_desc(histogram_quantile(0.95, sum by (le, job) (rate(brt360_http_request_duration_seconds_bucket[1h]))))", "instant": true, "format": "table"}],
+      "transformations": [{"id": "organize", "options": {"excludeByName": {"Time": true}}}]
+    },
+    {
+      "id": 4, "type": "timeseries", "title": "Requests per second, by service",
+      "gridPos": {"x": 0, "y": 9, "w": 12, "h": 9},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "sum by (job) (rate(brt360_http_requests_total[5m]))", "legendFormat": "{{job}}"}],
+      "fieldConfig": {"defaults": {"unit": "reqps"}, "overrides": []}
+    },
+    {
+      "id": 5, "type": "timeseries", "title": "p95 response time, by service",
+      "gridPos": {"x": 12, "y": 9, "w": 12, "h": 9},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "histogram_quantile(0.95, sum by (le, job) (rate(brt360_http_request_duration_seconds_bucket[5m])))", "legendFormat": "{{job}}"}],
+      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []}
+    },
+    {
+      "id": 6, "type": "timeseries", "title": "Server errors (5xx) %, by service",
+      "gridPos": {"x": 0, "y": 18, "w": 12, "h": 9},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "100 * sum by (job) (rate(brt360_http_requests_total{status=~\"5..\"}[15m])) / clamp_min(sum by (job) (rate(brt360_http_requests_total[15m])), 1e-9)", "legendFormat": "{{job}}"}],
+      "fieldConfig": {"defaults": {"unit": "percent"}, "overrides": []}
+    },
+    {
+      "id": 7, "type": "table", "title": "Busiest routes in core, last 24 hours (what a further split would move)",
+      "gridPos": {"x": 12, "y": 18, "w": 12, "h": 9},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "topk(15, sum by (route) (increase(brt360_http_requests_total{job=\"brt360-api\"}[24h])))", "instant": true, "format": "table"}],
+      "transformations": [{"id": "organize", "options": {"excludeByName": {"Time": true}}}]
+    },
+    {
+      "id": 8, "type": "timeseries", "title": "AI gateway calls per minute, by outcome",
+      "gridPos": {"x": 0, "y": 27, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "60 * sum by (outcome) (rate(brt360_ai_calls_total[5m]))", "legendFormat": "{{outcome}}"}]
+    },
+    {
+      "id": 9, "type": "table", "title": "AI tokens per tenant, last 24 hours",
+      "gridPos": {"x": 12, "y": 27, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "sort_desc(sum by (tenant) (increase(brt360_ai_tokens_total[24h])))", "instant": true, "format": "table"}],
+      "transformations": [{"id": "organize", "options": {"excludeByName": {"Time": true}}}]
+    }
+  ]
+}

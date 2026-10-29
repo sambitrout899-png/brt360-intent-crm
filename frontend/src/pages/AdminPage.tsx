@@ -71,6 +71,7 @@ import FlowStudioSection from "./FlowStudio";
 import AdminFunctionMap from "./AdminFunctionMap";
 import AdminConflictsSection from "./AdminConflictsSection";
 import { intentLabel } from "../intentLabels";
+import NotificationLog from "../components/NotificationLog";
 import { ApprovalsSection, BroadcastsSection, PriceListsSection, ProcessRolesSection, QuoteDocumentsSection } from "./AdminProcessSections";
 import AdminPageDesignerSection from "./AdminPageDesignerSection";
 import AdminRecordTypesSection from "./AdminRecordTypesSection";
@@ -1224,7 +1225,7 @@ const NAV: NavGroup[] = [
       { id: "lifecycle", label: "Lifecycle", icon: "🔄", hint: "States and transitions of each record type" },
       { id: "approvals", label: "Approvals", icon: "✅", hint: "Discount and record approval rules, and the approval log" },
       { id: "quotedocs", label: "Quote Documents", icon: "📄", hint: "The proposal and agreement PDFs a quote gets - wording, switch on / off" },
-      { id: "broadcasts", label: "Broadcasts", icon: "📣", hint: "Messages in the running bar on the Dashboard, My Work and Customer 360" },
+      { id: "broadcasts", label: "Broadcasts", icon: "📣", hint: "Messages in the running bar on the Dashboard, My Work and Customer 360 - and the notification delivery log" },
       { id: "assignment", label: "Assignment Rules", icon: "📌", hint: "Who records are handed to" },
       { id: "sla", label: "SLA Policies", icon: "⏱️", hint: "Clocks and what happens on breach" },
       { id: "ponr", label: "PONR Policies", icon: "🚧", hint: "Points of no return for orders" },
@@ -1409,7 +1410,7 @@ export default function AdminPage({ onAccessChanged }: { onAccessChanged?: () =>
           {section === "customfields" && <CustomFieldsSection />}
           {section === "recordtypes" && <AdminRecordTypesSection />}
           {section === "approvals" && <ApprovalsSection />}
-          {section === "broadcasts" && <BroadcastsSection />}
+          {section === "broadcasts" && <><BroadcastsSection /><NotificationLog /></>}
           {section === "roles" && <ProcessRolesSection />}
           {section === "pricelists" && <PriceListsSection />}
           {section === "quotedocs" && <QuoteDocumentsSection />}

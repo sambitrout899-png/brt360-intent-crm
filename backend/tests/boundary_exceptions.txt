@@ -30,8 +30,8 @@ app.crm_core.model_lifecycle -> crm
 app.crm_core.model_lifecycle -> telecom
 app.crm_core.notice_service -> crm
 app.crm_core.notice_service -> intent
-app.crm_core.notice_service -> metadata
 app.crm_core.notice_service -> telecom
+app.crm_core.notification_delivery -> intent
 app.crm_core.org_policy -> metadata
 app.crm_core.org_policy -> telecom
 app.crm_core.page_service -> flow

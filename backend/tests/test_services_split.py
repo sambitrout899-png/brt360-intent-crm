@@ -319,3 +319,18 @@ def test_each_service_has_the_session_hooks_the_api_has(name):
         assert event.contains(Session, "before_flush", process_service._prospects_become_accounts)
     finally:
         process_service.install_account_conversion()
+
+
+def test_core_plus_every_service_is_the_whole_platform(monkeypatch):
+    """Production: core in the api container, each service in its own - together exactly
+    what app.main (everything in one app) serves; nothing lost, nothing twice."""
+    from app.config import get_settings
+
+    everything = _own(main_app)
+    monkeypatch.setattr(get_settings(), "split_services", ",".join(split_app.SERVICES))
+    core = _own(split_app.create(split_app.CORE))
+    services = set().union(*(_own(split_app.create(name)) for name in split_app.SERVICES))
+    assert core | services == everything and not core & services
+
+    monkeypatch.setattr(get_settings(), "split_services", "notification")  # the rest back in core
+    assert _own(split_app.create(split_app.CORE)) == everything - _own(split_app.create("notification"))

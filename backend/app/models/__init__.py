@@ -287,3 +287,4 @@ from app.models import quote_docs  # noqa: F401
 from app.models import fulfillment_orders  # noqa: F401
 from app.models import inventory  # noqa: F401
 from app.models import audit_chain  # noqa: F401
+from app.models import notifications  # noqa: F401

@@ -1,5 +1,5 @@
 """Background jobs: inventory sync, inventory reservation expiry, training
-reminders, Flow Studio waits and the audit chain, every minute.
+reminders, Flow Studio waits, notification delivery and the audit chain, every minute.
 
 Exactly one process may run them. Under gunicorn every worker runs the app's
 lifespan, so with N workers each job used to run N times a minute. Now
@@ -53,6 +53,13 @@ def _flow_runs() -> None:
     flow_runs.run_due(SessionLocal)
 
 
+def _notifications() -> None:
+    # notifications the platform recorded, delivered (in-app, email when switched on)
+    from app.crm_core import notification_delivery
+
+    notification_delivery.run_due(SessionLocal)
+
+
 def _audit_chain() -> None:
     # finished intent runs and training audit entries into the tamper-evident chain
     from app.crm_core import audit_chain
@@ -66,13 +73,14 @@ JOBS = (
     ("Inventory reservation expiry", _reservation_expiry),
     ("Training scheduler", _training),
     ("Flow waits", _flow_runs),
+    ("Notifications", _notifications),
     ("Audit chain", _audit_chain),
 )
 
 # Jobs that belong to a split-out service (app/services/): with that service in
 # SPLIT_SERVICES its own worker runs them (`python -m app.scheduler --service training`,
 # from its own image), so a release of the service updates its jobs too.
-SERVICE_OF = {"Training scheduler": "training", "Flow waits": "flow"}
+SERVICE_OF = {"Training scheduler": "training", "Flow waits": "flow", "Notifications": "notification"}
 
 
 def jobs_for(service: str | None = None) -> list[tuple[str, object]]:

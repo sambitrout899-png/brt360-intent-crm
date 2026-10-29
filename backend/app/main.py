@@ -1,10 +1,27 @@
+"""The whole platform in one app - development and the tests.
+
+It is the core service with every other service in it (app/services/split_app.py,
+create("core")): SPLIT_SERVICES is empty here, so nothing is left out. In
+production each service runs in its own container and the api container
+serves core alone, from the same builder. Here, with SCHEDULER_MODE
+"embedded", one worker also runs the background jobs.
+
+Schema is Alembic-driven (migrations/) - run `alembic upgrade head` before
+starting the app, in both dev and production. Nothing here creates tables.
+"""
+
 import asyncio
 from contextlib import asynccontextmanager, suppress
+
 from app import scheduler
-from app.experience import routes_inventory_sync
+from app.config import get_settings
+from app.services import split_app
+
 
 async def inventory_worker():
+    # the background jobs, every minute (a test swaps this out to keep them off its database)
     await scheduler.run_forever()
+
 
 @asynccontextmanager
 async def lifespan(app):
@@ -20,71 +37,5 @@ async def lifespan(app):
                 await task
         scheduler.release(lock)
 
-from app import service
-from app.config import get_settings
-from app.experience import (
-    routes_admin,
-    routes_auth,
-    routes_c360,
-    routes_comms,
-    routes_crm,
-    routes_field_service,
-    routes_notices,
-    routes_order_mgmt,
-    routes_org,
-    routes_fulfillment,
-    routes_inventory,
-    routes_tenants,
-)
 
-# Schema is Alembic-driven (migrations/) - run `alembic upgrade head` before
-# starting the app, in both dev and production. Nothing here creates tables.
-
-app = service.new_app("BRT 360 — Intent CRM", lifespan=lifespan)
-
-from app.services.split_app import install_hooks  # noqa: E402
-
-install_hooks()  # the session hooks every process that writes records needs (split services and worker too)
-
-service.include(
-    app,
-    routes_auth.router,
-    routes_crm.router,
-    routes_admin.router,
-    routes_tenants.router,
-    routes_org.router,
-    routes_org.access_router,
-    routes_c360.router,
-    routes_c360.admin_router,
-    routes_field_service.router,
-    routes_order_mgmt.router,
-    routes_order_mgmt.admin_router,
-    routes_fulfillment.router,
-    routes_fulfillment.admin_router,
-    routes_inventory.router,
-    routes_inventory.presales_router,
-    routes_comms.router,
-    routes_comms.admin_router,
-    routes_notices.router,
-    routes_notices.admin_router,
-)
-
-from app.experience import routes_analytics  # noqa: E402
-
-service.include(app, routes_analytics.router)
-service.finish(app)  # /api/health, /metrics
-service.include(app, routes_inventory_sync.router)
-
-from app.experience import routes_modules  # noqa: E402
-
-service.include(app, routes_modules.router)
-
-# Services that run in their own container when SPLIT_SERVICES names them
-# (app/services/<name>.py); otherwise this app serves their routes too.
-import importlib  # noqa: E402
-
-from app.services.split_app import SERVICES as _SPLITTABLE  # noqa: E402
-
-for _name in _SPLITTABLE:
-    if not service.split(_name):
-        service.include(app, *importlib.import_module(f"app.services.{_name}").routers())
+app = split_app.create(split_app.CORE, lifespan=lifespan)

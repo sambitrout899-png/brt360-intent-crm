@@ -51,12 +51,13 @@ MODULES: tuple[Module, ...] = (
     )),
     # Wires everything together - the one place allowed to import it all
     # (app.models gathers every table for the migrations).
-    Module("assembly", ("main", "seed", "scheduler", "models", "services.split_app", "services.training_app")),
+    Module("assembly", ("main", "seed", "scheduler", "models", "services.split_app", "services.training_app", "services.core")),
     Module("audit", ("data_intelligence.audit", "crm_core.audit_*", "models.audit_chain")),
     Module("ai", ("crm_core.llm", "crm_core.ai_settings_service", "models.ai_settings", "services.ai_*")),
     Module("notification", (
-        "crm_core.notice_service", "integration.notification_adapter", "experience.routes_notices",
-    ), uses=("audit", "identity")),
+        "crm_core.notice_service", "crm_core.notification_*", "integration.notification_adapter", "experience.routes_notices",
+        "models.notifications", "services.notification",
+    ), uses=("audit", "identity", "metadata")),  # metadata: a record's owner, for "owner" audiences
     Module("identity", (
         "access", "crm_core.identity_service", "crm_core.login_*", "crm_core.access_service", "crm_core.org_policy",
         "models.identity", "models.org", "experience.routes_auth", "experience.routes_org",

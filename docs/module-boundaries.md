@@ -130,13 +130,27 @@ conversion hook from the Phase 0 cutover until this change. The API keeps
 322 of 617 routes: CRM, orders, field service, inventory, comms, C360,
 analytics, notices, admin settings, auth.
 
-**Not split yet: notifications.** `notification_adapter.send` only records a
-`notification.sent` event in the outbox; nothing delivers it, because no email
-or SMS provider is chosen. The notices bar (`/api/notices`) is a read of
-approvals and records owned by other modules. A notification service is
-worth its container once there is something to deliver: it would consume
-`notification.sent` events from the outbox and send them through the chosen
-provider.
+**Phase 2, finished: notifications.** `app/services/notification.py` serves the
+notices bar, message boxes, broadcasts and the delivery log.
+`notification-worker` delivers each recorded `notification.sent` event once
+(`app/crm_core/notification_delivery.py`): popups are recorded as in-app, email
+goes through SMTP when `NOTIFY_EMAIL=smtp` (otherwise it is logged as skipped,
+with whom it would have gone to), other channels are logged as no provider, and
+events older than a day are not sent. A Notify step now records the record it was
+about, so "owner" finds that record's owner.
+
+**Phase 5: the monolith entry point retired.** Production runs every container
+from `split_app`. The `api` container is the **core** service
+(`app/services/core.py`), which serves what isn't split, plus any service
+`SPLIT_SERVICES` doesn't name. `app/main.py` is core with nothing split, for
+development and the tests. A test checks that core plus every service is exactly
+the whole platform.
+
+**Phase 5: domain splits on evidence.** Grafana's *BRT 360 - Services* dashboard
+shows each service's requests, p95, errors and the busiest routes left in core.
+A part of core earns its own container when it shows load or slowness of its own
+there; until then core stays whole, as the plan intends. The design for giving
+large tenants installations of their own is in `docs/cell-tenancy.md`.
 
 **Still shared:** training's code still reaches into three other modules
 (c360, intent and flow: five crossings, `python -m app.boundaries`), and every service uses the one database. Giving

@@ -657,7 +657,8 @@ def run_flow(db: Session, tenant_id: int, execution_id: int, flow: FlowDefinitio
         elif node_type == "notify":
             message = str(render(config.get("message", ""), ctx))
             audience = str(render(config.get("audience", "owner"), ctx))
-            notification_adapter.send(db, execution_id, config.get("channel", "email"), audience, message)
+            notification_adapter.send(db, execution_id, config.get("channel", "email"), audience, message,
+                                      entity_type, record.id if record is not None else None)
             entry.update({"audience": audience, "message": message})
         elif node_type == "action":
             done = run_action(db, tenant_id, execution_id, flow, entity_type, record, config, ctx)

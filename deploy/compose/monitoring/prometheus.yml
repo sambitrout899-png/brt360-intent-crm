@@ -38,6 +38,9 @@ scrape_configs:
   - job_name: brt360-flow
     static_configs:
       - targets: ["flow:8000"]
+  - job_name: brt360-notification
+    static_configs:
+      - targets: ["notification:8000"]
   - job_name: brt360-ai-gateway
     static_configs:
       - targets: ["ai-gateway:8000"]

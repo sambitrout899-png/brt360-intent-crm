@@ -79,3 +79,16 @@ def remove_broadcast(broadcast_id: int, db: Session = Depends(get_db), tenant_id
     except ValueError as exc:
         raise HTTPException(404, str(exc)) from exc
     db.commit()
+
+
+# What became of each notification the platform recorded (crm_core/notification_delivery.py).
+deliveries_router = APIRouter(prefix="/api/admin/notification-deliveries", tags=["notices"],
+                              dependencies=[Depends(require_roles(UserRole.admin))])
+
+
+@deliveries_router.get("")
+def notification_deliveries(status: str | None = None, limit: int = 100, db: Session = Depends(get_db),
+                            tenant_id: int = Depends(get_current_tenant_id)) -> list[dict[str, Any]]:
+    from app.crm_core import notification_delivery
+
+    return notification_delivery.recent(db, tenant_id, status, limit)

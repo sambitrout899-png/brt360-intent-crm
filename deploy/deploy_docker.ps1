@@ -14,7 +14,7 @@
 #   -AppDir       overrides the folder the environment deploys to
 #   -Service      release one service only, the rest keep running untouched:
 #                 training (training + training-worker), bim, product, metadata, intent,
-#                 flow (flow + flow-worker), ai-gateway,
+#                 flow (flow + flow-worker), notification (+ notification-worker), ai-gateway,
 #                 api (api + worker), web.
 #                 Refused when the release has a database migration - deploy everything then.
 #                 Default: all.
@@ -23,7 +23,7 @@
 param(
     [ValidateSet("production", "staging")]
     [string]$Environment = "production",
-    [ValidateSet("all", "training", "bim", "product", "metadata", "intent", "flow", "ai-gateway", "api", "web")]
+    [ValidateSet("all", "training", "bim", "product", "metadata", "intent", "flow", "notification", "ai-gateway", "api", "web")]
     [string]$Service = "all",
     [string]$Server = "root@187.127.132.149",
     [string]$AppDir = "",
