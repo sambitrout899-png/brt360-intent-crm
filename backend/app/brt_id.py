@@ -236,9 +236,18 @@ def _before_flush(session: Session, flush_context, instances) -> None:
             obj.sys_created_position_id = actor.get("position_id")
             obj.sys_department_id = actor.get("department_id")
     for obj in session.dirty:
-        if hasattr(obj, "brt_id") and session.is_modified(obj, include_collections=False):
+        if hasattr(obj, "brt_id") and _columns_changed(obj):
             obj.sys_updated_at = now
             obj.sys_updated_by = actor.get("user_id")
+
+
+def _columns_changed(obj) -> bool:
+    """One of the record's own columns changed - not just a related record
+    attached to it (a new prospect's profile), which isn't an update of it."""
+    from sqlalchemy import inspect as sa_inspect
+
+    state = sa_inspect(obj)
+    return any(state.attrs[attr.key].history.has_changes() for attr in state.mapper.column_attrs)
 
 
 def _before_insert(mapper, connection, target) -> None:

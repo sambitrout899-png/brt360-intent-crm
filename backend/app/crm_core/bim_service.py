@@ -291,16 +291,22 @@ def load_row(db: Session, tenant_id: int, spec: Spec, row: dict[str, Any], mode:
             if k in defs and (_str(v) is not None or status == "updated"):
                 custom_field_service.set_value(db, tenant_id, spec.entity_type, obj.id, defs[k], _str(v))
     if spec.entity_type:
-        _record_owner(db, tenant_id, spec.entity_type, obj.id, owner_id)
+        _record_owner(db, tenant_id, spec.entity_type, obj.id, owner_id, new=status == "inserted")
     db.flush()
     return status, []
 
 
-def _record_owner(db: Session, tenant_id: int, entity_type: str, entity_id: int, user_id: int | None) -> None:
-    """The record's owner for visibility (same data intents keep)."""
+def _record_owner(db: Session, tenant_id: int, entity_type: str, entity_id: int, user_id: int | None, new: bool = False) -> None:
+    """The record's owner for visibility (same data intents keep). A record
+    this load just inserted has none yet: written whole in one go."""
     from app.crm_core import lifecycle_service
+    from app.models.lifecycle import EntityRecordMeta
 
     if user_id is None or entity_type not in ("party", "lead", "opportunity", "quote", "order"):
+        return
+    if new:
+        db.add(EntityRecordMeta(tenant_id=tenant_id, entity_type=entity_type, entity_id=entity_id,
+                                created_by_user_id=user_id, owner_user_id=user_id))
         return
     meta = lifecycle_service.get_meta(db, tenant_id, entity_type, entity_id, create=True)
     if meta.created_by_user_id is None:
@@ -349,6 +355,17 @@ def run(db: Session, tenant_id: int, entity: str, rows: list[dict[str, Any]], ch
             savepoint.commit()
         counts[status] += 1
         results.append({"row": n, "brt_id": _str(row.get("brt_id")), "status": status, "errors": problems})
+        if n % RELEASE_EVERY == 0:
+            # The session keeps every row it saved, and each flush looks through all of them -
+            # a 10,000-row load slowed down row by row. Saved rows are let go (still in the
+            # transaction, read back from the database when needed); so are the cached lookups
+            # that hold them.
+            job_id = job.id
+            db.flush()
+            db.expunge_all()
+            db.info.pop("brt_cache", None)
+            db.info.pop("brt_cache_index", None)
+            job = db.get(BimJob, job_id)
     if outer is not None:
         outer.rollback()  # a dry run keeps only the job's report
     job.inserted, job.updated, job.failed = counts["inserted"], counts["updated"], counts["failed"]
@@ -360,6 +377,7 @@ def run(db: Session, tenant_id: int, entity: str, rows: list[dict[str, Any]], ch
 
 
 SYNC_ROWS = 1000  # loads up to this size answer at once; larger ones run in the background (load_in_background)
+RELEASE_EVERY = 200  # rows after which a load lets go of the records it saved (run)
 STALE = dt.timedelta(hours=1)
 
 

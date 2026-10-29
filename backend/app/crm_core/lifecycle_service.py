@@ -23,6 +23,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.crm_core import access_service
+from app.db import cached
 from app.models.auth import User, UserRole
 from app.models.crm import Lead, LeadStatus, Opportunity, OpportunityStage, Party, Quote, QuoteStatus
 from app.models.lifecycle import (
@@ -320,7 +321,9 @@ def get_record(db: Session, tenant_id: int, entity_type: str, entity_id: Any):
 
 def built_in_status(db: Session, entity_type: str, obj) -> str:
     if entity_type == "party":
-        has_order = db.query(Order.id).filter(Order.party_id == obj.id).first() is not None
+        # asked several times per request for the same customer: once, until an order is saved (app/db.py cached)
+        has_order = cached(db, ("has_order", obj.id), Order,
+                           lambda: db.query(Order.id).filter(Order.party_id == obj.id).first() is not None)
         if has_order:
             return "customer"
         profile = getattr(obj, "profile", None)
@@ -329,7 +332,8 @@ def built_in_status(db: Session, entity_type: str, obj) -> str:
 
 
 def get_meta(db: Session, tenant_id: int, entity_type: str, entity_id: int, create: bool = True) -> EntityRecordMeta | None:
-    meta = (
+    # several times per request for the same record: once, until a record's meta is saved (app/db.py cached)
+    meta = cached(db, ("record_meta", tenant_id, entity_type, entity_id), EntityRecordMeta, lambda: (
         db.query(EntityRecordMeta)
         .filter(
             EntityRecordMeta.tenant_id == tenant_id,
@@ -337,7 +341,7 @@ def get_meta(db: Session, tenant_id: int, entity_type: str, entity_id: int, crea
             EntityRecordMeta.entity_id == entity_id,
         )
         .first()
-    )
+    ))
     if meta is None and create:
         meta = EntityRecordMeta(tenant_id=tenant_id, entity_type=entity_type, entity_id=entity_id)
         db.add(meta)

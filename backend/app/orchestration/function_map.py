@@ -40,6 +40,8 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.db import cached, forget
+
 KIND = "FUNCTION-MAP"
 MARK = "[functional map]"  # description prefix of the automations the map makes
 COL, ROW = 240, 74  # layout grid: one step to the next, one row in a lane
@@ -158,6 +160,12 @@ def vanilla(db=None, tenant_id=None) -> dict[str, Any]:
 
 
 def saved(db: Session, tenant_id: int) -> dict[str, Any] | None:
+    """The tenant's saved map - read once per request (it is asked for every
+    action's next steps); saving a new one forgets it (save_map)."""
+    return cached(db, ("function_map", tenant_id), (), lambda: _load_saved(db, tenant_id))
+
+
+def _load_saved(db: Session, tenant_id: int) -> dict[str, Any] | None:
     from app.models.intent_log import IntentExecutionLog
 
     row = (db.query(IntentExecutionLog)
@@ -644,6 +652,7 @@ def apply(db: Session, tenant_id: int, user_id: int | None, desired: dict[str, A
         audit.record_context(log, {"version": 1, "edges": edges, "positions": positions})
         audit.record_plan(log, done)
         audit.complete(log, "executed")
+        forget(db, ("function_map", tenant_id))
         db.commit()
     except Exception:
         db.rollback()

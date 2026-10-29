@@ -58,25 +58,37 @@ def cached(db: Session, key: tuple, models: type | tuple[type, ...], load):
     """load() once per session (and transaction), until a row of `models` changes."""
     store = db.info.setdefault("brt_cache", {})
     if key not in store:
-        store[key] = (models if isinstance(models, tuple) else (models,), load())
-    return store[key][1]
+        store[key] = load()
+        # which keys each model's change drops - a flush looks up only its models' keys,
+        # however many are cached (a BIM load caches one per row)
+        index = db.info.setdefault("brt_cache_index", {})
+        for model in models if isinstance(models, tuple) else (models,):
+            index.setdefault(model, set()).add(key)
+    return store[key]
+
+
+def forget(db: Session, key: tuple) -> None:
+    """Drops one cached answer - for a cache (models=()) whose source changes in a way
+    a model can't tell apart (a new row of one kind among many of the same model)."""
+    db.info.get("brt_cache", {}).pop(key, None)
 
 
 @event.listens_for(Session, "after_flush")
 def _drop_changed(session: Session, flush_context) -> None:
-    store = session.info.get("brt_cache")
-    if store:
+    store, index = session.info.get("brt_cache"), session.info.get("brt_cache_index")
+    if store and index:
         # a row whose own columns changed - not one that only gained a related row (a definition's new value)
         dirty = (o for o in session.dirty if session.is_modified(o, include_collections=False))
-        changed = {type(o) for o in (*session.new, *dirty, *session.deleted)}
-        for key in [k for k, (models, _) in store.items() if changed.intersection(models)]:
-            del store[key]
+        for model in {type(o) for o in (*session.new, *dirty, *session.deleted)}:
+            for key in index.pop(model, ()):
+                store.pop(key, None)
 
 
 @event.listens_for(Session, "after_soft_rollback")
 def _drop_all(session: Session, *args) -> None:
     # any rollback, a savepoint's too: what was read since may be undone
     session.info.pop("brt_cache", None)
+    session.info.pop("brt_cache_index", None)
 
 
 @event.listens_for(Session, "after_transaction_end")
@@ -84,6 +96,7 @@ def _drop_at_end(session: Session, transaction) -> None:
     # the transaction itself, not a savepoint (each BIM row has one): the next one reads afresh
     if transaction.parent is None:
         session.info.pop("brt_cache", None)
+        session.info.pop("brt_cache_index", None)
 
 
 def get_db() -> Generator[Session, None, None]:

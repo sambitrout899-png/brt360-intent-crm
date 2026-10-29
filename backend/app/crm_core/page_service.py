@@ -200,7 +200,14 @@ def _def_out(d: CustomFieldDefinition) -> dict[str, Any]:
 
 
 def catalog(db: Session, tenant_id: int, entity_type: str, segment: str | None = None, include_inactive: bool = False) -> list[dict[str, Any]]:
-    """Every field a page of this entity (and segment) can show."""
+    """Every field a page of this entity (and segment) can show. Built once per
+    session (a BIM load asks twice per row) - each caller gets its own copies."""
+    fields = cached(db, ("page_catalog", tenant_id, entity_type, segment, include_inactive), CustomFieldDefinition,
+                    lambda: _build_catalog(db, tenant_id, entity_type, segment, include_inactive))
+    return [{**f, "values": list(f["values"])} for f in fields]
+
+
+def _build_catalog(db: Session, tenant_id: int, entity_type: str, segment: str | None, include_inactive: bool) -> list[dict[str, Any]]:
     out = []
     for spec in CORE_FIELDS.get(entity_type, []):
         if segment and spec["segment"] and spec["segment"] != segment:

@@ -104,6 +104,10 @@ def _apply(connection, tenant_id: int) -> None:
 
 @event.listens_for(Session, "after_begin")
 def _scope_new_transaction(session, transaction, connection) -> None:
+    # not again for a savepoint (a BIM load opens one per row): the setting made when the
+    # transaction began holds inside it, and rolling a savepoint back can't undo it
+    if transaction.nested:
+        return
     tenant_id = session.info.get("tenant_id")
     if tenant_id is not None and connection.dialect.name == "postgresql":
         _apply(connection, tenant_id)
