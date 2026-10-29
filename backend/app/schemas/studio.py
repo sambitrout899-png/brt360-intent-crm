@@ -175,6 +175,13 @@ class FlowOut(BaseModel):
     updated_at: dt.datetime
 
 
+class FlowDecisionIn(BaseModel):
+    """An approver's answer to a flow's Wait for approval step."""
+
+    approve: bool
+    note: str = Field(default="", max_length=2000)
+
+
 class FlowGenerateIn(BaseModel):
     prompt: str = Field(min_length=3, max_length=4000)
     entity_type: str | None = None

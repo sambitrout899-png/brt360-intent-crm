@@ -57,7 +57,24 @@ NODE_TYPES: dict[str, dict[str, Any]] = {
     "catch": {"label": "Catch errors", "outputs": [""], "config": ["codes"]},
     # Throws an error of the flow's own - caught by a Catch errors step, else it fails the flow.
     "throw": {"label": "Raise error", "outputs": [], "config": ["code", "message", "category"]},
+    # Durable waits (orchestration/flow_runs.py): the run so far commits with what started
+    # it; the rest continues later, in its own transaction - after the time has passed, or
+    # when the approver decides (or the request expires). Only in flows that run after
+    # something happened - never in one that must decide now (see can_wait).
+    "wait": {"label": "Wait", "outputs": [""], "config": ["amount", "unit"]},
+    "wait_approval": {"label": "Wait for approval", "outputs": ["approved", "rejected", "expired"],
+                      "config": ["approver", "subject", "message", "expire_days"]},
 }
+WAIT_TYPES = {"wait", "wait_approval"}
+WAIT_UNITS = {"minutes": 1, "hours": 60, "days": 1440}
+MAX_WAIT_DAYS = 365
+
+
+def can_wait(flow: FlowDefinition) -> bool:
+    """A flow may pause only when nothing is waiting on its answer: after an
+    intent, on a state change, or as a custom action - not before an intent,
+    on its error, or as a Page Designer validation."""
+    return flow.trigger_type in ("state_enter", "custom_intent") or (flow.trigger_type == "intent" and flow.timing == "after")
 # steps that write - each runs under a savepoint, so a failure undoes only that step
 _WRITES = {"record", "set_field", "transition", "assign", "notify", "action"}
 MAX_RETRIES = 3
@@ -96,8 +113,14 @@ def load_graph(flow: FlowDefinition) -> dict[str, Any]:
     return graph
 
 
-def validate_graph(graph: dict[str, Any]) -> list[str]:
+def validate_graph(graph: dict[str, Any], flow: FlowDefinition | None = None) -> list[str]:
+    """What's wrong with the graph; with the flow, also a wait where it can't pause."""
     errors: list[str] = []
+    if flow is not None and not can_wait(flow):
+        for n in graph.get("nodes") or []:
+            if n.get("type") in WAIT_TYPES:
+                errors.append(f"'{n.get('label') or NODE_TYPES[n['type']]['label']}': a flow that runs before an intent, on its "
+                              "error or as a validation must answer at once - it can't wait")
     nodes = graph.get("nodes") or []
     edges = graph.get("edges") or []
     ids = [n.get("id") for n in nodes]
@@ -155,6 +178,18 @@ def validate_graph(graph: dict[str, Any]) -> list[str]:
                 errors.append(f"Raise error '{name}' needs a message")
             if config.get("category") not in (None, "", "business", "validation"):
                 errors.append(f"Raise error '{name}': category must be business or validation")
+        if node_type == "wait":
+            amount = wait_minutes(config)
+            if amount is None:
+                errors.append(f"Wait '{name}' needs a number and a unit (minutes, hours or days)")
+            elif not 1 <= amount <= MAX_WAIT_DAYS * 1440:
+                errors.append(f"Wait '{name}' must be from 1 minute to {MAX_WAIT_DAYS} days")
+        if node_type == "wait_approval":
+            if not str(config.get("approver") or "").strip():
+                errors.append(f"Wait for approval '{name}' needs an approver (a user or a position)")
+            days = str(config.get("expire_days") or "").strip()
+            if days and not (days.isdigit() and 1 <= int(days) <= MAX_WAIT_DAYS):
+                errors.append(f"Wait for approval '{name}': expires after 1 to {MAX_WAIT_DAYS} days, or blank for never")
         if node_type == "catch":
             wanted = [c.strip() for c in str(config.get("codes") or "").split(",") if c.strip()] if not isinstance(config.get("codes"), list) \
                 else [str(c).strip() for c in config["codes"] if str(c).strip()]
@@ -177,6 +212,14 @@ def validate_graph(graph: dict[str, Any]) -> list[str]:
     return errors
 
 
+def wait_minutes(config: dict[str, Any]) -> int | None:
+    """A Wait step's length in minutes, or None if it isn't a number and a unit."""
+    raw, unit = str(config.get("amount") or "").strip(), str(config.get("unit") or "").strip()
+    if not raw.isdigit() or unit not in WAIT_UNITS:
+        return None
+    return int(raw) * WAIT_UNITS[unit]
+
+
 # ---------- value resolution ----------
 
 _TEMPLATE = re.compile(r"\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}")
@@ -184,8 +227,9 @@ _TEMPLATE = re.compile(r"\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}")
 
 def _lookup(ctx: dict[str, Any], path: str, default=None) -> Any:
     path = path.strip()
-    # "error": the failure being handled - set on an error path or after a Catch errors step
-    if path.split(".")[0] in ("steps", "entities", "result", "record", "customer", "trigger", "flow", "error"):
+    # "error": the failure being handled - set on an error path or after a Catch errors step;
+    # "approval": the answer to a Wait for approval step (flow_runs.resume) - decision, note, by
+    if path.split(".")[0] in ("steps", "entities", "result", "record", "customer", "trigger", "flow", "error", "approval"):
         value = ctx
         for part in path.split("."):
             if isinstance(value, dict):
@@ -418,12 +462,17 @@ def customer_of(db: Session, entity_type: str | None, record: Any) -> Any:
 # ---------- execution ----------
 
 
-def run_flow(db: Session, tenant_id: int, execution_id: int, flow: FlowDefinition, ctx: dict[str, Any]) -> dict[str, Any]:
+def run_flow(db: Session, tenant_id: int, execution_id: int, flow: FlowDefinition, ctx: dict[str, Any],
+             resume: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Runs the flow from its Start step - or, with `resume` (flow_runs.resume),
+    continues a paused run: {"graph", "node_id", "branch", "trace", "caught",
+    "touched"} from where it waited, ctx as it was then. A Wait step pauses the
+    run: it is saved (flow_runs.pause) and the summary's outcome is "waiting"."""
     from app.licensing import require_module
     if flow.entity_type in ("party", "lead", "opportunity", "quote", "order"):
         require_module(db, tenant_id, "telecom_crm")
-    graph = load_graph(flow)
-    errors = validate_graph(graph)
+    graph = resume["graph"] if resume else load_graph(flow)
+    errors = validate_graph(graph, flow)
     if errors:
         raise ValueError(f"Flow '{flow.name}' is invalid: {'; '.join(errors)}")
     nodes = {n["id"]: n for n in graph["nodes"]}
@@ -432,18 +481,19 @@ def run_flow(db: Session, tenant_id: int, execution_id: int, flow: FlowDefinitio
         edges.setdefault(e["source"], []).append(e)
 
     entity_type, record = resolve_target(db, tenant_id, flow, ctx)
-    from app.orchestration import process_journey
-    required_segment = process_journey.scope(graph, flow.name)
-    if required_segment and process_journey.record_segment(record) != required_segment:
-        if flow.trigger_type in ("intent", "state_enter"):
-            return {"flow_id": flow.id, "flow_name": flow.name, "skipped": True,
-                    "reason": f"Applies only to {required_segment} records"}
-        raise FlowRejected(f"Flow '{flow.name}' applies only to {required_segment} records. Check the selected record's segment.")
     ctx = dict(ctx)
-    ctx.setdefault("trigger", {"input": dict(ctx.get("entities") or {}), "output": dict(ctx.get("result") or {})})
-    from app.orchestration import flow_parameters
-    ctx["flow"] = {"inputs": flow_parameters.contract(db, tenant_id, ctx["trigger"].get("input") or {}, ctx["trigger"].get("output") or {})}
-    ctx["steps"] = {}
+    if resume is None:
+        from app.orchestration import process_journey
+        required_segment = process_journey.scope(graph, flow.name)
+        if required_segment and process_journey.record_segment(record) != required_segment:
+            if flow.trigger_type in ("intent", "state_enter"):
+                return {"flow_id": flow.id, "flow_name": flow.name, "skipped": True,
+                        "reason": f"Applies only to {required_segment} records"}
+            raise FlowRejected(f"Flow '{flow.name}' applies only to {required_segment} records. Check the selected record's segment.")
+        ctx.setdefault("trigger", {"input": dict(ctx.get("entities") or {}), "output": dict(ctx.get("result") or {})})
+        from app.orchestration import flow_parameters
+        ctx["flow"] = {"inputs": flow_parameters.contract(db, tenant_id, ctx["trigger"].get("input") or {}, ctx["trigger"].get("output") or {})}
+        ctx["steps"] = {}
     # A validation flow (Page Designer) runs before the record exists - it
     # checks the values about to be saved, handed in as the record.
     incoming = dict(ctx.get("record") or {}) if flow.trigger_type == "validation" else {}
@@ -455,7 +505,7 @@ def run_flow(db: Session, tenant_id: int, execution_id: int, flow: FlowDefinitio
         ctx["customer"] = record_service.snapshot(db, tenant_id, "party", party) if party is not None else {}
 
     refresh_record()
-    if flow.trigger_type in ("intent", "state_enter"):
+    if resume is None and flow.trigger_type in ("intent", "state_enter"):
         from app.orchestration import conflicts
 
         # the admin's rule for flows that share this trigger: a condition, or "only the first that applies"
@@ -464,11 +514,17 @@ def run_flow(db: Session, tenant_id: int, execution_id: int, flow: FlowDefinitio
             return {"flow_id": flow.id, "flow_name": flow.name, "entity_type": entity_type, "entity_id": record.id if record is not None else None,
                     "trace": [{"node_id": "", "type": "skipped", "label": aside, "skipped": aside}], "skipped": aside}
     source = f"flow:{flow.id}"
-    trace: list[dict[str, Any]] = []
-    touched: list[tuple[str, int]] = []  # records an action node changed - their own state flows run next
-    caught: list[dict[str, Any]] = []  # errors this run caught and carried on from
+    trace: list[dict[str, Any]] = list(resume["trace"]) if resume else []
+    # records an action node changed - their own state flows run next
+    touched: list[tuple[str, int]] = [tuple(t) for t in resume.get("touched", [])] if resume else []
+    caught: list[dict[str, Any]] = list(resume.get("caught", [])) if resume else []  # errors this run caught and carried on from
     catch_nodes = [n for n in graph["nodes"] if n["type"] == "catch"]
-    current = next(n for n in graph["nodes"] if n["type"] == "start")
+    if resume:
+        # on from the step it waited at, down the output its outcome chose
+        waited = next((e for e in edges.get(resume["node_id"], []) if (e.get("label") or "") == resume.get("branch", "")), None)
+        current = nodes.get(waited["target"]) if waited else None
+    else:
+        current = next(n for n in graph["nodes"] if n["type"] == "start")
     visits = 0
 
     def need_record(node_label: str):
@@ -637,6 +693,20 @@ def run_flow(db: Session, tenant_id: int, execution_id: int, flow: FlowDefinitio
             config = current.get("config") or {}
             label = current.get("label") or NODE_TYPES[node_type]["label"]
             outgoing = edges.get(current["id"], [])
+            if node_type in WAIT_TYPES:
+                # pause: everything so far commits with what started the flow; the rest waits in flow_runs
+                from app.orchestration import flow_runs
+
+                if not can_wait(flow):
+                    raise flow_errors.FlowError("NOT_ALLOWED", "this flow must answer at once - it can't wait").at(flow, current, label)
+                entry = {"node_id": current["id"], "type": node_type, "label": label, "status": "waiting", "input": render(config, ctx)}
+                ctx["steps"][current["id"]] = {"input": entry["input"], "output": {}}
+                trace.append(entry)
+                run = flow_runs.pause(db, tenant_id, execution_id, flow, graph, current, entry, ctx, trace, caught, touched,
+                                      entity_type, record.id if record is not None else None)
+                event_bus.publish(db, execution_id, "flow.waiting", {"flow_id": flow.id, "node_id": current["id"], "run_id": run.id,
+                                                                     "wait": run.wait_kind})
+                return {**summary("waiting"), "run_id": run.id}
             error_edge = next((e for e in outgoing if e.get("label") == "error"), None)
             attempts = retries_of(current) + 1
             err: flow_errors.FlowError | None = None

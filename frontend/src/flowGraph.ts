@@ -4,6 +4,7 @@ const NODE_LABELS: Record<string, string> = {
   start: "Start", end: "End", condition: "Condition", ai_decision: "AI Decision",
   set_field: "Set Field", transition: "Change State", assign: "Assign",
   notify: "Notify", reject: "Reject", action: "Run an action",
+  wait: "Wait", wait_approval: "Wait for approval",
 };
 
 /** Older generated flows may omit presentation metadata. Preserve their logic. */

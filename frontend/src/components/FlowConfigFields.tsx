@@ -259,6 +259,11 @@ const KEY_LABELS: Record<string, string> = {
   code: "Error code",
   category: "Kind of error",
   retries: "Retry if it hits an unexpected error",
+  amount: "Wait for",
+  unit: "Unit",
+  approver: "Who approves",
+  subject: "What they're asked",
+  expire_days: "Expires after (days) - then it goes down 'expired'",
 };
 
 /** A Catch errors step's filter: error codes and categories, kept as "A, B, validation". */
@@ -448,6 +453,26 @@ export default function NodeConfigFields({
             options={["1", "2", "3"].map((n) => ({ value: n, label: `up to ${n} more time${n === "1" ? "" : "s"} (only unexpected/system errors)` }))}
           />
         );
+      case "amount":
+        return <input type="number" min={1} value={value} onChange={(e) => set(key, e.target.value.replace(/\D/g, ""))} placeholder="e.g. 2" className={INPUT} />;
+      case "unit":
+        return <Select value={value} blank="choose…" onChange={(v) => set(key, v)} options={["minutes", "hours", "days"].map((u) => ({ value: u, label: u }))} />;
+      case "approver":
+        return (
+          <Select
+            value={value}
+            blank="choose a user or a position…"
+            onChange={(v) => set(key, v)}
+            options={[
+              ...(catalog?.positions ?? []).map((p) => ({ value: p, label: `${p} (anyone in the position)` })),
+              ...(catalog?.users ?? []).map((u) => ({ value: u.email, label: `${u.name} - ${u.email}` })),
+            ]}
+          />
+        );
+      case "subject":
+        return <TemplateInput value={value} catalog={catalog} placeholder="e.g. Approve the discount on quote {{record.id}}" onChange={(v) => set(key, v)} />;
+      case "expire_days":
+        return <input type="number" min={1} max={365} value={value} onChange={(e) => set(key, e.target.value.replace(/\D/g, ""))} placeholder="blank = it waits until someone decides" className={INPUT} />;
       case "message":
       case "question":
         return <TemplateInput value={value} catalog={catalog} placeholder={key === "question" ? "e.g. Is {{record.discount_justification}} a credible reason?" : "supports {{record.id}}"} onChange={(v) => set(key, v)} />;

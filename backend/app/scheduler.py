@@ -1,5 +1,5 @@
 """Background jobs: inventory sync, inventory reservation expiry, training
-reminders and the audit chain, every minute.
+reminders, Flow Studio waits and the audit chain, every minute.
 
 Exactly one process may run them. Under gunicorn every worker runs the app's
 lifespan, so with N workers each job used to run N times a minute. Now
@@ -46,6 +46,13 @@ def _training() -> None:
     run_due_training(SessionLocal)
 
 
+def _flow_runs() -> None:
+    # Flow Studio waits whose time has come, and approval requests past their expiry
+    from app.orchestration import flow_runs
+
+    flow_runs.run_due(SessionLocal)
+
+
 def _audit_chain() -> None:
     # finished intent runs and training audit entries into the tamper-evident chain
     from app.crm_core import audit_chain
@@ -58,6 +65,7 @@ JOBS = (
     ("Inventory scheduler", _inventory_sync),
     ("Inventory reservation expiry", _reservation_expiry),
     ("Training scheduler", _training),
+    ("Flow waits", _flow_runs),
     ("Audit chain", _audit_chain),
 )
 

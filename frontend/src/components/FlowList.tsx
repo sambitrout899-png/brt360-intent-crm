@@ -15,10 +15,11 @@ const KINDS: [Kind, string][] = [
 ];
 const STEP_ICON: Record<string, string> = {
   condition: "◇", ai_decision: "🧠", set_field: "✎", transition: "➜", assign: "👤", notify: "🔔", reject: "⛔", action: "⚡",
+  wait: "⏳", wait_approval: "✋",
 };
 const STEP_WORD: Record<string, string> = {
   condition: "check", ai_decision: "AI decision", set_field: "set field", transition: "change stage", assign: "assign", notify: "notify",
-  reject: "reject", action: "run action",
+  reject: "reject", action: "run action", wait: "wait", wait_approval: "approval",
 };
 const FILTERS_KEY = "brt360.flowlist";
 

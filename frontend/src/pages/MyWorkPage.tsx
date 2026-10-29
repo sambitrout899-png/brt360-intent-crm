@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { approvalRuleOptions, approvalsWaiting, myApprovals, myWork, routeApproval, submitStructuredIntent } from "../api/client";
+import FlowApprovals from "../components/FlowApprovals";
 import { ENTITY_LABELS } from "../api/types";
 import type { ApprovalRequest, EntityType, MyWorkItem } from "../api/types";
 import { humanizeCodes } from "../intentLabels";
@@ -104,6 +105,8 @@ export default function MyWorkPage() {
           Refresh
         </button>
       </div>
+
+      <FlowApprovals />
 
       {approvals.length > 0 && (
         <section className="space-y-2">

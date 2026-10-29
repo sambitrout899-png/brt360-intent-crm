@@ -2200,3 +2200,39 @@ export function resolveFulfillmentTask(taskId: number, action: "retry" | "skip" 
 export function postInventoryResponse(payload: { request_id: string; status: "completed" | "failed"; resources?: { type: string; identifier: string; kind?: string }[]; message?: string }): Promise<FulfillmentOrderView> {
   return request<FulfillmentOrderView>("/api/fulfillment/inventory/callback", { method: "POST", body: JSON.stringify(payload) });
 }
+
+// ---------------------------------------------------------------- waiting flow runs (Flow Studio: Wait, Wait for approval)
+
+export interface FlowRunView {
+  id: number;
+  flow_id: number;
+  flow_name: string;
+  status: string; // waiting | completed | handled | continued | rejected | failed | cancelled
+  wait: { kind: "timer"; until: string | null } | { kind: "approval"; approver: string; subject: string; expires: string | null };
+  entity_type: string | null;
+  entity_id: number | null;
+  subject: string;
+  message: string;
+  decision: string | null;
+  decision_note: string;
+  created_at: string;
+  decided_at: string | null;
+  error: { code: string; message: string } | null;
+}
+
+/** Approval requests flows are waiting on me for. */
+export function myFlowApprovals(): Promise<FlowRunView[]> {
+  return request<FlowRunView[]>("/api/flow-approvals", BACKGROUND);
+}
+
+export function decideFlowApproval(id: number, approve: boolean, note: string): Promise<FlowRunView> {
+  return request<FlowRunView>(`/api/flow-approvals/${id}/decide`, { method: "POST", body: JSON.stringify({ approve, note }) });
+}
+
+export function listFlowRuns(status = "waiting"): Promise<FlowRunView[]> {
+  return request<FlowRunView[]>(`/api/admin/flow-runs?status=${encodeURIComponent(status)}`);
+}
+
+export function cancelFlowRun(id: number): Promise<FlowRunView> {
+  return request<FlowRunView>(`/api/admin/flow-runs/${id}/cancel`, { method: "POST" });
+}

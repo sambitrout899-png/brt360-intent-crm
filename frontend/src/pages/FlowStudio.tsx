@@ -28,6 +28,7 @@ import type {
 } from "../api/types";
 import NodeConfigFields from "../components/FlowConfigFields";
 import FlowList from "../components/FlowList";
+import WaitingRuns from "../components/WaitingRuns";
 import { editableFlowGraph } from "../flowGraph";
 
 const INPUT = "mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200";
@@ -50,6 +51,8 @@ const NODE_COLORS: Record<string, string> = {
   map: "#c084fc",
   catch: "#f97316",
   throw: "#dc2626",
+  wait: "#eab308",
+  wait_approval: "#d946ef",
 };
 
 // how a step ended on the last simulation - painted on the canvas
@@ -655,6 +658,7 @@ export default function FlowStudioSection() {
       {!form && (
         <>
           {error && <p className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">{error}</p>}
+          <WaitingRuns />
           <FlowList
             flows={flows}
             intentLabels={intentLabels}

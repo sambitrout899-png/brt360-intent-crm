@@ -64,6 +64,7 @@ service.include(
     routes_admin.router,
     routes_tenants.router,
     routes_studio.router,
+    routes_studio.approvals_router,
     routes_org.router,
     routes_org.access_router,
     routes_c360.router,

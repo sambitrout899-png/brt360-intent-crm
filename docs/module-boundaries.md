@@ -108,6 +108,20 @@ token claims: the row is already loaded for the idle timeout, so claims would sa
 nothing here, and a licence change would take up to a session's 8 hours to apply.
 Claims become worth it when a gateway in front enforces licences without the database.
 
+**Phase 4: durable flow runs on our own engine** (decision 2026-10-29: Postgres,
+not Temporal; Temporal can still come later). Flow Studio gains two steps:
+**Wait** (minutes, hours or days) and **Wait for approval** (a user or a
+position; outputs approved, rejected and expired). A run that reaches one is
+saved in `flow_runs` (`app/orchestration/flow_runs.py`), in the same transaction
+as everything before it, along with the graph it started on. The worker continues
+waits whose time has come and expires approvals; an approver decides in My Work
+and the flow continues at once. The rest of a run commits or rolls back as one,
+and moves set off their state flows as during an intent. Only flows that run
+after something may wait (`flow_engine.can_wait`). Flow Studio lists paused runs
+and runs that failed after a wait, and an admin can cancel a waiting run. Steps
+after an approval can use `{{approval.decision}}`, `{{approval.note}}` and
+`{{approval.by}}`.
+
 **Not split yet: notifications.** `notification_adapter.send` only records a
 `notification.sent` event in the outbox; nothing delivers it, because no email
 or SMS provider is chosen. The notices bar (`/api/notices`) is a read of

@@ -372,6 +372,10 @@ def field_catalog(
         FieldDef("error.node", "node", "Error: step that failed", "text", "error", []),
         FieldDef("error.intent", "intent", "Error: action (intent) that failed", "text", "error", []),
         FieldDef("error.flow", "flow", "Error: flow it happened in", "text", "error", []),
+        # the answer to a Wait for approval step - on the steps after it (flow_runs.resume)
+        FieldDef("approval.decision", "decision", "Approval: decision", "picklist", "approval", ["approved", "rejected", "expired"]),
+        FieldDef("approval.note", "note", "Approval: approver's note", "text", "approval", []),
+        FieldDef("approval.by", "by", "Approval: who decided", "text", "approval", []),
     ])
 
     from app.orchestration import flow_parameters
@@ -432,8 +436,9 @@ class _Reviewer:
         aliases: dict[str, str] = {}
         for f in catalog["fields"]:  # record first: a bare key resolves to record at run time
             short_label = f["label"].removeprefix("Intent input: ").removeprefix("Intent result: ")
-            # error.* is reached only by its full path - a bare "message" or "code" is never the error's
-            names = (f["path"], f["path"].replace(".", "_")) if f["path"].startswith("error.") else \
+            # error.* and approval.* are reached only by their full path - a bare "message", "code"
+            # or "note" is never the error's or the approval's
+            names = (f["path"], f["path"].replace(".", "_")) if f["path"].startswith(("error.", "approval.")) else \
                 (f["path"], f["key"], f["label"], short_label, f["path"].replace(".", "_"))
             for alias in names:
                 aliases.setdefault(_norm(alias), f["path"])
@@ -484,7 +489,7 @@ class _Reviewer:
             return None
         path, auto, reason = self.resolve_field(raw)
         if path is None:
-            if raw.startswith(("steps.", "trigger.", "flow.", "error.")) or (raw.startswith("entities.") and self.custom_intent):
+            if raw.startswith(("steps.", "trigger.", "flow.", "error.", "approval.")) or (raw.startswith("entities.") and self.custom_intent):
                 return None  # a custom intent may carry any input its phrases capture
             self._issue(node, key, f"'{raw}' is not a field this flow can see - the condition would never match")
             return None
@@ -560,7 +565,7 @@ class _Reviewer:
             resolved, auto, _ = self.resolve_field(path)
             if resolved and resolved != path and auto:
                 replaced = replaced.replace("{{" + path + "}}", "{{" + resolved + "}}").replace("{{ " + path + " }}", "{{" + resolved + "}}")
-            elif resolved is None and not path.startswith(("entities.", "result.", "steps.", "trigger.", "flow.", "error.")):
+            elif resolved is None and not path.startswith(("entities.", "result.", "steps.", "trigger.", "flow.", "error.", "approval.")):
                 self._issue(node, key, f"'{{{{{path}}}}}' does not refer to a known field")
         if replaced != raw:
             self._fix(node, key, raw, replaced, "fixed field references")

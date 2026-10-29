@@ -10,7 +10,7 @@ import json
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app.auth import require_roles
+from app.auth import get_current_user, require_roles
 from app.crm_core import access_service, lifecycle_service
 from app.data_intelligence import audit
 from app.db import get_db
@@ -35,6 +35,7 @@ from app.schemas.studio import (
     AssignmentRuleOut,
     CustomFieldIn,
     CustomFieldOut,
+    FlowDecisionIn,
     FlowGenerateIn,
     FlowGenerateOut,
     FlowIn,
@@ -484,7 +485,7 @@ def _flow_out(db: Session, flow: FlowDefinition, corrections: list[dict] | None 
         version=flow.version,
         is_active=flow.is_active,
         intent_code=flow_engine.custom_intent_code(flow) if flow.trigger_type == "custom_intent" else None,
-        validation_errors=flow_engine.validate_graph(graph),
+        validation_errors=flow_engine.validate_graph(graph, flow),
         warnings=[f"{i['node']}: {i['message']}" for i in review["issues"]],
         corrections=corrections or [],
         updated_at=flow.updated_at,
@@ -621,7 +622,7 @@ def update_flow(flow_id: int, payload: FlowIn, db: Session = Depends(get_db), te
     flow = _owned_flow(db, tenant_id, flow_id)
     corrections = _apply_flow_payload(db, tenant_id, flow, payload)
     if flow.is_active:
-        errors = flow_engine.validate_graph(flow_engine.load_graph(flow))
+        errors = flow_engine.validate_graph(flow_engine.load_graph(flow), flow)
         if errors:
             raise HTTPException(400, f"Active flow would become invalid: {'; '.join(errors)} - deactivate it first to save a draft")
     flow.version += 1
@@ -633,7 +634,7 @@ def update_flow(flow_id: int, payload: FlowIn, db: Session = Depends(get_db), te
 @router.post("/flows/{flow_id}/activate", response_model=FlowOut)
 def activate_flow(flow_id: int, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> FlowOut:
     flow = _owned_flow(db, tenant_id, flow_id)
-    errors = flow_engine.validate_graph(flow_engine.load_graph(flow))
+    errors = flow_engine.validate_graph(flow_engine.load_graph(flow), flow)
     if errors:
         raise HTTPException(400, f"Cannot activate an invalid flow: {'; '.join(errors)}")
     flow.is_active = True
@@ -703,3 +704,65 @@ def simulate_flow(
         return FlowSimulateOut(ok=False, error=str(err), run=err.run, error_detail=err.as_dict())
     finally:
         db.rollback()
+
+
+# ---------- waiting flow runs (orchestration/flow_runs.py) ----------
+
+
+@router.get("/flow-runs")
+def list_flow_runs(status: str = "waiting", db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> list[dict]:
+    """Runs paused at a Wait or Wait for approval step - or, with status, how they ended."""
+    from app.models.flows import FlowRun
+    from app.orchestration import flow_runs
+
+    runs = db.query(FlowRun).filter(FlowRun.tenant_id == tenant_id, FlowRun.status == status).order_by(FlowRun.id.desc()).limit(200).all()
+    return [flow_runs.view(db, r) for r in runs]
+
+
+@router.post("/flow-runs/{run_id}/cancel")
+def cancel_flow_run(run_id: int, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id),
+                    user: User = Depends(get_current_user)) -> dict:
+    from app.models.flows import FlowRun
+    from app.orchestration import flow_runs
+
+    run = db.get(FlowRun, run_id)
+    if run is None or run.tenant_id != tenant_id:
+        raise HTTPException(404, "Flow run not found")
+    try:
+        flow_runs.cancel(db, run, user)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    db.commit()
+    return flow_runs.view(db, run)
+
+
+# Anyone signed in: the approval requests flows are waiting on them for (My Work).
+approvals_router = APIRouter(prefix="/api/flow-approvals", tags=["flow-approvals"])
+
+
+@approvals_router.get("")
+def my_flow_approvals(db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id),
+                      user: User = Depends(get_current_user)) -> list[dict]:
+    from app.orchestration import flow_runs
+
+    return [flow_runs.view(db, r) for r in flow_runs.approvals_for(db, tenant_id, user)]
+
+
+@approvals_router.post("/{run_id}/decide")
+def decide_flow_approval(run_id: int, payload: FlowDecisionIn, db: Session = Depends(get_db),
+                         tenant_id: int = Depends(get_current_tenant_id), user: User = Depends(get_current_user)) -> dict:
+    """Approve or reject: the flow continues at once, down that output."""
+    from app.models.flows import FlowRun
+    from app.orchestration import flow_runs
+
+    run = db.get(FlowRun, run_id)
+    if run is None or run.tenant_id != tenant_id:
+        raise HTTPException(404, "Approval request not found")
+    try:
+        flow_runs.decide(db, run, user, payload.approve, payload.note)
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    db.commit()
+    return flow_runs.view(db, run)

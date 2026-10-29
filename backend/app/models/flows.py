@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import datetime as dt
 
-from sqlalchemy import Boolean, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
@@ -63,5 +63,46 @@ class FlowDefinition(Base):
     on_error: Mapped[str] = mapped_column(String(10), default="fail", server_default="fail")
     version: Mapped[int] = mapped_column(Integer, default=1)
     is_active: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[dt.datetime] = mapped_column(default=utcnow)
+    updated_at: Mapped[dt.datetime] = mapped_column(default=utcnow, onupdate=utcnow)
+
+
+# where a paused run is: waiting; and how it ended once it continued
+FLOW_RUN_STATUSES = ("waiting", "completed", "handled", "continued", "rejected", "failed", "cancelled")
+
+
+class FlowRun(Base):
+    """A flow run paused at a Wait or Wait for approval step
+    (orchestration/flow_runs.py). Everything up to the step committed with
+    the intent that started the flow; the rest runs when the time comes (the
+    worker) or the approver decides, in its own transaction. The run keeps
+    the graph it started with, so editing the flow meanwhile doesn't move a
+    waiting run onto steps it never had."""
+
+    __tablename__ = "flow_runs"
+    __table_args__ = (Index("ix_flow_runs_status_resume_at", "status", "resume_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id"))
+    flow_id: Mapped[int] = mapped_column(ForeignKey("flow_definitions.id"))
+    execution_id: Mapped[int] = mapped_column(Integer)  # the intent run that started the flow
+    entity_type: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    entity_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="waiting")
+    node_id: Mapped[str] = mapped_column(String(60))  # the step it waits at
+    wait_kind: Mapped[str] = mapped_column(String(20))  # timer | approval
+    # timer: when it continues; approval: when it expires (None = never)
+    resume_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    approver_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    approver_position_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    subject: Mapped[str] = mapped_column(String(300), default="")
+    message: Mapped[str] = mapped_column(Text, default="")
+    decision: Mapped[str | None] = mapped_column(String(20), nullable=True)  # approved | rejected | expired
+    decided_by: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    decided_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    decision_note: Mapped[str] = mapped_column(Text, default="")
+    graph_json: Mapped[str] = mapped_column(Text)
+    state_json: Mapped[str] = mapped_column(Text)  # the run's context, trace and errors so far
+    outcome_json: Mapped[str | None] = mapped_column(Text, nullable=True)  # how the rest went
     created_at: Mapped[dt.datetime] = mapped_column(default=utcnow)
     updated_at: Mapped[dt.datetime] = mapped_column(default=utcnow, onupdate=utcnow)
