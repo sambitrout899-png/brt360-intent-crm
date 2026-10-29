@@ -11,7 +11,7 @@ import type {
   C360View,
   CustomerNetwork,
 } from "./c360Types";
-import type { FunctionMap, MapChange, MapDraft, MapPlan, MapVersions } from "./functionMapTypes";
+import type { FunctionMap, MapChange, MapDraft, MapPlan, MapSimulation, MapVersions } from "./functionMapTypes";
 import type { Conflict, ConflictCondition, ConflictList, ScratchDraft } from "./conflictTypes";
 import type { FulfillmentCatalog, FulfillmentDraft, FulfillmentOrderSummary, FulfillmentOrderView, FulfillmentPattern, FulfillmentPatternInput, FulfillmentPreview } from "./types";
 import type {
@@ -19,8 +19,10 @@ import type {
   AgentRun,
   AgentStep,
   ProcessBlueprint,
+  BrdRead,
   ProcessBuild,
   ProcessInput,
+  ProcessPlacement,
   AssistantJournalEntry,
   AssistantUnderstanding,
   AccessPolicy,
@@ -460,6 +462,11 @@ export function functionMapPlanActivation(id: number | "original"): Promise<MapP
   return request<MapPlan>(`/api/admin/function-map/${path}/plan`, { method: "POST" });
 }
 
+/** The version played through - its staged processes built, their flows run on sample records - then rolled back. */
+export function functionMapSimulate(id: number): Promise<MapSimulation> {
+  return request<MapSimulation>(`/api/admin/function-map/versions/${id}/simulate`, { method: "POST" });
+}
+
 export function functionMapActivate(id: number | "original"): Promise<{ applied: MapChange[]; problems: MapPlan["problems"]; map: FunctionMap } & MapVersions> {
   const path = id === "original" ? "original" : `versions/${id}`;
   return request(`/api/admin/function-map/${path}/activate`, { method: "POST" });
@@ -502,8 +509,38 @@ export function processDesign(input: ProcessInput): Promise<ProcessBlueprint> {
   return request<ProcessBlueprint>("/api/process-builder/design", { method: "POST", body: JSON.stringify(input) });
 }
 
-export function processBuild(input: ProcessInput, mode: "rehearse" | "execute"): Promise<ProcessBuild> {
-  return request<ProcessBuild>("/api/process-builder/build", { method: "POST", body: JSON.stringify({ ...input, mode }) });
+/** execute goes live through the Functional Map: a new version of the map in use, with the process placed in it, activated. */
+export function processBuild(input: ProcessInput, mode: "rehearse" | "simulate" | "execute", placement?: ProcessPlacement): Promise<ProcessBuild> {
+  return request<ProcessBuild>("/api/process-builder/build", { method: "POST", body: JSON.stringify({ ...input, mode, placement }) });
+}
+
+/** Puts the designed process into a draft version of the map (a new one from the map in use, or versionId) - nothing is built yet. */
+export function processStage(input: ProcessInput, placement: ProcessPlacement, versionId?: number): Promise<FunctionMap> {
+  return request<FunctionMap>("/api/process-builder/stage", { method: "POST", body: JSON.stringify({ ...input, placement, version_id: versionId }) });
+}
+
+export function processPlacements(): Promise<{ processes: { key: string; label: string; steps: number; tenant: boolean }[] }> {
+  return request("/api/process-builder/placements");
+}
+
+/** A BRD (.docx, .txt, .md) read into the builder's request - nothing is designed or saved. */
+export async function processReadBrd(file: File): Promise<BrdRead> {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return request<BrdRead>("/api/process-builder/brd", { method: "POST", body: JSON.stringify({ filename: file.name, content_base64: btoa(binary) }) });
+}
+
+export async function downloadBrdTemplate(): Promise<void> {
+  const token = getAccessToken();
+  const res = await fetch(`${API_BASE}/api/process-builder/brd-template`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+  if (!res.ok) throw new Error(`${res.status}: ${await res.text().catch(() => "")}`);
+  const url = URL.createObjectURL(await res.blob());
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "BRT360-process-BRD-template.docx";
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 export function assistIntent(text: string, context?: IntentContext, signal?: AbortSignal): Promise<IntentAssist> {

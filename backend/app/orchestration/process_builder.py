@@ -26,10 +26,15 @@ are the request's own.
 
 build() creates every component in one transaction (all or nothing) with
 the same service functions the admin screens use. "rehearse" rolls back
-and reports exactly what would be created; "execute" commits, logs it in
-the audit trail, then proves each piece is live: the approval rule is the
-one the engine now resolves, the page carries the change, and each flow
-is test-run on a recent record of its type (rolled back - nothing kept).
+and reports exactly what would be created; "simulate" also plays every flow
+through on a recent record of its type before rolling back. "execute" goes
+through the Functional Map: the process is staged into a new version of the
+map in use (a new process, or appended to one) and that version activated -
+activation creates the pieces, logs them in the audit trail, commits with
+the map, then proves each piece is live: the approval rule is the one the
+engine now resolves, the page carries the change, and each flow is test-run
+on a recent record of its type (rolled back - nothing kept). Retiring the
+version switches its flows, approvals and assignments off again.
 """
 
 from __future__ import annotations
@@ -1175,8 +1180,75 @@ def _create(db: Session, tenant_id: int, c: dict[str, Any], process_name: str) -
     raise ValueError(f"Unknown component kind {c['kind']}")
 
 
-def _verify(db: Session, tenant_id: int, blueprint: dict[str, Any], made: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Proves each piece is live - after the commit; test runs roll back."""
+def create_all(db: Session, tenant_id: int, blueprint: dict[str, Any]) -> list[dict[str, Any]]:
+    """Creates every component of a ready blueprint in the open transaction -
+    nothing is committed; the caller keeps it (activation) or rolls it back
+    (rehearsal, simulation)."""
+    made: list[dict[str, Any]] = []
+    # Create journey flows before wiring their IDs into page buttons.
+    for c in sorted(blueprint["components"], key=lambda c: c["kind"] == "page"):
+        if c["kind"] == "page":
+            for op in c["spec"]["ops"]:
+                if op.get("flow_component"):
+                    op["intent"] = "FLOW-" + str(next(m["id"] for m in made if m["component"] == op["flow_component"]))
+        made.append(_create(db, tenant_id, c, blueprint["name"]))
+    db.flush()
+    return made
+
+
+def switch(db: Session, tenant_id: int, made: list[dict[str, Any]], on: bool) -> int:
+    """Switches a build's flows, approval rules and assignment rules on or off
+    (its map version activated / retired). Page and field changes stay - they
+    hold data. How many pieces changed."""
+    from app.models.approval import ApprovalChainTemplate
+    from app.models.flows import FlowDefinition
+
+    models = {"flow": FlowDefinition, "approval": ApprovalChainTemplate, "assignment": AssignmentRule}
+    changed = 0
+    for m in made:
+        model = models.get(m.get("kind"))
+        row = db.get(model, m["id"]) if model is not None else None
+        if row is not None and row.tenant_id == tenant_id and bool(row.is_active) != on:
+            row.is_active = on
+            changed += 1
+    db.flush()
+    return changed
+
+
+def process_steps(blueprint: dict[str, Any], made: list[dict[str, Any]] | None = None) -> list[str]:
+    """The function points a built process takes part in, for the Functional
+    Map: the actions its flows start on and run, then (once built) the
+    process's own flows people start by name."""
+    codes: list[str] = []
+    for c in blueprint.get("components", []):
+        if c["kind"] != "flow":
+            continue
+        trigger = c["spec"].get("trigger") or {}
+        if trigger.get("trigger_intent_type"):
+            codes.append(trigger["trigger_intent_type"])
+        for n in (c["spec"].get("graph") or {}).get("nodes", []):
+            intent = (n.get("config") or {}).get("intent") if n.get("type") == "action" else None
+            if intent:
+                codes.append(str(intent))
+    for m in made or []:
+        c = next((x for x in blueprint.get("components", []) if x["id"] == m["component"]), None)
+        if m["kind"] == "flow" and c and (c["spec"].get("trigger") or {}).get("trigger_type") == "custom_intent":
+            codes.append(f"FLOW-{m['id']}")
+    return list(dict.fromkeys(codes))
+
+
+def _verify(db: Session, tenant_id: int, blueprint: dict[str, Any], made: list[dict[str, Any]], keep_open: bool = False) -> list[dict[str, Any]]:
+    """Proves each piece is live - after the commit; test runs roll back.
+    keep_open (simulation): the pieces are not committed yet, so each flow's
+    test run stays in the open transaction - the caller rolls it all back."""
+    checks = _checks(db, tenant_id, blueprint, made, keep_open)
+    if keep_open:  # nothing is live in a simulation - it is played through
+        for c in checks:
+            c["message"] = re.sub(r"^Live\b", "Simulated", c["message"]).replace(", nothing kept", "")
+    return checks
+
+
+def _checks(db: Session, tenant_id: int, blueprint: dict[str, Any], made: list[dict[str, Any]], keep_open: bool) -> list[dict[str, Any]]:
     from app.crm_core import page_service
     from app.data_intelligence import audit
     from app.models.flows import FlowDefinition
@@ -1216,6 +1288,7 @@ def _verify(db: Session, tenant_id: int, blueprint: dict[str, Any], made: list[d
             ctx: dict[str, Any] = {"entities": {}, "result": {}}
             if sample is not None:
                 ctx.update(entity_type=flow.entity_type, entity_id=sample.id)
+            savepoint = db.begin_nested() if keep_open else None  # a failed run undoes only itself
             try:
                 if spec.get("journey"):
                     from app.crm_core import record_service
@@ -1229,19 +1302,52 @@ def _verify(db: Session, tenant_id: int, blueprint: dict[str, Any], made: list[d
                 run = flow_engine.run_flow(db, tenant_id, log.id, flow, ctx)
                 steps = len((run or {}).get("trace") or (run or {}).get("steps") or [])
                 on = f" on {RECORD_WORDS.get(flow.entity_type or '', flow.entity_type)} #{sample.id}" if sample is not None else ""
-                checks.append({"component": c["id"], "ok": True, "message": f"Live - test run{on} passed{f' ({steps} steps)' if steps else ''}, nothing kept"})
+                checks.append({"component": c["id"], "ok": True, "message": f"Live - test run{on} passed{f' ({steps} steps)' if steps else ''}, nothing kept",
+                               "trace": [{"type": t.get("type"), "label": t.get("label") or t.get("intent") or t.get("type"),
+                                          "ok": not t.get("error"), "skipped": bool(t.get("skipped"))}
+                                         for t in ((run or {}).get("trace") or [])][:30]})
+                if savepoint is not None:
+                    savepoint.commit()
             except Exception as exc:  # noqa: BLE001 - report it, the flow stays as built
+                if savepoint is not None and savepoint.is_active:
+                    savepoint.rollback()
                 checks.append({"component": c["id"], "ok": False, "message": f"Live, but a test run{' on a sample record' if sample else ''} stopped: {exc}"})
             finally:
-                db.rollback()
+                if savepoint is not None and savepoint.is_active:
+                    savepoint.rollback()
+                if not keep_open:
+                    db.rollback()
     return checks
 
 
-def build(db: Session, tenant_id: int, request: str, steps: list[dict[str, str]], answers: dict[str, Any] | None, graphs: dict[str, Any] | None,
-          mode: str, name: str | None = None) -> dict[str, Any]:
-    """rehearse: everything is created, reported, rolled back. execute:
-    created together (all or nothing), committed, verified."""
+def record_build(db: Session, tenant_id: int, blueprint: dict[str, Any], made: list[dict[str, Any]]) -> None:
+    """The audit trail of a build - in the open transaction, kept with it."""
     from app.data_intelligence import audit
+
+    log = audit.start_execution(db, tenant_id, f"[process builder] {blueprint['name']}: {blueprint['request']}"[:4000], channel="agent")
+    by_id = {c["id"]: c for c in blueprint["components"]}
+    audit.record_plan(log, [{"engine": by_id[m["component"]]["engine"], "title": by_id[m["component"]]["title"], "made": m} for m in made])
+    audit.complete(log, "executed")
+
+
+def after_build(db: Session, tenant_id: int, blueprint: dict[str, Any], made: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int | None]:
+    """After the commit: each piece proved live (test runs roll back) and, when
+    all pass, the process kept in the tenant's process memory. (checks, memory id)"""
+    from app.orchestration import process_memory
+
+    checks = _verify(db, tenant_id, blueprint, made)
+    memory_id = process_memory.remember(db, tenant_id, blueprint, blueprint.get("answers")) if checks and all(c["ok"] for c in checks) else None
+    return checks, memory_id
+
+
+def build(db: Session, tenant_id: int, request: str, steps: list[dict[str, str]], answers: dict[str, Any] | None, graphs: dict[str, Any] | None,
+          mode: str, name: str | None = None, user_id: int | None = None, placement: dict[str, Any] | None = None) -> dict[str, Any]:
+    """rehearse: everything is created, reported, rolled back. simulate: the
+    same, and each flow is also run end to end on a sample record before the
+    rollback - the new scenario played through, nothing kept. execute: through
+    the Functional Map - the process goes into a new version of the map in
+    use (placement: a new process or appended to one) and that version is
+    activated: built together (all or nothing), committed, verified."""
     from app.orchestration import rehearsal
 
     blueprint = design(db, tenant_id, request, answers, steps=steps, graphs=graphs, name=name)
@@ -1250,31 +1356,33 @@ def build(db: Session, tenant_id: int, request: str, steps: list[dict[str, str]]
     if not blueprint["components"]:
         return {"status": "nothing", "blueprint": blueprint, "made": [], "checks": [], "impact": None,
                 "message": "Nothing here can be built with the engines" + (" - see the engineering changes" if blueprint["engineering"] else "")}
-    made: list[dict[str, Any]] = []
+    if mode == "execute":
+        from app.orchestration import function_map
+
+        spec = {"request": request, "steps": blueprint["steps"], "answers": blueprint.get("answers"), "name": blueprint["name"],
+                "graphs": {**{c["id"]: c["spec"]["graph"] for c in blueprint["components"] if c["kind"] == "flow"}, **(graphs or {})}}
+        try:
+            staged = function_map.stage(db, tenant_id, user_id, spec, placement)
+            out = function_map.activate(db, tenant_id, staged["version"]["id"], user_id)
+        except Exception as exc:  # noqa: BLE001 - nothing is kept when any piece fails
+            db.rollback()
+            return {"status": "failed", "blueprint": blueprint, "made": [], "checks": [], "impact": None, "message": str(exc)}
+        done = out["built"][0] if out.get("built") else {"made": [], "checks": [], "impact": None, "memory_id": None}
+        return {"status": "built", "blueprint": done.get("blueprint") or blueprint, "made": done["made"], "checks": done["checks"],
+                "impact": done["impact"], "memory_id": done["memory_id"], "version": staged["version"]}
+    checks: list[dict[str, Any]] = []
+    collected: dict[str, Any] = {}
     try:
         with rehearsal.capture(db) as rows:
-            # Create journey flows before wiring their IDs into page buttons.
-            components = sorted(blueprint["components"], key=lambda c: c["kind"] == "page")
-            for c in components:
-                if c["kind"] == "page":
-                    for op in c["spec"]["ops"]:
-                        if op.get("flow_component"):
-                            op["intent"] = "FLOW-" + str(next(m["id"] for m in made if m["component"] == op["flow_component"]))
-                made.append(_create(db, tenant_id, c, blueprint["name"]))
+            made = create_all(db, tenant_id, blueprint)
+            if mode == "simulate":
+                checks = _verify(db, tenant_id, blueprint, made, keep_open=True)
+                traces = {k["component"]: k.get("trace") or [] for k in checks}
+                collected["flows_run"] = [{"flow_name": m["name"], "trace": traces.get(m["component"], [])} for m in made if m["kind"] == "flow"]
             db.flush()
-        impact = rehearsal.summarize(db, rows, {})
+        impact = rehearsal.summarize(db, rows, collected)
     except Exception as exc:  # noqa: BLE001 - nothing is kept when any piece fails
         db.rollback()
         return {"status": "failed", "blueprint": blueprint, "made": [], "checks": [], "impact": None, "message": str(exc)}
-    if mode != "execute":
-        db.rollback()
-        return {"status": "rehearsed", "blueprint": blueprint, "made": made, "checks": [], "impact": impact}
-    log = audit.start_execution(db, tenant_id, f"[process builder] {blueprint['name']}: {request}"[:4000], channel="agent")
-    by_id = {c["id"]: c for c in blueprint["components"]}
-    audit.record_plan(log, [{"engine": by_id[m["component"]]["engine"], "title": by_id[m["component"]]["title"], "made": m} for m in made])
-    audit.complete(log, "executed")
-    db.commit()
-    checks = _verify(db, tenant_id, blueprint, made)
-    from app.orchestration import process_memory
-    memory_id = process_memory.remember(db, tenant_id, blueprint, blueprint.get("answers")) if checks and all(c["ok"] for c in checks) else None
-    return {"status": "built", "blueprint": blueprint, "made": made, "checks": checks, "impact": impact, "memory_id": memory_id}
+    db.rollback()
+    return {"status": "simulated" if mode == "simulate" else "rehearsed", "blueprint": blueprint, "made": made, "checks": checks, "impact": impact}

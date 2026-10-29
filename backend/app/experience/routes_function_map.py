@@ -89,6 +89,16 @@ def plan_version(version_id: int, db: Session = Depends(get_db), tenant_id: int 
     return _run(function_map.plan_activation, db, tenant_id, version_id)
 
 
+@router.post("/versions/{version_id}/simulate")
+def simulate_version(version_id: int, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> dict[str, Any]:
+    """The version played through - its processes built and their flows run on
+    sample records - then everything rolled back."""
+    from app.crm_core import llm
+
+    with llm.budget(45.0):
+        return _run(function_map.simulate, db, tenant_id, version_id)
+
+
 @router.post("/versions/{version_id}/activate")
 def activate_version(version_id: int, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id),
                      user: User = Depends(get_current_user)) -> dict[str, Any]:

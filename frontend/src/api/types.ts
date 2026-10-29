@@ -241,6 +241,23 @@ export interface ProcessInput {
   graphs?: Record<string, unknown>;
 }
 
+/** Where a new process goes on the Functional Map: a process of its own, or added to one of the map's. */
+export interface ProcessPlacement {
+  mode: "new" | "append";
+  label?: string | null;
+  process_key?: string | null;
+}
+
+/** A BRD read into the builder's request (backend: orchestration/process_brd.py). */
+export interface BrdRead {
+  request: string;
+  name: string | null;
+  placement: ProcessPlacement | null;
+  /** written on the BRT 360 template - its sections became the builder's sentences */
+  template: boolean;
+  truncated?: boolean;
+}
+
 export interface ProcessComponent {
   id: string;
   kind: "approval" | "flow" | "page" | "assignment";
@@ -295,12 +312,15 @@ export interface ProcessBlueprint {
 
 export interface ProcessBuild {
   memory_id?: number | null;
-  status: "rehearsed" | "built" | "needs_input" | "nothing" | "failed";
+  status: "rehearsed" | "simulated" | "built" | "needs_input" | "nothing" | "failed";
   message?: string;
   blueprint: ProcessBlueprint;
   made: { component: string; kind: string; id: number | string; name: string; where: string; active?: boolean }[];
-  checks: { component: string; ok: boolean; message: string }[];
+  /** trace: a flow's steps as the simulation (or the test run) played them */
+  checks: { component: string; ok: boolean; message: string; trace?: { type: string; label: string; ok: boolean; skipped: boolean }[] }[];
   impact: RehearsalImpact | null;
+  /** the Functional Map version it went live in (execute) */
+  version?: { id: number; number: number; name: string };
 }
 
 // ---------- intent catalog / command bar copilot ----------

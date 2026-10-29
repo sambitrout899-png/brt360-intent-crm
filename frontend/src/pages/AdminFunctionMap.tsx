@@ -6,10 +6,11 @@ import {
   functionMapNewVersion,
   functionMapPlanActivation,
   functionMapSaveVersion,
+  functionMapSimulate,
   functionMapVanilla,
   functionMapVersion,
 } from "../api/client";
-import type { FunctionMap, MapChange, MapDraft, MapEdge, MapNode, MapPlan, MapVersion, MapVersions } from "../api/functionMapTypes";
+import type { FunctionMap, MapChange, MapDraft, MapEdge, MapNode, MapPlan, MapSimulation, MapVersion, MapVersions } from "../api/functionMapTypes";
 import ConditionEditor from "./functionMap/ConditionEditor";
 import MiniMap from "./functionMap/MiniMap";
 import Navigator from "./functionMap/Navigator";
@@ -80,6 +81,7 @@ export default function AdminFunctionMap({ onOpenFlowStudio, onOpenIntents }: { 
   const [showing, setShowing] = useState<Showing>("active");
   const [versions, setVersions] = useState<MapVersions | null>(null);
   const [planFor, setPlanFor] = useState<number | "original" | null>(null);
+  const [simulation, setSimulation] = useState<MapSimulation | null>(null);
   const [vanilla, setVanilla] = useState<FunctionMap | null>(null);
   const [mine, setMine] = useState<FunctionMap | null>(null);
   const [nodes, setNodes] = useState<MapNode[]>([]);
@@ -577,6 +579,18 @@ export default function AdminFunctionMap({ onOpenFlowStudio, onOpenIntents }: { 
     }
   }
 
+  /** The version's processes built and played through, then rolled back (a draft is saved first). */
+  async function simulate() {
+    if (typeof showing !== "number") return;
+    if (dirty) {
+      const saved = await work(() => functionMapSaveVersion(showing, toDraft(nodes, edges)), "Saving the draft failed");
+      if (!saved) return;
+      load(saved);
+    }
+    const out = await work(() => functionMapSimulate(showing), "The simulation didn't run");
+    if (out) setSimulation(out);
+  }
+
   /** Shows what activating would change (a draft is saved first). */
   async function review(target: number | "original") {
     if (dirty && typeof showing === "number") {
@@ -762,6 +776,11 @@ export default function AdminFunctionMap({ onOpenFlowStudio, onOpenIntents }: { 
                 <button onClick={removeVersion} disabled={busy} className={`${btn} hover:border-red-500/60 hover:text-red-300`}>
                   Delete
                 </button>
+                {(mine?.builds ?? []).some((b) => b.status === "pending") && (
+                  <button onClick={simulate} disabled={busy} className={`${btn} border-violet-500/40 text-violet-200 hover:border-violet-400`}>
+                    ▶ Simulate
+                  </button>
+                )}
                 <button
                   onClick={() => review(version.id)}
                   disabled={busy}
@@ -774,6 +793,27 @@ export default function AdminFunctionMap({ onOpenFlowStudio, onOpenIntents }: { 
           </>
         )}
       </div>
+      {version && (mine?.builds ?? []).length > 0 && (
+        <div className="rounded-lg border border-emerald-500/25 bg-emerald-500/[0.06] px-3 py-2 text-xs text-slate-300">
+          <p className="font-semibold text-emerald-200">Processes in this version (from the Process Builder)</p>
+          <ul className="mt-1 space-y-1">
+            {mine!.builds!.map((b) => (
+              <li key={b.id} className="flex flex-wrap items-baseline gap-x-2">
+                <span className={`rounded-full px-1.5 text-[10px] font-semibold ${b.status === "built" ? "bg-emerald-500/20 text-emerald-200" : "bg-amber-500/20 text-amber-200"}`}>
+                  {b.status === "built" ? "Built" : "Built on activation"}
+                </span>
+                <span className="font-medium text-slate-100">{b.name}</span>
+                <span className="text-slate-500">
+                  {b.placement?.mode === "append"
+                    ? `added to ${map?.processes.find((p) => p.key === b.placement?.process_key)?.label ?? "a process"}`
+                    : `a new process “${b.placement?.label ?? b.name}”`}{" "}
+                  · {b.pieces.map((p) => p.title).join(" · ")}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       {(mine?.release_notes ?? []).length > 0 && !isOriginal && (
         <div className="rounded-lg border border-sky-500/30 bg-sky-500/10 px-3 py-2 text-xs text-sky-100">
           <p className="font-semibold">BRT has released changes since this version was saved - they are already in it:</p>
@@ -1276,6 +1316,57 @@ export default function AdminFunctionMap({ onOpenFlowStudio, onOpenIntents }: { 
         </div>
       </div>
 
+      {/* ---------- simulation ---------- */}
+      {simulation && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4" onClick={() => setSimulation(null)}>
+          <div className="max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-slate-700 bg-slate-900 p-5 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-base font-semibold text-slate-100">{simulation.ok ? "✓ The simulation passed" : "The simulation found something to look at"}</h3>
+            <p className="mt-1 text-xs text-slate-400">
+              Every process in this version was built and its automations played through on recent records - then everything was rolled back. Nothing was
+              kept. {simulation.impact?.headline ?? ""}
+            </p>
+            {simulation.builds.map((b) => (
+              <section key={b.name} className="mt-4">
+                <h4 className="text-sm font-semibold text-slate-100">
+                  {b.ok ? "✓" : "⚠"} {b.name}
+                </h4>
+                {b.message && <p className="text-xs text-amber-300">{b.message}</p>}
+                <ul className="mt-1.5 space-y-1.5">
+                  {b.checks.map((c) => (
+                    <li key={c.component} className={`rounded-lg border px-3 py-2 text-xs ${c.ok ? "border-slate-800 bg-slate-950/60 text-slate-200" : "border-amber-500/30 bg-amber-500/10 text-amber-200"}`}>
+                      <span className="font-medium">{c.title}</span> - {c.message}
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            ))}
+            {simulation.plan.problems.length > 0 && (
+              <ul className="mt-4 list-disc space-y-1 pl-5 text-xs text-amber-200">
+                {simulation.plan.problems.map((p, i) => (
+                  <li key={i}>{p.text}</li>
+                ))}
+              </ul>
+            )}
+            <div className="mt-5 flex justify-end gap-2">
+              <button onClick={() => setSimulation(null)} className="rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-300 hover:border-slate-500">
+                Close
+              </button>
+              {typeof showing === "number" && simulation.ok && (
+                <button
+                  onClick={() => {
+                    setSimulation(null);
+                    void review(showing);
+                  }}
+                  className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500"
+                >
+                  Activate…
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ---------- consent ---------- */}
       {plan && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4" onClick={() => !busy && setPlan(null)}>
@@ -1302,6 +1393,13 @@ export default function AdminFunctionMap({ onOpenFlowStudio, onOpenIntents }: { 
                     <li key={i} className="rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2 text-sm text-slate-200">
                       {c.text}
                       {c.warning && <p className="mt-1 text-xs text-amber-300">⚠ {c.warning}</p>}
+                      {(c.pieces ?? []).length > 0 && (
+                        <ul className="mt-1 list-disc pl-5 text-xs text-slate-400">
+                          {c.pieces!.map((p) => (
+                            <li key={p}>{p}</li>
+                          ))}
+                        </ul>
+                      )}
                     </li>
                   ))}
                 </ul>

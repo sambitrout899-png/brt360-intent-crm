@@ -147,7 +147,7 @@ export default function AskBox({
 
 // "set up / automate a ... process", "X needs approval from Y", "whenever X, notify Y" - configuring, not doing
 const PROCESS =
-  /\b(?:set\s*up|setup|create|build|design|define|configure|automate|introduce|implement)\b[^.]{0,60}\b(?:process|workflow|approval\s+(?:rule|process|chain|matrix|flow)|automation|journey)\b|\bneeds?\s+(?:\w+\s+){0,4}?approval\s+(?:from|by)\b|\bmust\s+be\s+approved\s+by\b|\b(?:whenever|every\s+time)\b[^.]{0,80}\b(?:notify|assign|alert|email|inform)\b/i;
+  /\b(?:set\s*up|setup|create|build|design|define|configure|automate|introduce|implement|need|want|require)\b[^.]{0,60}\b(?:process|workflow|approval\s+(?:rule|process|chain|matrix|flow)|automation|journey)\b|\bneeds?\s+(?:\w+\s+){0,4}?approval\s+(?:from|by)\b|\bmust\s+be\s+approved\s+by\b|\b(?:whenever|every\s+time)\b[^.]{0,80}\b(?:notify|assign|alert|email|inform)\b/i;
 
 const STOP = new Set(["a", "an", "the", "to", "for", "of", "on", "in", "and", "or", "with", "this", "that", "it", "is", "my", "me", "i", "please", "new"]);
 

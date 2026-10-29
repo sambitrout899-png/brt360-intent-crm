@@ -8,6 +8,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -39,8 +40,25 @@ class DesignIn(BaseModel):
     graphs: dict[str, Any] = {}
 
 
+class Placement(BaseModel):
+    mode: str = "new"  # new: a process of its own on the map | append: added to an existing process
+    label: str | None = Field(default=None, max_length=120)
+    process_key: str | None = Field(default=None, max_length=80)
+
+
 class BuildIn(DesignIn):
-    mode: str = "rehearse"  # rehearse | execute
+    mode: str = "rehearse"  # rehearse | simulate | execute
+    placement: Placement | None = None
+
+
+class StageIn(DesignIn):
+    placement: Placement | None = None
+    version_id: int | None = None  # a draft to add it to; none = a new version from the map in use
+
+
+class BrdIn(BaseModel):
+    filename: str = Field(min_length=1, max_length=200)
+    content_base64: str = Field(min_length=4, max_length=3_000_000)
 
 
 def _steps(payload: DesignIn) -> list[dict[str, str]] | None:
@@ -64,15 +82,73 @@ def design_process(payload: DesignIn, db: Session = Depends(get_db), tenant_id: 
 
 
 @router.post("/build")
-def build_process(payload: BuildIn, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> dict:
+def build_process(payload: BuildIn, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id),
+                  user: User = Depends(get_current_user)) -> dict:
     """rehearse: built and rolled back, to show exactly what would be created.
-    execute (the administrator's consent): built together, kept, verified."""
-    if payload.mode not in ("rehearse", "execute"):
-        raise HTTPException(422, "mode must be rehearse or execute")
+    simulate: the same, with every flow played through on a sample record.
+    execute (the administrator's consent): through the Functional Map - a new
+    version of the map in use, with the process in it, activated."""
+    if payload.mode not in ("rehearse", "simulate", "execute"):
+        raise HTTPException(422, "mode must be rehearse, simulate or execute")
     with llm.budget(AI_SECONDS):
         steps, answers, graphs = _steps(payload), payload.answers, payload.graphs
         if not steps:
             blueprint = process_builder.design(db, tenant_id, payload.request.strip(), answers, None, payload.graphs, payload.name)
             steps, answers = blueprint["steps"], blueprint.get("answers", answers)
             graphs = {**{c["id"]: c["spec"]["graph"] for c in blueprint["components"] if c["kind"] == "flow"}, **graphs}
-        return process_builder.build(db, tenant_id, payload.request.strip(), steps, answers, graphs, payload.mode, payload.name)
+        return process_builder.build(db, tenant_id, payload.request.strip(), steps, answers, graphs, payload.mode, payload.name,
+                                     user_id=user.id, placement=payload.placement.model_dump() if payload.placement else None)
+
+
+@router.post("/stage")
+def stage_process(payload: StageIn, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id),
+                  user: User = Depends(get_current_user)) -> dict:
+    """Puts the designed process into a draft version of the Functional Map -
+    nothing is built until that version is activated."""
+    from app.orchestration import function_map
+
+    with llm.budget(AI_SECONDS):
+        spec = {"request": payload.request.strip(), "steps": _steps(payload), "answers": payload.answers, "graphs": payload.graphs, "name": payload.name}
+        try:
+            return function_map.stage(db, tenant_id, user.id, spec, payload.placement.model_dump() if payload.placement else None, payload.version_id)
+        except LookupError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except function_map.VersionError as exc:
+            raise HTTPException(409, str(exc)) from exc
+
+
+@router.get("/placements")
+def placements(db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> dict:
+    """Where a new process can go: the map's business areas and its processes (to append to)."""
+    from app.orchestration import function_map
+
+    now = function_map.current(db, tenant_id)
+    return {"processes": [{"key": p["key"], "label": p["label"], "steps": len(p["steps"]), "tenant": bool(p.get("tenant"))} for p in now["processes"]]}
+
+
+@router.post("/brd")
+def read_brd(payload: BrdIn, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> dict:
+    """A BRD (Word or text) read into the builder's request - nothing is designed or saved yet."""
+    import base64
+    import binascii
+
+    from app.orchestration import function_map, process_brd
+
+    try:
+        data = base64.b64decode(payload.content_base64, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise HTTPException(422, "The file didn't arrive whole - upload it again") from exc
+    try:
+        text = process_brd.read(payload.filename, data)
+        return process_brd.to_request(text, function_map.current(db, tenant_id)["processes"])
+    except process_brd.BrdError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@router.get("/brd-template")
+def brd_template() -> Response:
+    """The BRD template (Word), its sections read back by /brd."""
+    from app.orchestration import process_brd
+
+    return Response(process_brd.template_docx(), media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    headers={"Content-Disposition": 'attachment; filename="BRT360-process-BRD-template.docx"'})

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { processBuild, processDesign, processRecipes } from "../../api/client";
-import type { IntentDef, ProcessBlueprint, ProcessBuild, ProcessInput, ProcessQuestion } from "../../api/types";
+import { downloadBrdTemplate, processBuild, processDesign, processPlacements, processReadBrd, processRecipes, processStage } from "../../api/client";
+import type { FunctionMap } from "../../api/functionMapTypes";
+import type { IntentDef, ProcessBlueprint, ProcessBuild, ProcessInput, ProcessPlacement, ProcessQuestion } from "../../api/types";
 import { notifyIntentExecuted } from "../../workspace";
 import AgentPanel from "./AgentPanel";
 
@@ -18,11 +19,14 @@ const ENGINE_TONE: Record<string, string> = {
   assignment: "border-amber-500/30 bg-amber-500/[0.04]",
 };
 
-/** "Set up a process" in plain words: the builder splits it across the
- * engines (approvals, Flow Studio, Page Designer, assignment rules), stops to
- * ask what it can't tell, rehearses the whole build with nothing kept, and
- * builds it - all or nothing - only on the administrator's consent. What no
- * engine can do comes back as an engineering change, evaluated. */
+/** "Set up a process" in plain words - typed, or uploaded as a BRD: the
+ * builder splits it across the engines (approvals, Flow Studio, Page
+ * Designer with its custom fields, assignment rules), stops to ask what it
+ * can't tell, simulates the whole process with nothing kept, and goes live
+ * through the Functional Map - as a process of its own or added to one of
+ * the map's - in a new version of the map, built when that version is
+ * activated (now, or later from the map). What no engine can do comes back
+ * as an engineering change, evaluated. */
 export default function ProcessBuilder({
   initialText = "",
   intents,
@@ -63,8 +67,17 @@ export default function ProcessBuilder({
   const [rehearsal, setRehearsal] = useState<ProcessBuild | null>(null);
   const [built, setBuilt] = useState<ProcessBuild | null>(null);
   const [consent, setConsent] = useState(false);
-  const [busy, setBusy] = useState<"" | "design" | "rehearse" | "build">("");
+  const [busy, setBusy] = useState<"" | "design" | "rehearse" | "build" | "stage" | "brd">("");
   const [error, setError] = useState("");
+  // where it goes on the Functional Map, and the draft version it was put into
+  const [placement, setPlacement] = useState<ProcessPlacement>({ mode: "new" });
+  const [processes, setProcesses] = useState<{ key: string; label: string; steps: number; tenant: boolean }[]>([]);
+  const [staged, setStaged] = useState<FunctionMap | null>(null);
+  const [brdNote, setBrdNote] = useState("");
+  const fileInput = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    processPlacements().then((p) => setProcesses(p.processes)).catch(() => setProcesses([]));
+  }, []);
   // decisions taken from my own suggestions - shown, and changeable
   const [decided, setDecided] = useState<{ prompt: string; answer: string }[]>([]);
   const [reviewing, setReviewing] = useState(false);
@@ -99,8 +112,46 @@ export default function ProcessBuilder({
     setReviewing(false);
     setRehearsal(null);
     setBuilt(null);
+    setStaged(null);
     setConsent(false);
     setError("");
+  }
+
+  /** A BRD (Word or text) read into the request, then designed. */
+  async function uploadBrd(file: File) {
+    setBusy("brd");
+    setError("");
+    setBrdNote("");
+    try {
+      const read = await processReadBrd(file);
+      setText(read.request);
+      if (read.placement) setPlacement({ ...read.placement, label: read.placement.label ?? read.name });
+      else if (read.name) setPlacement({ mode: "new", label: read.name });
+      setBrdNote(
+        `${file.name}: ${read.template ? "read section by section from the BRT 360 template" : "read as text - your AI model splits it into pieces"}` +
+          (read.truncated ? " (long - only the first part was taken)" : ""),
+      );
+      reset();
+      setBusy("");
+      await design(read.request);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't read that document");
+      setBusy("");
+    }
+  }
+
+  async function stage() {
+    if (!blueprint) return;
+    setBusy("stage");
+    setError("");
+    try {
+      setStaged(await processStage(input(blueprint, answers), placement));
+      onFinished?.("staged", `${blueprint.name}: put into a draft version of the Functional Map`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't put it into a map version");
+    } finally {
+      setBusy("");
+    }
   }
 
   async function design(request = text, given?: Record<string, string>, keep?: ProcessBlueprint | null, auto = true) {
@@ -137,21 +188,21 @@ export default function ProcessBuilder({
     }
   }
 
-  async function run(mode: "rehearse" | "execute") {
+  async function run(mode: "simulate" | "execute") {
     if (!blueprint) return;
-    setBusy(mode === "rehearse" ? "rehearse" : "build");
+    setBusy(mode === "simulate" ? "rehearse" : "build");
     setError("");
     try {
-      // one consent: the build is rehearsed first (nothing kept) and only goes ahead when that passes
-      const check = rehearsal?.status === "rehearsed" ? rehearsal : await processBuild(input(blueprint, answers), "rehearse");
+      // one consent: the process is simulated first (nothing kept) and only goes live when that passes
+      const check = rehearsal?.status === "simulated" ? rehearsal : await processBuild(input(blueprint, answers), "simulate");
       setRehearsal(check);
-      if (check.status !== "rehearsed") {
-        setError(check.message ?? "The rehearsal didn't pass - nothing was built.");
+      if (check.status !== "simulated") {
+        setError(check.message ?? "The simulation didn't pass - nothing was built.");
         return;
       }
-      if (mode === "rehearse") return;
+      if (mode === "simulate") return;
       if (!mounted.current) return;
-      const out = await processBuild(input(blueprint, answers), "execute");
+      const out = await processBuild(input(blueprint, answers), "execute", placement);
       setBuilt(out);
       if (out.memory_id) {
         setRecipes((items) => [{ id: out.memory_id!, name: out.blueprint.name, request: text.trim() }, ...items.filter((r) => r.request !== text.trim())]);
@@ -190,6 +241,35 @@ export default function ProcessBuilder({
           placeholder="Describe the process - who approves what, what should happen when, which fields a page needs… e.g. Quotes with discount above 20% need approval from the Regional Sales Head, then the Finance Controller. Once approved, notify the account manager."
           className="w-full resize-y rounded-xl border border-slate-700 bg-slate-950/80 px-4 py-3 text-[15px] leading-relaxed text-slate-100 placeholder:text-slate-600 focus:border-emerald-500 focus:outline-none"
         />
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          <input
+            ref={fileInput}
+            type="file"
+            accept=".docx,.txt,.md"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              e.target.value = "";
+              if (file) void uploadBrd(file);
+            }}
+          />
+          <button
+            type="button"
+            onClick={() => fileInput.current?.click()}
+            disabled={busy !== ""}
+            className="rounded-lg border border-slate-700 px-3 py-1.5 font-semibold text-slate-200 hover:border-emerald-500 disabled:opacity-40"
+          >
+            {busy === "brd" ? "Reading…" : "📄 Upload a BRD (.docx, .txt)"}
+          </button>
+          <button
+            type="button"
+            onClick={() => downloadBrdTemplate().catch((e) => setError(e instanceof Error ? e.message : "Couldn't download the template"))}
+            className="text-slate-400 underline decoration-slate-600 underline-offset-2 hover:text-slate-200"
+          >
+            Get the BRD template
+          </button>
+          {brdNote && <span className="text-slate-500">· {brdNote}</span>}
+        </div>
         <div className="flex flex-wrap items-center gap-2">
           <span className="mr-1 text-xs font-medium text-slate-500">Try:</span>
           {EXAMPLES.map((x, i) => (
@@ -341,7 +421,7 @@ export default function ProcessBuilder({
               <h4 className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">What I'll set up</h4>
               <div className="grid gap-4 lg:grid-cols-2">
                 {blueprint.components.map((c) => {
-                  const check = built?.checks.find((k) => k.component === c.id);
+                  const check = (built ?? rehearsal)?.checks.find((k) => k.component === c.id);
                   const made = (built ?? rehearsal)?.made.find((m) => m.component === c.id);
                   return (
                     <article key={c.id} className={`rounded-xl border p-4 sm:p-5 ${ENGINE_TONE[c.kind] ?? "border-slate-800"}`}>
@@ -353,7 +433,7 @@ export default function ProcessBuilder({
                         </div>
                         {check && (
                           <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold ${check.ok ? "bg-emerald-500/15 text-emerald-300" : "bg-amber-500/15 text-amber-300"}`}>
-                            {check.ok ? "✓ live" : "⚠ check"}
+                            {check.ok ? (built ? "✓ live" : "✓ simulated") : "⚠ check"}
                           </span>
                         )}
                       </div>
@@ -366,7 +446,19 @@ export default function ProcessBuilder({
                         <p key={w} className="mt-2 pl-8 text-xs text-amber-300">⚠ {w}</p>
                       ))}
                       <p className="mt-3 pl-8 text-[11px] italic text-slate-500">“{c.text}”</p>
-                      {check && <p className={`mt-2 pl-8 text-xs ${check.ok ? "text-emerald-300" : "text-amber-300"}`}>{check.message}</p>}
+                      {check && (
+                        <p className={`mt-2 pl-8 text-xs ${check.ok ? "text-emerald-300" : "text-amber-300"}`}>{check.message}</p>
+                      )}
+                      {!built && check?.trace && check.trace.length > 0 && (
+                        <ol className="mt-1.5 space-y-0.5 pl-12 text-[11px] text-slate-400">
+                          {check.trace.map((t, i) => (
+                            <li key={i} className="list-decimal">
+                              <span className={t.ok ? (t.skipped ? "text-slate-500" : "text-slate-300") : "text-amber-300"}>{t.label}</span>
+                              {t.skipped ? " - skipped" : t.ok ? "" : " - stopped"}
+                            </li>
+                          ))}
+                        </ol>
+                      )}
                       {made && built?.status === "built" && <p className="mt-1 pl-8 text-[11px] text-slate-500">Find it in {made.where}</p>}
                     </article>
                   );
@@ -414,50 +506,123 @@ export default function ProcessBuilder({
 
           {blueprint.skipped.length > 0 && <p className="text-xs text-slate-500">Left out: {blueprint.skipped.map((s) => `“${s}”`).join(", ")}</p>}
 
-          {/* ---------- rehearse, consent, build ---------- */}
-          {blueprint.ready && !built && (
-            <section className="space-y-4 rounded-2xl border border-slate-800 bg-slate-900/50 p-5 sm:p-6">
-              {!rehearsal || rehearsal.status === "rehearsed" ? (
-                <>
-                  <div>
-                    {rehearsal ? (
-                      <>
-                        <p className="text-sm font-semibold text-violet-200">Preview passed - nothing was kept.</p>
-                        {rehearsal.impact?.headline && <p className="mt-1 text-sm text-slate-300">{rehearsal.impact.headline}</p>}
-                      </>
-                    ) : (
-                      <p className="text-sm text-slate-400">
-                        One consent does it: I rehearse the whole build on your live setup first, and switch it on only if that passes - fields, pages,
-                        flows and approvals, created together or not at all.{" "}
-                        <button onClick={() => run("rehearse")} disabled={busy !== ""} className="font-semibold text-violet-300 hover:text-violet-200 disabled:opacity-40">
-                          {busy === "rehearse" ? "Previewing…" : "Preview first"}
-                        </button>
-                      </p>
-                    )}
-                    {blueprint.new_positions.length > 0 && (
-                      <p className="mt-1 text-xs text-slate-500">New positions: {blueprint.new_positions.join(", ")} - add their people in Org Structure; until then anyone allowed to approve can decide.</p>
-                    )}
-                  </div>
-                  <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-slate-700 bg-slate-950/50 p-4 text-sm text-slate-200">
-                    <input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} className="mt-0.5 h-4 w-4 accent-emerald-500" />
-                    <span>
-                      I consent to building <b>{blueprint.name}</b> and switching it on now - {blueprint.components.length} piece
-                      {blueprint.components.length === 1 ? "" : "s"}, created together or not at all.
+          {/* ---------- simulate, place it on the map, go live through a map version ---------- */}
+          {blueprint.ready && !built && !staged && (
+            <section className="space-y-5 rounded-2xl border border-slate-800 bg-slate-900/50 p-5 sm:p-6">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">1 · Simulate</p>
+                {rehearsal?.status === "simulated" ? (
+                  <p className="mt-1 text-sm">
+                    <span className={`font-semibold ${rehearsal.checks.every((c) => c.ok) ? "text-violet-200" : "text-amber-300"}`}>
+                      {rehearsal.checks.every((c) => c.ok)
+                        ? "The simulation passed - every piece was built and played through, then nothing was kept."
+                        : "The simulation ran, but a piece needs a look (above) - nothing was kept."}
+                    </span>
+                    {rehearsal.impact?.headline && <span className="mt-1 block text-slate-300">{rehearsal.impact.headline}</span>}
+                  </p>
+                ) : (
+                  <p className="mt-1 text-sm text-slate-400">
+                    I build every piece on your live setup, play each automation through on a recent record, show you each step - then keep nothing.{" "}
+                    <button onClick={() => run("simulate")} disabled={busy !== ""} className="font-semibold text-violet-300 hover:text-violet-200 disabled:opacity-40">
+                      {busy === "rehearse" ? "Simulating…" : "▶ Run the simulation"}
+                    </button>
+                  </p>
+                )}
+                {rehearsal && rehearsal.status !== "simulated" && <p className="mt-1 text-sm text-amber-300">{rehearsal.message ?? "The simulation needs another look."}</p>}
+                {blueprint.new_positions.length > 0 && (
+                  <p className="mt-1 text-xs text-slate-500">New positions: {blueprint.new_positions.join(", ")} - add their people in Org Structure; until then anyone allowed to approve can decide.</p>
+                )}
+              </div>
+
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">2 · Where it goes on the Functional Map</p>
+                <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                  <label className={`flex cursor-pointer items-start gap-2.5 rounded-lg border px-3 py-2 text-[13px] ${placement.mode === "new" ? "border-emerald-500/50 bg-emerald-500/10" : "border-slate-800"}`}>
+                    <input type="radio" checked={placement.mode === "new"} onChange={() => setPlacement({ mode: "new", label: placement.label ?? blueprint.name })} className="mt-1 accent-emerald-500" />
+                    <span className="min-w-0 flex-1">
+                      <span className="font-medium text-slate-100">A new process</span>
+                      <input
+                        value={placement.mode === "new" ? (placement.label ?? blueprint.name) : ""}
+                        disabled={placement.mode !== "new"}
+                        onChange={(e) => setPlacement({ mode: "new", label: e.target.value })}
+                        placeholder={blueprint.name}
+                        className="mt-1 h-8 w-full rounded-md border border-slate-700 bg-slate-950 px-2 text-xs text-slate-100 disabled:opacity-40"
+                      />
                     </span>
                   </label>
-                  <div className="flex justify-end">
-                    <button
-                      onClick={() => run("execute")}
-                      disabled={!consent || busy !== ""}
-                      className="rounded-lg bg-emerald-600 px-5 py-2.5 text-sm font-bold text-white shadow-lg shadow-emerald-900/40 hover:bg-emerald-500 disabled:opacity-40"
-                    >
-                      {busy === "build" ? "Building…" : "▶ Build it and switch it on"}
-                    </button>
-                  </div>
-                </>
-              ) : (
-                <p className="text-sm text-amber-300">{rehearsal.message ?? "The rehearsal needs another look."}</p>
-              )}
+                  <label className={`flex cursor-pointer items-start gap-2.5 rounded-lg border px-3 py-2 text-[13px] ${placement.mode === "append" ? "border-emerald-500/50 bg-emerald-500/10" : "border-slate-800"}`}>
+                    <input
+                      type="radio"
+                      checked={placement.mode === "append"}
+                      onChange={() => setPlacement({ mode: "append", process_key: placement.process_key ?? processes[0]?.key })}
+                      className="mt-1 accent-emerald-500"
+                    />
+                    <span className="min-w-0 flex-1">
+                      <span className="font-medium text-slate-100">Add to an existing process</span>
+                      <select
+                        value={placement.mode === "append" ? (placement.process_key ?? "") : ""}
+                        disabled={placement.mode !== "append"}
+                        onChange={(e) => setPlacement({ mode: "append", process_key: e.target.value })}
+                        className="mt-1 h-8 w-full rounded-md border border-slate-700 bg-slate-950 px-2 text-xs text-slate-100 disabled:opacity-40"
+                      >
+                        {processes.map((p) => (
+                          <option key={p.key} value={p.key}>
+                            {p.label}
+                            {p.tenant ? " (yours)" : ""}
+                          </option>
+                        ))}
+                      </select>
+                    </span>
+                  </label>
+                </div>
+              </div>
+
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">3 · Go live through a map version</p>
+                <p className="mt-1 text-sm text-slate-400">
+                  It goes into a new version of the map in use. Activating that version builds every piece - fields, pages, flows, approvals - together or
+                  not at all; retiring it later switches its automations and approvals off again.
+                </p>
+                <label className="mt-3 flex cursor-pointer items-start gap-3 rounded-xl border border-slate-700 bg-slate-950/50 p-4 text-sm text-slate-200">
+                  <input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} className="mt-0.5 h-4 w-4 accent-emerald-500" />
+                  <span>
+                    I consent to activating <b>{blueprint.name}</b> now - {blueprint.components.length} piece{blueprint.components.length === 1 ? "" : "s"},
+                    created together or not at all, in a new active version of the Functional Map.
+                  </span>
+                </label>
+                <div className="mt-3 flex flex-wrap justify-end gap-2">
+                  <button
+                    onClick={stage}
+                    disabled={busy !== "" || (placement.mode === "append" && !placement.process_key)}
+                    className="rounded-lg border border-slate-600 px-4 py-2.5 text-sm font-semibold text-slate-200 hover:border-slate-400 disabled:opacity-40"
+                    title="Nothing is built - activate the version later from Admin → Functional Map"
+                  >
+                    {busy === "stage" ? "Saving…" : "Save as a draft map version"}
+                  </button>
+                  <button
+                    onClick={() => run("execute")}
+                    disabled={!consent || busy !== "" || (placement.mode === "append" && !placement.process_key)}
+                    className="rounded-lg bg-emerald-600 px-5 py-2.5 text-sm font-bold text-white shadow-lg shadow-emerald-900/40 hover:bg-emerald-500 disabled:opacity-40"
+                  >
+                    {busy === "build" ? "Activating…" : "▶ Simulate, then activate now"}
+                  </button>
+                </div>
+              </div>
+            </section>
+          )}
+
+          {staged?.version && (
+            <section className="rounded-2xl border border-sky-500/40 bg-sky-500/10 p-5 sm:p-6">
+              <p className="text-[15px] font-semibold text-sky-100">
+                ✓ {blueprint.name} is in draft version v{staged.version.number} “{staged.version.name}” - nothing is built yet.
+              </p>
+              <p className="mt-1 text-sm text-sky-200/80">
+                Open Admin → Functional Map and pick v{staged.version.number}: simulate it, look at the process on the map, then Activate… - that builds it
+                and the business runs on it. Design another process and it can go into the same version from there.
+              </p>
+              <button onClick={() => { setText(""); reset(); }} className="mt-4 rounded-lg bg-slate-100 px-4 py-2 text-sm font-semibold text-slate-900 hover:bg-white">
+                Design another process
+              </button>
             </section>
           )}
 
@@ -466,6 +631,12 @@ export default function ProcessBuilder({
               <p className="text-[15px] font-semibold text-emerald-100">
                 ✓ {blueprint.name} is built and live - {built.checks.filter((c) => c.ok).length} of {built.checks.length} pieces verified.
               </p>
+              {built.version && (
+                <p className="mt-1 text-sm text-emerald-200/80">
+                  It runs in Functional Map version v{built.version.number} “{built.version.name}”, now active - the version before it is retired and can be
+                  activated again to undo this.
+                </p>
+              )}
               <p className="mt-1 text-sm text-emerald-200/80">Verification results are shown above. Every piece can be edited in its own studio.</p>
               <p className="mt-1 text-sm text-emerald-200/80">{built.memory_id ? "Saved in your tenant's process memory for future designs." : "Not saved to process memory because verification is incomplete."}</p>
               <button onClick={() => { setText(""); reset(); }} className="mt-4 rounded-lg bg-slate-100 px-4 py-2 text-sm font-semibold text-slate-900 hover:bg-white">

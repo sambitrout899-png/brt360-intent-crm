@@ -78,6 +78,25 @@ export interface FunctionMap {
   version?: MapVersion;
   /** what BRT released since the version was last saved, merged in */
   release_notes?: string[];
+  /** processes designed in the Process Builder and put into this version - built when it is activated */
+  builds?: MapBuild[];
+}
+
+export interface MapBuild {
+  id: string;
+  name: string;
+  request: string;
+  status: "pending" | "built";
+  placement: { mode: "new" | "append"; label?: string; process_key?: string } | null;
+  pieces: { engine: string; title: string }[];
+  made: { kind: string; id: number | string; name: string; where: string }[];
+}
+
+export interface MapSimulation {
+  ok: boolean;
+  builds: { name: string; ok: boolean; message?: string; checks: { component: string; title: string; ok: boolean; message: string }[] }[];
+  plan: MapPlan;
+  impact: { headline?: string } | null;
 }
 
 /** One of the tenant's versions of the map: drafts are worked on, the active
@@ -111,6 +130,8 @@ export interface MapChange {
   code?: string;
   source?: string;
   target?: string;
+  /** a process the activation builds: its pieces */
+  pieces?: string[];
 }
 
 export interface MapPlan {

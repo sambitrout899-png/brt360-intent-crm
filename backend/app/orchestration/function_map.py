@@ -143,7 +143,7 @@ def module_view(db, tenant_id, graph):
     return {**graph, 'nodes': nodes,
             'edges': [e for e in graph['edges'] if e['source'] in codes and e['target'] in codes],
             'lanes': [lane for lane in graph['lanes'] if lane['key'] in lanes],
-            'processes': [p for p in processes if p['steps']]}
+            'processes': [p for p in processes if p['steps'] or p.get('tenant')]}  # a tenant's own process shows even before it has steps
 
 
 def vanilla(db=None, tenant_id=None) -> dict[str, Any]:
@@ -160,6 +160,23 @@ def vanilla(db=None, tenant_id=None) -> dict[str, Any]:
         n.update(places[n["code"]])
     graph = {"lanes": _lanes(), "nodes": nodes, "edges": edges, "processes": PROCESSES, "vanilla": True}
     return module_view(db, tenant_id, graph) if db is not None else graph
+
+
+def merged_processes(overrides: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """BRT's processes with a tenant's own on top: an override with a BRT key
+    changes that process's steps (a process appended to), any other key is a
+    process of the tenant's own ("tenant": true)."""
+    out = [dict(p) for p in PROCESSES]
+    keys = {p["key"]: p for p in out}
+    for o in overrides or []:
+        if not isinstance(o, dict) or not o.get("key") or not isinstance(o.get("steps"), list):
+            continue
+        steps = [str(s) for s in o["steps"]]
+        if o["key"] in keys:
+            keys[o["key"]]["steps"] = steps
+        else:
+            out.append({"key": str(o["key"]), "label": str(o.get("label") or o["key"]), "steps": steps, "tenant": True})
+    return out
 
 
 # ---------------------------------------------------------------- the tenant's map
@@ -365,8 +382,9 @@ def current(db: Session, tenant_id: int) -> dict[str, Any]:
     if mine and mine.get("user_id"):
         user = db.get(User, mine["user_id"])
         by = user.name if user is not None else None
-    out = {"lanes": _lanes(), "nodes": nodes, "edges": edges + autos, "processes": PROCESSES, "vanilla": False,
-           "saved_at": mine["at"] if mine else None, "saved_by": by, "customized": mine is not None}
+    overrides = (mine or {}).get("processes") or []
+    out = {"lanes": _lanes(), "nodes": nodes, "edges": edges + autos, "processes": merged_processes(overrides), "process_overrides": overrides,
+           "vanilla": False, "saved_at": mine["at"] if mine else None, "saved_by": by, "customized": mine is not None}
     out = module_view(db, tenant_id, out)
     out["differences"] = differences(out)
     return out
@@ -687,7 +705,8 @@ def apply(db: Session, tenant_id: int, user_id: int | None, desired: dict[str, A
         log.intent_type = KIND
         log.user_id = user_id
         # base: the release these links were reconciled with - later releases merge in (release_merge)
-        audit.record_context(log, {"version": 2, "edges": edges, "positions": positions, "base": original_pairs()})
+        processes = desired["processes"] if isinstance(desired.get("processes"), list) else previous.get("processes") or []
+        audit.record_context(log, {"version": 2, "edges": edges, "positions": positions, "base": original_pairs(), "processes": processes})
         audit.record_plan(log, done)
         audit.complete(log, "executed")
         forget(db, ("function_map", tenant_id))
@@ -713,7 +732,8 @@ def restore_draft(db: Session, tenant_id: int) -> dict[str, Any]:
         nodes.append({"code": n["code"], "label": n["label"], "lane": n["lane"], "active": n["active"], "x": 20 + (i % 8) * COL,
                       "dy": n["dy"] if n["lane"] != "custom" else bottom + (i // 8) * ROW})
     edges = [*van["edges"], *[e for e in now["edges"] if e["kind"] == "auto" and e["active"] and not e["by_map"]]]
-    return {**now, "nodes": [{**next(x for x in now["nodes"] if x["code"] == n["code"]), **n} for n in nodes], "edges": edges}
+    return {**now, "nodes": [{**next(x for x in now["nodes"] if x["code"] == n["code"]), **n} for n in nodes], "edges": edges,
+            "processes": van["processes"], "process_overrides": []}
 
 
 # ---------------------------------------------------------------- versions
@@ -733,6 +753,7 @@ def _picture_of(m: dict[str, Any]) -> dict[str, Any]:
             "edges": [{"source": e["source"], "target": e["target"], "kind": e.get("kind", "next"), "why": e.get("why") or "",
                        **({"when": e["when"]} if isinstance(e.get("when"), dict) else {})}
                       for e in m["edges"] if e.get("kind", "next") == "next" or e.get("active")],
+            "processes": list(m.get("process_overrides") or []),
             "base": original_pairs()}
 
 
@@ -775,7 +796,8 @@ def _summary(db: Session, v) -> dict[str, Any]:
     iso = lambda t: t.isoformat(timespec="seconds") if t else None  # noqa: E731
     return {"id": v.id, "number": v.number, "name": v.name, "notes": v.notes or "", "status": v.status, "based_on": v.based_on,
             "created_at": iso(v.created_at), "created_by": who(v.created_by_id), "updated_at": iso(v.updated_at),
-            "activated_at": iso(v.activated_at), "activated_by": who(v.activated_by_id)}
+            "activated_at": iso(v.activated_at), "activated_by": who(v.activated_by_id),
+            "builds": [{"name": b.get("name"), "status": b.get("status")} for b in _read(v).get("builds") or [] if isinstance(b, dict)]}
 
 
 def _new(db: Session, tenant_id: int, user_id: int | None, name: str, based_on: str, picture: dict[str, Any], status: str = "draft"):
@@ -815,18 +837,99 @@ def versions(db: Session, tenant_id: int) -> dict[str, Any]:
 def create_version(db: Session, tenant_id: int, user_id: int | None, name: str, source: str | int) -> dict[str, Any]:
     """A new draft: a copy of BRT's original ("original"), of the map in use
     ("active") or of another version (its id)."""
+    # the processes a version built go with its copies - activating a copy keeps them running
     if source == "original":
         picture, based_on = _picture_of(restore_draft(db, tenant_id)), "BRT original"
     elif source == "active":
         picture, based_on = _picture_of(current(db, tenant_id)), "active map"
+        active = _active(db, tenant_id)
+        picture["builds"] = list(_read(active).get("builds") or []) if active is not None else []
     elif str(source).isdigit():
         src = _get(db, tenant_id, int(source))
-        picture, based_on = _picture_of(_view(db, tenant_id, _read(src))[0]), f"version {src.number}"
+        pic = _read(src)
+        picture, based_on = _picture_of(_view(db, tenant_id, pic)[0]), f"version {src.number}"
+        picture["builds"] = list(pic.get("builds") or [])
     else:
         raise VersionError("Copy from 'original', 'active' or a version")
     v = _new(db, tenant_id, user_id, name, based_on, picture)
     db.commit()
     return version_map(db, tenant_id, v.id)
+
+
+def _active(db: Session, tenant_id: int):
+    from app.models.function_map import FunctionMapVersion
+
+    return db.query(FunctionMapVersion).filter(FunctionMapVersion.tenant_id == tenant_id, FunctionMapVersion.status == "active").first()
+
+
+def _slug(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_")[:40] or "process"
+
+
+def stage(db: Session, tenant_id: int, user_id: int | None, spec: dict[str, Any], placement: dict[str, Any] | None = None,
+          version_id: int | None = None) -> dict[str, Any]:
+    """A process designed in the Process Builder, put into a draft version of
+    the map - nothing is built until that version is activated. spec: the
+    builder's {request, steps, answers, graphs, name}. placement: {"mode":
+    "new", "label"} (a process of its own) or {"mode": "append",
+    "process_key"} (added to one of the map's processes). Without a version
+    id, a new version is made from the map in use."""
+    from app.orchestration import process_builder
+
+    blueprint = process_builder.design(db, tenant_id, spec["request"], spec.get("answers"), steps=spec.get("steps"),
+                                       graphs=spec.get("graphs"), name=spec.get("name"))
+    if blueprint.get("mode") == "actions":
+        raise VersionError("That is a sequence of actions to run, not a process to set up - run it from the command bar")
+    if blueprint["questions"]:
+        raise VersionError(f"“{blueprint['name']}” still has {len(blueprint['questions'])} open question(s) - answer them first")
+    if not blueprint["components"]:
+        raise VersionError("Nothing here can be built with the engines" + (" - see the engineering changes" if blueprint["engineering"] else ""))
+    if version_id is not None:
+        v = _get(db, tenant_id, version_id)
+        if v.status != "draft":
+            raise VersionError(f"Version {v.number} is {v.status} - put the process into a draft version")
+    else:
+        made = create_version(db, tenant_id, user_id, f"{blueprint['name']} - new process"[:150], "active")
+        v = _get(db, tenant_id, made["version"]["id"])
+    pic = _read(v)
+    builds = pic.setdefault("builds", [])
+    overrides = pic.setdefault("processes", [])
+    placement = dict(placement or {})
+    codes = process_builder.process_steps(blueprint)
+    if placement.get("mode") == "append":
+        key = str(placement.get("process_key") or "")
+        current_steps = next((p["steps"] for p in merged_processes(overrides) if p["key"] == key), None)
+        if current_steps is None:
+            raise VersionError(f"There is no process '{key}' on the map to add it to")
+        steps = [*current_steps, *[c for c in codes if c not in current_steps]]
+        overrides[:] = [o for o in overrides if o.get("key") != key] + [{"key": key, "steps": steps}]
+    else:
+        label = str(placement.get("label") or blueprint["name"]).strip()[:120]
+        taken = {p["key"] for p in merged_processes(overrides)}
+        key = f"t_{_slug(label)}"
+        while key in taken:
+            key += "_2"
+        overrides.append({"key": key, "label": label, "steps": codes})
+        placement = {"mode": "new", "label": label}
+    placement["process_key"] = key
+    builds.append({"id": f"b{len(builds) + 1}", "name": blueprint["name"], "request": blueprint["request"], "steps": blueprint["steps"],
+                   "answers": blueprint.get("answers") or {}, "status": "pending", "placement": placement, "made": [],
+                   "graphs": {c["id"]: c["spec"]["graph"] for c in blueprint["components"] if c["kind"] == "flow"},
+                   "pieces": [{"engine": c["engine"], "title": c["title"]} for c in blueprint["components"]]})
+    v.picture_json = json.dumps(pic)
+    db.commit()
+    return version_map(db, tenant_id, v.id)
+
+
+def _redesign(db: Session, tenant_id: int, b: dict[str, Any]) -> dict[str, Any]:
+    """A staged process designed again against the setup as it is now."""
+    from app.orchestration import process_builder
+
+    return process_builder.design(db, tenant_id, b["request"], b.get("answers"), steps=b.get("steps"), graphs=b.get("graphs"), name=b.get("name"))
+
+
+def _made_keys(builds: list[dict[str, Any]]) -> dict[tuple[str, int], dict[str, Any]]:
+    return {(m["kind"], m["id"]): m for b in builds if b.get("status") == "built" for m in b.get("made") or [] if isinstance(m.get("id"), int)}
 
 
 def _view(db: Session, tenant_id: int, picture: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
@@ -855,9 +958,21 @@ def _view(db: Session, tenant_id: int, picture: dict[str, Any]) -> tuple[dict[st
             edge.update({"active": True, "by_map": a["by_map"] if a else True,
                          **({"flow_id": a["flow_id"], "flow_name": a["flow_name"]} if a else {"flow_name": "made when this version is activated"})})
         out_edges.append(edge)
-    view = {**now, "nodes": nodes, "edges": out_edges}
+    drawn = {(e["source"], e["target"]) for e in out_edges if e["kind"] == "auto"}
+    # automations made in Flow Studio are Flow Studio's - a version shows them as they run (a process it built included)
+    out_edges += [a for pair, a in live.items() if a["active"] and not a["by_map"] and pair not in drawn]
+    overrides = [o for o in picture.get("processes") or [] if isinstance(o, dict)]
+    processes = [{**p, "steps": [c for c in p["steps"] if c in codes]} for p in merged_processes(overrides)]
+    view = {**now, "nodes": nodes, "edges": out_edges, "processes": [p for p in processes if p["steps"] or p.get("tenant")],
+            "process_overrides": overrides, "builds": [_build_out(b) for b in picture.get("builds") or [] if isinstance(b, dict)]}
     view["differences"] = differences(view)
     return view, notes
+
+
+def _build_out(b: dict[str, Any]) -> dict[str, Any]:
+    """A process staged into a version, as the screen shows it."""
+    return {"id": b.get("id"), "name": b.get("name"), "request": b.get("request"), "status": b.get("status"), "placement": b.get("placement"),
+            "pieces": b.get("pieces") or [], "made": b.get("made") or []}
 
 
 def version_map(db: Session, tenant_id: int, version_id: int) -> dict[str, Any]:
@@ -878,7 +993,9 @@ def save_version(db: Session, tenant_id: int, version_id: int, user_id: int | No
     if payload.get("notes") is not None:
         v.notes = str(payload["notes"])[:2000]
     if payload.get("nodes") is not None:
-        v.picture_json = json.dumps(_clean_picture({"nodes": payload["nodes"], "edges": payload.get("edges") or []}))
+        old = _read(v)  # the editor sends the picture; the version's processes and pending builds stay
+        v.picture_json = json.dumps({**_clean_picture({"nodes": payload["nodes"], "edges": payload.get("edges") or []}),
+                                     "processes": old.get("processes") or [], "builds": old.get("builds") or []})
     v.updated_at = utcnow()
     db.commit()
     return version_map(db, tenant_id, v.id)
@@ -903,23 +1020,123 @@ def _activation(db: Session, tenant_id: int, version_id: int | None) -> dict[str
     return _picture_of(_view(db, tenant_id, _read(v))[0])
 
 
+def _builds_of(db: Session, tenant_id: int, version_id: int | None) -> list[dict[str, Any]]:
+    return [b for b in _read(_get(db, tenant_id, version_id)).get("builds") or [] if isinstance(b, dict)] if version_id is not None else []
+
+
 def plan_activation(db: Session, tenant_id: int, version_id: int | None) -> dict[str, Any]:
-    """What activating this version (None: BRT's original) would change - nothing is changed."""
-    return plan(db, tenant_id, _activation(db, tenant_id, version_id))
+    """What activating this version (None: BRT's original) would change -
+    in the map, and the processes staged into it - nothing is changed."""
+    out = plan(db, tenant_id, _activation(db, tenant_id, version_id))
+    builds = _builds_of(db, tenant_id, version_id)
+    active = _active(db, tenant_id)
+    keep = _made_keys(builds)
+    off = [m for k, m in _made_keys(_read(active).get("builds") or [] if active is not None else []).items() if k not in keep]
+    for b in builds:
+        if b.get("status") == "built":
+            out["changes"].append({"kind": "build_on", "engine": "Process Builder",
+                                   "text": f"Switch “{b['name']}” back on - its flows, approvals and assignments run again"})
+            continue
+        bp = _redesign(db, tenant_id, b)
+        if bp["questions"] or not bp["components"]:
+            out["problems"].append({"text": f"“{b['name']}” needs another look in the Process Builder - "
+                                            + (f"{len(bp['questions'])} open question(s)" if bp["questions"] else "nothing in it can be built now")})
+            continue
+        where = b.get("placement") or {}
+        out["changes"].append({"kind": "build", "engine": "Process Builder",
+                               "text": f"Build “{b['name']}” ({len(bp['components'])} piece(s)) "
+                                       + (f"as a new process “{where.get('label')}”" if where.get("mode") == "new" else "into an existing process"),
+                               "pieces": [f"{c['engine']}: {c['title']}" for c in bp["components"]]})
+    if off:
+        out["changes"].append({"kind": "build_off", "engine": "Process Builder",
+                               "text": f"Switch off {len(off)} flow(s), approval(s) and assignment(s) the version in use built - "
+                                       "kept, and back on if it is activated again; page and field changes stay"})
+    out["layout_only"] = not out["changes"]
+    return out
 
 
 def activate(db: Session, tenant_id: int, version_id: int | None, user_id: int | None) -> dict[str, Any]:
     """Re-orchestrates the engines to this version (None: BRT's original), all
-    together; the version it replaces is retired - kept, and can be activated
-    again."""
+    together: the processes staged into it are built, the ones it already
+    built are switched back on, those of the version it replaces are switched
+    off, and the map is applied - one transaction, or nothing. The version it
+    replaces is retired - kept, and can be activated again."""
     from app.models.function_map import FunctionMapVersion
+    from app.orchestration import process_builder, rehearsal
     from app.timeutils import utcnow
 
-    desired = _activation(db, tenant_id, version_id)
-    for old in db.query(FunctionMapVersion).filter(FunctionMapVersion.tenant_id == tenant_id, FunctionMapVersion.status == "active"):
-        old.status = "retired"
-    if version_id is not None:
-        v = _get(db, tenant_id, version_id)
-        v.status, v.activated_at, v.activated_by_id = "active", utcnow(), user_id
-    out = apply(db, tenant_id, user_id, desired)  # commits the statuses with the engines' changes, or rolls all back
-    return {"applied": out["applied"], "problems": out["problems"], "map": out["map"], **versions(db, tenant_id)}
+    v = _get(db, tenant_id, version_id) if version_id is not None else None
+    if v is not None and v.status == "active":
+        raise VersionError(f"Version {v.number} is already active.")
+    olds = db.query(FunctionMapVersion).filter(FunctionMapVersion.tenant_id == tenant_id, FunctionMapVersion.status == "active").all()
+    built: list[dict[str, Any]] = []
+    try:
+        pic = _read(v) if v is not None else {}
+        keep = _made_keys(pic.get("builds") or [])
+        for old in olds:
+            gone = [m for k, m in _made_keys(_read(old).get("builds") or []).items() if k not in keep]
+            process_builder.switch(db, tenant_id, gone, False)
+            old.status = "retired"
+        for b in pic.get("builds") or []:
+            if b.get("status") == "built":
+                process_builder.switch(db, tenant_id, b.get("made") or [], True)
+                continue
+            bp = _redesign(db, tenant_id, b)
+            if bp["questions"] or not bp["components"]:
+                raise VersionError(f"“{b['name']}” needs another look in the Process Builder before this version can be activated")
+            with rehearsal.capture(db) as rows:
+                made = process_builder.create_all(db, tenant_id, bp)
+            impact = rehearsal.summarize(db, rows, {})
+            process_builder.record_build(db, tenant_id, bp, made)
+            b.update(status="built", made=made, built_at=utcnow().isoformat(timespec="seconds"))
+            key = (b.get("placement") or {}).get("process_key")
+            for o in pic.get("processes") or []:  # the process's own flows join its steps now that they have numbers
+                if o.get("key") == key:
+                    o["steps"] = [*o["steps"], *[c for c in process_builder.process_steps(bp, made) if c not in o["steps"]]]
+            built.append({"build": b, "blueprint": bp, "made": made, "impact": impact})
+        if v is not None:
+            v.picture_json = json.dumps(pic)
+            v.status, v.activated_at, v.activated_by_id = "active", utcnow(), user_id
+            desired = _picture_of(_view(db, tenant_id, pic)[0])
+        else:
+            desired = _picture_of(restore_draft(db, tenant_id))
+        out = apply(db, tenant_id, user_id, desired)  # commits all of it with the engines' changes, or rolls all back
+    except Exception:
+        db.rollback()
+        raise
+    results = []
+    for item in built:  # after the commit: each piece proved live
+        checks, memory_id = process_builder.after_build(db, tenant_id, item["blueprint"], item["made"])
+        results.append({"name": item["build"]["name"], "blueprint": item["blueprint"], "made": item["made"], "checks": checks,
+                        "impact": item["impact"], "memory_id": memory_id})
+    return {"applied": out["applied"], "problems": out["problems"], "map": out["map"], "built": results, **versions(db, tenant_id)}
+
+
+def simulate(db: Session, tenant_id: int, version_id: int) -> dict[str, Any]:
+    """The version played through with nothing kept: the processes staged into
+    it are built and each flow is run on a recent record of its type, then
+    everything is rolled back. What activating would change in the map comes
+    with it."""
+    from app.orchestration import process_builder, rehearsal
+
+    planned = plan_activation(db, tenant_id, version_id)
+    results = []
+    try:
+        with rehearsal.capture(db) as rows:
+            for b in _builds_of(db, tenant_id, version_id):
+                if b.get("status") == "built":
+                    continue
+                bp = _redesign(db, tenant_id, b)
+                if bp["questions"] or not bp["components"]:
+                    results.append({"name": b["name"], "ok": False, "checks": [], "message": "needs another look in the Process Builder"})
+                    continue
+                made = process_builder.create_all(db, tenant_id, bp)
+                checks = process_builder._verify(db, tenant_id, bp, made, keep_open=True)
+                titles = {c["id"]: c["title"] for c in bp["components"]}
+                results.append({"name": b["name"], "ok": all(c["ok"] for c in checks), "made": made,
+                                "checks": [{**c, "title": titles.get(c["component"], "")} for c in checks]})
+            db.flush()
+        impact = rehearsal.summarize(db, rows, {})
+    finally:
+        db.rollback()
+    return {"builds": results, "impact": impact, "plan": planned, "ok": all(r["ok"] for r in results) and not planned["problems"]}
