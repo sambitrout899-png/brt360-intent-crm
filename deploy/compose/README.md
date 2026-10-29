@@ -361,6 +361,11 @@ docker compose run --rm --no-deps api python -m app.rls
 
 Besides the API, these services run in their own containers, built from the same code:
 
+- **`intent`** serves the command bar's pipeline, the agent and the assistant (two
+  workers, `INTENT_WORKERS`). **`flow`** serves Flow Studio, paused runs and approvals,
+  the Process Builder and approval chains, and **`flow-worker`** continues waiting
+  flow runs (`FLOW_WORKERS`). Every split service and worker installs the same
+  session hooks as the API (a prospect becomes an account when their order activates).
 - **`bim`**, **`product`** and **`metadata`** serve BIM (`/api/bim`); the catalog,
   Product Modeller and configurator; and Page Designer, custom records and the
   record APIs. Each service's `PREFIXES` are listed in `backend/app/services/<name>.py`,
@@ -471,7 +476,7 @@ remove both lines. Once every session from before RS256 has expired, set
 | Status | `docker compose ps` |
 | Logs | `docker compose logs -f api worker training training-worker ai-gateway` |
 | Deploy new code | from your PC: `deploy\deploy_docker.ps1 -Environment staging` first, then `deploy\deploy_docker.ps1` for production. Each takes a database dump and a code backup, rebuilds, runs migrations first, then waits for health (`deploy/compose/apply.sh`) |
-| Release one service only | add `-Service training` (training + training-worker), `bim`, `product`, `metadata`, `ai-gateway`, `api` (api + worker) or `web`: only those containers are rebuilt and replaced, the rest keep running. Refused when the release brings a database migration - deploy everything then. The code on the server is still updated as a whole, so the next full deploy also brings the other services' changes |
+| Release one service only | add `-Service training` (training + training-worker), `bim`, `product`, `metadata`, `intent`, `flow` (flow + flow-worker), `ai-gateway`, `api` (api + worker) or `web`: only those containers are rebuilt and replaced, the rest keep running. Refused when the release brings a database migration - deploy everything then. The code on the server is still updated as a whole, so the next full deploy also brings the other services' changes |
 | Database backup | `docker compose exec postgres pg_dump -U brt360 -Fc brt360 > backups/brt360-$(date +%F).dump` |
 | psql shell | `docker compose exec postgres psql -U brt360 brt360` |
 

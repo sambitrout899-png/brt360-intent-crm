@@ -16,12 +16,23 @@ from fastapi import FastAPI
 from app import service
 
 # name -> title; each has app/services/<name>.py with PREFIXES and routers()
-SERVICES = {"training": "Training", "bim": "BIM", "product": "Products", "metadata": "Metadata"}
+SERVICES = {"training": "Training", "bim": "BIM", "product": "Products", "metadata": "Metadata", "intent": "Intents",
+            "flow": "Flow Studio"}
+
+
+def install_hooks() -> None:
+    """Session hooks every process that writes records needs, as app/main.py
+    installs them: a prospect becomes an account when an order of theirs is
+    activated, whichever service (or worker job) activated it."""
+    from app.crm_core import process_service
+
+    process_service.install_account_conversion()
 
 
 def create(name: str) -> FastAPI:
     if name not in SERVICES:
         raise SystemExit(f"BRT_SERVICE must be one of {', '.join(SERVICES)} (got {name!r})")
+    install_hooks()
     app = service.new_app(f"BRT 360 — {SERVICES[name]}")
     service.include(app, *importlib.import_module(f"app.services.{name}").routers())
     service.finish(app)

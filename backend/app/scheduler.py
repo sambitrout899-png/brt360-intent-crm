@@ -72,7 +72,7 @@ JOBS = (
 # Jobs that belong to a split-out service (app/services/): with that service in
 # SPLIT_SERVICES its own worker runs them (`python -m app.scheduler --service training`,
 # from its own image), so a release of the service updates its jobs too.
-SERVICE_OF = {"Training scheduler": "training"}
+SERVICE_OF = {"Training scheduler": "training", "Flow waits": "flow"}
 
 
 def jobs_for(service: str | None = None) -> list[tuple[str, object]]:
@@ -129,6 +129,9 @@ if __name__ == "__main__":
     parser.add_argument("--service", default=None)
     service = parser.parse_args().service
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    from app.services.split_app import install_hooks
+
+    install_hooks()  # as the API has them: jobs that activate an order make the prospect an account
     if claim() is None:
         raise SystemExit("Another process already runs the scheduler - not starting a second one")
     log.info("Scheduler running every %s s: %s", INTERVAL_SECONDS, ", ".join(name for name, _ in jobs_for(service)) or "no jobs")

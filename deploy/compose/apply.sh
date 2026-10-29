@@ -43,13 +43,14 @@ case "$SERVICE" in
   all)        CONTAINERS="" ;;
   training)   CONTAINERS="training training-worker" ;;
   ai-gateway) CONTAINERS="ai-gateway" ;;
-  bim|product|metadata) CONTAINERS="$SERVICE" ;;
+  bim|product|metadata|intent) CONTAINERS="$SERVICE" ;;
+  flow)       CONTAINERS="flow flow-worker" ;;
   api)        CONTAINERS="api worker" ;;
   web)        CONTAINERS="web" ;;
-  *) die "SERVICE must be all, training, bim, product, metadata, ai-gateway, api or web (got '$SERVICE')" ;;
+  *) die "SERVICE must be all, training, bim, product, metadata, intent, flow, ai-gateway, api or web (got '$SERVICE')" ;;
 esac
 # the split services' web containers, which must report healthy after a deploy
-HEALTHCHECKED="training bim product metadata ai-gateway"
+HEALTHCHECKED="training bim product metadata intent flow ai-gateway"
 if [[ -n "$CONTAINERS" ]]; then
   # a migration changes the database every service shares: release everything together then
   new_migrations=""
@@ -89,7 +90,7 @@ failed() {
   printf '\n\033[31mDEPLOY FAILED at line %s.\033[0m\n' "$1" >&2
   cat >&2 <<EOF
 To roll back:
-  cd $COMPOSE_DIR && docker compose stop ${CONTAINERS:-api worker web training training-worker bim product metadata ai-gateway}
+  cd $COMPOSE_DIR && docker compose stop ${CONTAINERS:-api worker web training training-worker bim product metadata intent flow flow-worker ai-gateway}
   tar -xzf $BACKUP/code.tar.gz -C $APP_DIR
   # only if a migration changed the database:
   docker compose exec -T postgres pg_restore -U brt360 -d brt360 --clean --if-exists < backups/pre-deploy-$STAMP.dump

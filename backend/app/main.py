@@ -24,25 +24,16 @@ from app import service
 from app.config import get_settings
 from app.experience import (
     routes_admin,
-    routes_agent,
-    routes_assistant,
     routes_auth,
-    routes_builder,
     routes_c360,
     routes_comms,
-    routes_conflicts,
     routes_crm,
     routes_field_service,
-    routes_function_map,
-    routes_intent,
-    routes_intent_admin,
     routes_notices,
     routes_order_mgmt,
     routes_org,
     routes_fulfillment,
     routes_inventory,
-    routes_process,
-    routes_studio,
     routes_tenants,
 )
 
@@ -51,26 +42,20 @@ from app.experience import (
 
 app = service.new_app("BRT 360 — Intent CRM", lifespan=lifespan)
 
-from app.crm_core import process_service as _process_service  # noqa: E402
+from app.services.split_app import install_hooks  # noqa: E402
 
-_process_service.install_account_conversion()
+install_hooks()  # the session hooks every process that writes records needs (split services and worker too)
 
 service.include(
     app,
     routes_auth.router,
-    routes_intent.router,
-    routes_intent_admin.router,
     routes_crm.router,
     routes_admin.router,
     routes_tenants.router,
-    routes_studio.router,
-    routes_studio.approvals_router,
     routes_org.router,
     routes_org.access_router,
     routes_c360.router,
     routes_c360.admin_router,
-    routes_process.admin_router,
-    routes_process.router,
     routes_field_service.router,
     routes_order_mgmt.router,
     routes_order_mgmt.admin_router,
@@ -81,12 +66,7 @@ service.include(
     routes_comms.router,
     routes_comms.admin_router,
     routes_notices.router,
-    routes_agent.router,
-    routes_builder.router,
-    routes_assistant.router,
     routes_notices.admin_router,
-    routes_function_map.router,
-    routes_conflicts.router,
 )
 
 from app.experience import routes_analytics  # noqa: E402

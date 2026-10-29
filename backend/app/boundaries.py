@@ -117,14 +117,14 @@ MODULES: tuple[Module, ...] = (
         "crm_core.process_service", "crm_core.orchestration_mode_service", "crm_core.test_runner_service",
         "models.flows", "models.process", "models.orchestration_policy", "models.testing",
         "experience.routes_studio", "experience.routes_process", "experience.routes_function_map",
-        "experience.routes_builder", "schemas.studio",
+        "experience.routes_builder", "schemas.studio", "services.flow",
     ), uses=("metadata", "intent", "identity", "audit", "notification", "ai")),
     # The intent pipeline: understand, reason, plan, run (via the registry),
     # verify - and the agent and assistant built on it.
     Module("intent", (
         "intent_engine.*", "orchestration.*", "models.intent_*", "experience.routes_intent*",
         "experience.routes_agent", "experience.routes_assistant", "experience.routes_conflicts",
-        "schemas.intent*",
+        "schemas.intent*", "services.intent",
     ), uses=("metadata", "identity", "audit", "notification", "ai")),
 )
 

@@ -302,3 +302,20 @@ def test_app_sees_the_gateways_platform_key(monkeypatch):
     assert llm.platform_key_available() is True
     target = llm.resolve(None, None)
     assert target is not None and target.provider == "external"
+
+
+@pytest.mark.parametrize("name", SPLIT)
+def test_each_service_has_the_session_hooks_the_api_has(name):
+    """A split service activates orders too (intents, record APIs): the prospect
+    must still become an account there, as it does in the API."""
+    from sqlalchemy import event
+    from sqlalchemy.orm import Session
+
+    from app.crm_core import process_service
+
+    event.remove(Session, "before_flush", process_service._prospects_become_accounts)
+    try:
+        split_app.create(name)
+        assert event.contains(Session, "before_flush", process_service._prospects_become_accounts)
+    finally:
+        process_service.install_account_conversion()

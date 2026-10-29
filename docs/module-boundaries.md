@@ -122,6 +122,14 @@ and runs that failed after a wait, and an admin can cancel a waiting run. Steps
 after an approval can use `{{approval.decision}}`, `{{approval.note}}` and
 `{{approval.by}}`.
 
+**Phase 4: intent and flow in their own containers**, with the same split
+machinery (`app/services/intent.py`, `flow.py`). Flow's waits job runs in
+`flow-worker`. `split_app.install_hooks` gives every process (API, split
+services, workers) the same session hooks. The worker lacked the account
+conversion hook from the Phase 0 cutover until this change. The API keeps
+322 of 617 routes: CRM, orders, field service, inventory, comms, C360,
+analytics, notices, admin settings, auth.
+
 **Not split yet: notifications.** `notification_adapter.send` only records a
 `notification.sent` event in the outbox; nothing delivers it, because no email
 or SMS provider is chosen. The notices bar (`/api/notices`) is a read of

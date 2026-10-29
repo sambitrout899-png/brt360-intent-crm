@@ -30,7 +30,7 @@ x-app-env: &app-env
   # the host's Ollama (deploy/local_llm.sh) - see README.md, "Local LLM"
   LOCAL_LLM_BASE_URL: http://host.docker.internal:11434/v1
   # these run in their own containers (backend/app/services/); the API leaves their routes to them
-  SPLIT_SERVICES: training,bim,product,metadata
+  SPLIT_SERVICES: training,bim,product,metadata,intent,flow
   # every model call goes through the AI gateway, the only container with the model key
   AI_GATEWAY_URL: http://ai-gateway:8000
   AI_GATEWAY_TOKEN: ${AI_GATEWAY_TOKEN:?set AI_GATEWAY_TOKEN in deploy/compose/.env - apply.sh creates it}
@@ -222,6 +222,56 @@ services:
     deploy:
       resources:
         limits: {cpus: "1.0", memory: 768M}
+
+  # the command bar's pipeline, the agent and the assistant (backend/app/services/intent.py) -
+  # the busiest service, so two workers by default
+  intent:
+    <<: *app
+    image: ${IMAGE_PREFIX:-brt360}-intent:${BRT_VERSION:-local}
+    command: ["gunicorn", "app.services.split_app:app", "-k", "uvicorn.workers.UvicornWorker", "-b", "0.0.0.0:8000",
+              "--timeout", "120", "--access-logfile", "-", "--forwarded-allow-ips", "*"]
+    environment:
+      <<: *app-env
+      BRT_SERVICE: intent
+      WEB_CONCURRENCY: ${INTENT_WORKERS:-2}
+      SCHEDULER_MODE: "off"
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+    deploy:
+      resources:
+        limits: {cpus: "1.5", memory: 1G}
+
+  # Flow Studio, paused runs and approvals, Process Builder, approval chains (backend/app/services/flow.py)
+  flow:
+    <<: *app
+    image: ${IMAGE_PREFIX:-brt360}-flow:${BRT_VERSION:-local}
+    command: ["gunicorn", "app.services.split_app:app", "-k", "uvicorn.workers.UvicornWorker", "-b", "0.0.0.0:8000",
+              "--timeout", "120", "--access-logfile", "-", "--forwarded-allow-ips", "*"]
+    environment:
+      <<: *app-env
+      BRT_SERVICE: flow
+      WEB_CONCURRENCY: ${FLOW_WORKERS:-1}
+      SCHEDULER_MODE: "off"
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+    deploy:
+      resources:
+        limits: {cpus: "1.0", memory: 768M}
+
+  # Flow Studio waits whose time has come, and expiring approvals - from the flow image, so a
+  # flow release updates them too; the worker container leaves this job out
+  flow-worker:
+    <<: *app
+    image: ${IMAGE_PREFIX:-brt360}-flow:${BRT_VERSION:-local}
+    command: ["python", "-m", "app.scheduler", "--service", "flow"]
+    healthcheck: {disable: true}
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    deploy:
+      resources:
+        limits: {cpus: "0.5", memory: 384M}
 
   # the one way out to a language model (backend/app/services/ai_gateway.py): it alone gets
   # OPENAI_API_KEY (from backend/.env); the app containers have it blanked above

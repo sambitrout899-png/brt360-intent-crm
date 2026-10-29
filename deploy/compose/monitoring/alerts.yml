@@ -21,7 +21,7 @@ groups:
           description: "Prometheus can't reach the API container. Check: docker compose logs --tail 50 api"
 
       - alert: ServiceDown
-        expr: up{job=~"brt360-training|brt360-bim|brt360-product|brt360-metadata|brt360-ai-gateway"} == 0
+        expr: up{job=~"brt360-training|brt360-bim|brt360-product|brt360-metadata|brt360-intent|brt360-flow|brt360-ai-gateway"} == 0
         for: 2m
         labels: {severity: critical}
         annotations:
