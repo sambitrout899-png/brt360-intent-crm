@@ -452,6 +452,22 @@ Removing the newest entries together with their records leaves no break. Note
 the `last_hash` from time to time (it is in the output above), and a later check
 must still contain it.
 
+### Load test (staging only)
+
+`backend/scripts/load_test.py` measures the plan's performance targets from inside
+staging, so the network between you and the server isn't part of the result:
+
+```bash
+cd /opt/brt360-staging/deploy/compose
+docker compose run --rm --no-deps api python scripts/load_test.py --yes-this-is-staging
+```
+
+It takes about 3 minutes and prints p50/p95/p99 and PASS/FAIL per path: creating,
+reading and updating records, understanding a request (rules), flow steps, and
+a BIM load of 10,000 rows. Everything it creates lives in its own `loadtest`
+tenant, whose AI is set to rules, so no model calls are made or paid for. Options:
+`--concurrency` (8), `--duration` (30 s per path), `--bim-rows` (10000, 0 to skip).
+
 ### Token signing key rotation (yearly, or if the key may have leaked)
 
 ```bash
