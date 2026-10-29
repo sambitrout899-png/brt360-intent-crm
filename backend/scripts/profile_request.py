@@ -36,6 +36,11 @@ def main() -> None:
     if not args.yes_this_is_staging:
         sys.exit("Run it on staging only, and say so: --yes-this-is-staging")
 
+    import os
+
+    # every route in this one process - the container's SPLIT_SERVICES would leave out
+    # the ones its own service doesn't serve (intents run in the intent container)
+    os.environ["SPLIT_SERVICES"] = ""
     from fastapi.testclient import TestClient
     from sqlalchemy import event
 
@@ -47,13 +52,17 @@ def main() -> None:
     client = TestClient(app, headers={"Authorization": f"Bearer {token}"})
     stamp = time.strftime("%H%M%S")
 
+    last: dict = {}
+
     def create(i: int) -> int | None:
-        body = client.post("/api/intents", json={"text": "p", "structured": {"intent_type": "INT-15", "entities": {"name": f"PR {stamp} {i}"}}}).json()
+        resp = client.post("/api/intents", json={"text": "p", "structured": {"intent_type": "INT-15", "entities": {"name": f"PR {stamp} {i}"}}})
+        last.update(status=resp.status_code, text=resp.text[:400])
+        body = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
         return (body.get("result") or {}).get("party_id")
 
     party = create(0)
     if not party:
-        sys.exit("Couldn't create a prospect to work on")
+        sys.exit(f"Couldn't create a prospect to work on: HTTP {last.get('status')} {last.get('text')}")
 
     def bim(i: int) -> None:
         ids = client.post("/api/bim/brt-ids", json={"entity": "prospect", "count": args.rows}).json()["brt_ids"]
