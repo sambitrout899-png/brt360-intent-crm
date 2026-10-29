@@ -13,7 +13,10 @@ def test_demo_history_feeds_kpis_models_and_forecasts(client):
         assert out["seeded"] and out["Order"] > 40 and out["CmInvoice"] > 300 and out["CmUsage"] > 3000
         assert demo_data.seed_history(db, tid, customers=60, months=14)["seeded"] is False  # second run does nothing
         statuses = {s for (s,) in db.query(Order.status).filter(Order.tenant_id == tid)}
-        assert {OrderStatus.active, OrderStatus.cancelled} <= statuses
+        # the history is generated relative to today, so which kind of churn 60 customers show
+        # varies by day (cancelled, terminated, about to cancel) - what matters is that some do
+        churned = {OrderStatus.cancelled, OrderStatus.terminated, OrderStatus.pending_cancellation, OrderStatus.suspended}
+        assert OrderStatus.active in statuses and statuses & churned, statuses
         assert db.query(CmInvoice).filter(CmInvoice.status == "overdue").count() > 0
         assert db.query(CmUsage).filter(CmUsage.international.is_(True)).count() > 0
     finally:
