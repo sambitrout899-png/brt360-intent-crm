@@ -24,6 +24,7 @@ import contextvars
 import hashlib
 import hmac
 import re
+import threading
 from typing import Any
 
 from sqlalchemy import Column, Integer, MetaData, String, Table, event, text
@@ -126,13 +127,18 @@ def number_of(brt_id: str) -> int | None:
     return _unpermute(_decode(str(brt_id).split("-")[1]))
 
 
-def issued(connection, brt_id: str, table: str | None = None) -> bool:
-    """Valid, of this table, and actually handed out by the register."""
+def counter_top(connection) -> int:
+    """The highest number handed out so far."""
+    return connection.execute(text("SELECT value FROM brt_id_counter WHERE id = 1")).scalar() or 0
+
+
+def issued(connection, brt_id: str, table: str | None = None, top: int | None = None) -> bool:
+    """Valid, of this table, and actually handed out by the register. `top`:
+    counter_top read once for many checks (a BIM load reserves its codes first)."""
     number = number_of(brt_id) if is_valid(brt_id, table) else None
     if number is None:
         return False
-    top = connection.execute(text("SELECT value FROM brt_id_counter WHERE id = 1")).scalar() or 0
-    return 0 < number <= top
+    return 0 < number <= (top if top is not None else counter_top(connection))
 
 
 def _encode(value: int, length: int) -> str:
@@ -180,6 +186,32 @@ def mint(connection, table: str, count: int = 1) -> list[str]:
     return [code_for(n, table) for n in reserve(connection, count)]
 
 
+# Numbers for records being saved come from a block this process holds. On
+# Postgres the block is taken in a transaction of its own, so the counter row
+# is locked for that moment only - not for the rest of the request, which made
+# every request that saves a record wait for the one before it to commit.
+# Numbers a process held but never used are skipped (codes need only be
+# unique and issued). SQLite (development, tests) takes them in the session's
+# own transaction, as before: its tests share one connection.
+BLOCK = 64
+_blocks: dict[str, list[int]] = {}
+_blocks_lock = threading.Lock()
+
+
+def _numbers(engine, connection, count: int) -> list[int]:
+    if engine.dialect.name != "postgresql":
+        return list(reserve(connection, count))
+    key = str(engine.url)
+    with _blocks_lock:
+        held = _blocks.setdefault(key, [])
+        if len(held) < count:
+            with engine.connect() as own:
+                held.extend(reserve(own, max(count - len(held), BLOCK)))
+                own.commit()
+        taken, held[:] = held[:count], held[count:]
+    return taken
+
+
 # ---------------------------------------------------------------- stamping every record
 
 
@@ -193,7 +225,8 @@ def _before_flush(session: Session, flush_context, instances) -> None:
     fresh = [o for o in session.new if hasattr(o, "brt_id")]
     missing = [o for o in fresh if not o.brt_id]
     if missing:
-        numbers = reserve(session.connection(), len(missing))
+        connection = session.connection()
+        numbers = _numbers(connection.engine, connection, len(missing))
         for obj, number in zip(missing, numbers):
             obj.brt_id = code_for(number, obj.__table__.name)
     for obj in fresh:
@@ -214,7 +247,7 @@ def _before_insert(mapper, connection, target) -> None:
     if getattr(target, "brt_id", "x") is None or getattr(target, "brt_id", "x") == "":
         from app.timeutils import utcnow
 
-        target.brt_id = code_for(reserve(connection, 1)[0], target.__table__.name)
+        target.brt_id = code_for(_numbers(connection.engine, connection, 1)[0], target.__table__.name)
         target.sys_created_at = target.sys_created_at or utcnow()
         if target.sys_created_by is None:
             actor = _actor()

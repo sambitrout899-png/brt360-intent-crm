@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   bimEntities,
   bimInterfaces,
+  bimJob,
   bimJobs,
   bimLoad,
   bimRecord,
@@ -19,6 +20,8 @@ const STATUS_CLS: Record<string, string> = {
   completed_with_errors: "bg-amber-500/15 text-amber-300",
   failed: "bg-red-500/15 text-red-300",
   running: "bg-sky-500/15 text-sky-300",
+  queued: "bg-sky-500/15 text-sky-300",
+  interrupted: "bg-red-500/15 text-red-300",
 };
 
 function download(name: string, content: string, type = "text/csv") {
@@ -101,11 +104,17 @@ export default function AdminBimSection() {
     setBusy(true);
     setError("");
     try {
-      const job = await bimLoad({
+      let job = await bimLoad({
         entity: chosenInterface ? undefined : entity, interface_id: chosenInterface?.id ?? null, content: file.content, format: file.format,
         file_name: file.name, dry_run: dry, apply_page_rules: pageRules,
       });
       setResult(job);
+      // a large load runs in the background: follow it until it's done
+      while (job.status === "queued" || job.status === "running") {
+        await new Promise((r) => setTimeout(r, 2000));
+        job = await bimJob(job.id);
+        setResult(job);
+      }
       reload();
     } catch (e) {
       setError(clean(e));

@@ -2,7 +2,7 @@
 from fastapi import Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from app.auth import get_current_user
-from app.db import get_db
+from app.db import cached, get_db
 from app.models.auth import User
 from app.models.tenant import Tenant
 
@@ -25,10 +25,17 @@ def validate_modules(values):
 
 
 def enabled(db, tenant_id):
-    tenant = db.get(Tenant, tenant_id) if tenant_id else None
-    if tenant is None:
+    if not tenant_id:
         return set()
-    return set(LEGACY_MODULES if tenant.licensed_modules is None else tenant.licensed_modules)
+
+    def load():
+        tenant = db.get(Tenant, tenant_id)
+        if tenant is None:
+            return frozenset()
+        return frozenset(LEGACY_MODULES if tenant.licensed_modules is None else tenant.licensed_modules)
+
+    # asked many times per request (every intent and route checked): once per session (app/db.py cached)
+    return set(cached(db, ("licensed_modules", tenant_id), Tenant, load))
 
 
 def require_module(db, tenant_id, module):

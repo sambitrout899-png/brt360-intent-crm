@@ -15,11 +15,16 @@ The rules every load follows:
   nothing.
 - Prospects and leads also pass their Page Designer page (mandatory
   fields, field types, validation rules) unless the load says otherwise.
+- A load of more than SYNC_ROWS rows runs in the background: the request
+  answers with the queued job at once and its progress is read from the
+  job (load_in_background) - a 10,000-row load no longer has to fit in one
+  request's time.
 """
 
 from __future__ import annotations
 
 import csv
+import datetime as dt
 import io
 import json
 from dataclasses import dataclass, field
@@ -29,6 +34,7 @@ from sqlalchemy.orm import Session
 
 from app import brt_id
 from app.crm_core import custom_field_service, page_service, process_service
+from app.db import cached
 from app.models.auth import User
 from app.models.bim import BimInterface, BimJob
 from app.models.catalog import OfferingStatus, ProductOffering
@@ -188,7 +194,9 @@ def load_row(db: Session, tenant_id: int, spec: Spec, row: dict[str, Any], mode:
     if code is None:
         return "failed", ["brt_id is missing - every record loaded into BRT 360 needs its BRT_ID"]
     code = code.upper()
-    if not brt_id.issued(db.connection(), code, spec.table):
+    # the register's top, read once per load: the codes were reserved before it started
+    top = cached(db, ("brt_id_top",), (), lambda: brt_id.counter_top(db.connection()))
+    if not brt_id.issued(db.connection(), code, spec.table, top=top):
         return "failed", [f"{code} is not a BRT_ID BRT 360 issued for {spec.label.lower()} records "
                           f"({brt_id.prefix_for(spec.table)}-...) - reserve them in BIM first"]
     obj = _find(db, spec.model, code)
@@ -301,17 +309,28 @@ def _record_owner(db: Session, tenant_id: int, entity_type: str, entity_id: int,
         meta.owner_user_id = user_id
 
 
-def run(db: Session, tenant_id: int, entity: str, rows: list[dict[str, Any]], channel: str = "batch", interface: BimInterface | None = None,
-        file_name: str | None = None, dry_run: bool = False, apply_pages: bool = True, actor_id: int | None = None) -> tuple[BimJob, list[dict[str, Any]]]:
-    spec = spec_of(entity)
+def new_job(db: Session, tenant_id: int, entity: str, rows: list[dict[str, Any]], channel: str = "batch",
+            interface: BimInterface | None = None, file_name: str | None = None, dry_run: bool = False) -> BimJob:
+    spec_of(entity)  # an unknown entity is refused before anything is recorded
     if len(rows) > MAX_ROWS:
         raise ValueError(f"At most {MAX_ROWS} records per load - split the file")
-    mapping = json.loads(interface.mapping_json or "{}") if interface else {}
-    mode = interface.mode if interface else "upsert"
     job = BimJob(tenant_id=tenant_id, interface_id=interface.id if interface else None, entity=entity, channel=channel,
                  file_name=file_name, dry_run=dry_run, total=len(rows))
     db.add(job)
     db.flush()
+    return job
+
+
+def run(db: Session, tenant_id: int, entity: str, rows: list[dict[str, Any]], channel: str = "batch", interface: BimInterface | None = None,
+        file_name: str | None = None, dry_run: bool = False, apply_pages: bool = True, actor_id: int | None = None,
+        job: BimJob | None = None) -> tuple[BimJob, list[dict[str, Any]]]:
+    """Loads the rows (into `job`, or a new one). Each row on its own: a bad row is reported and skipped."""
+    spec = spec_of(entity)
+    mapping = json.loads(interface.mapping_json or "{}") if interface else {}
+    mode = interface.mode if interface else "upsert"
+    if job is None:
+        job = new_job(db, tenant_id, entity, rows, channel, interface, file_name, dry_run)
+    job.status = "running"
     results: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
     counts = {"inserted": 0, "updated": 0, "failed": 0}
@@ -340,7 +359,43 @@ def run(db: Session, tenant_id: int, entity: str, rows: list[dict[str, Any]], ch
     return job, results
 
 
+SYNC_ROWS = 1000  # loads up to this size answer at once; larger ones run in the background (load_in_background)
+STALE = dt.timedelta(hours=1)
+
+
+def load_in_background(job_id: int, tenant_id: int, entity: str, rows: list[dict[str, Any]], interface_id: int | None,
+                       apply_pages: bool, actor_id: int | None) -> None:
+    """Runs a queued load in its own session, after the request that queued it has answered."""
+    from app import rls
+    from app.db import SessionLocal
+
+    marker = brt_id.current_user.set({"user_id": actor_id} if actor_id else None)
+    try:
+        with SessionLocal() as db:
+            rls.scope(db, tenant_id)
+            job = db.get(BimJob, job_id)
+            interface = db.get(BimInterface, interface_id) if interface_id else None
+            try:
+                run(db, tenant_id, entity, rows, job.channel, interface, job.file_name, False, apply_pages, actor_id, job=job)
+                db.commit()
+            except Exception as exc:  # noqa: BLE001 - the job records why, rather than hanging as "running"
+                db.rollback()
+                rls.scope(db, tenant_id)
+                job = db.get(BimJob, job_id)
+                job.status, job.finished_at = "failed", utcnow()
+                job.errors_json = json.dumps([{"row": 0, "brt_id": None, "errors": [f"the load stopped: {exc}"]}])
+                db.commit()
+    finally:
+        brt_id.current_user.reset(marker)
+
+
 def job_out(job: BimJob) -> dict[str, Any]:
+    if job.status in ("queued", "running") and job.started_at and utcnow() - job.started_at > STALE:
+        job.status = "interrupted"  # its process ended before it did (a restart) - shown, not saved
+    return _job_out(job)
+
+
+def _job_out(job: BimJob) -> dict[str, Any]:
     return {
         "id": job.id, "brt_id": job.brt_id, "entity": job.entity, "channel": job.channel, "file_name": job.file_name,
         "status": job.status, "dry_run": job.dry_run, "total": job.total, "inserted": job.inserted, "updated": job.updated,

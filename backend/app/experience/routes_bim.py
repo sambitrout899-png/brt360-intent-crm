@@ -13,7 +13,7 @@ import json
 import re
 from typing import Any
 
-from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -93,15 +93,24 @@ def _interface(db: Session, tenant_id: int, interface_id: int | None = None, cod
 
 
 @router.post("/load")
-def load(payload: LoadIn, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id),
+def load(payload: LoadIn, background: BackgroundTasks, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id),
          user: User = Depends(get_current_user)) -> dict[str, Any]:
-    """A batch load. Every row needs its BRT_ID; bad rows are reported and skipped."""
+    """A batch load. Every row needs its BRT_ID; bad rows are reported and skipped.
+    Up to bim_service.SYNC_ROWS rows (and every dry run) answer with the result;
+    a larger load answers at once with its queued job - read GET /jobs/{id} for progress."""
     interface = _interface(db, tenant_id, payload.interface_id)
     entity = interface.entity if interface else payload.entity
     if not entity:
         raise HTTPException(400, "Say which entity the file loads, or pick an interface")
     try:
         rows = bim_service.parse(payload.content, payload.format)
+        if len(rows) > bim_service.SYNC_ROWS and not payload.dry_run:
+            job = bim_service.new_job(db, tenant_id, entity, rows, "batch", interface, payload.file_name)
+            job.status = "queued"
+            db.commit()
+            background.add_task(bim_service.load_in_background, job.id, tenant_id, entity, rows,
+                                interface.id if interface else None, payload.apply_page_rules, user.id)
+            return {**bim_service.job_out(job), "results": []}
         job, results = bim_service.run(db, tenant_id, entity, rows, "batch", interface, payload.file_name, payload.dry_run,
                                        payload.apply_page_rules, user.id)
     except (ValueError, json.JSONDecodeError, csv.Error) as exc:

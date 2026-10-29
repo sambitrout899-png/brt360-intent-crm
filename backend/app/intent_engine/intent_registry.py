@@ -23,6 +23,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.db import cached
 from app.intent_engine import reasoning
 from app.models.auth import User
 from app.models.flows import FlowDefinition
@@ -446,7 +447,10 @@ def library() -> list[dict[str, Any]]:
 
 
 def _settings(db: Session, tenant_id: int) -> dict[str, IntentSetting]:
-    return {s.code: s for s in db.query(IntentSetting).filter(IntentSetting.tenant_id == tenant_id).all()}
+    # read many times per request (every intent the catalog checks): once per session (app/db.py cached)
+    rows = cached(db, ("intent_settings", tenant_id), IntentSetting,
+                  lambda: {s.code: s for s in db.query(IntentSetting).filter(IntentSetting.tenant_id == tenant_id).all()})
+    return dict(rows)
 
 
 def _split(raw: str | None) -> list[str]:

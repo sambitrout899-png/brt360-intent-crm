@@ -12,6 +12,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.db import cached
 from app.models.custom_fields import CustomFieldDefinition, CustomFieldValue
 
 _TRUE = {"true", "yes", "y", "1", "on"}
@@ -19,12 +20,16 @@ _FALSE = {"false", "no", "n", "0", "off"}
 
 
 def list_definitions(db: Session, tenant_id: int, entity_type: str, active_only: bool = True) -> list[CustomFieldDefinition]:
-    query = db.query(CustomFieldDefinition).filter(
-        CustomFieldDefinition.tenant_id == tenant_id, CustomFieldDefinition.entity_type == entity_type
-    )
-    if active_only:
-        query = query.filter(CustomFieldDefinition.is_active.is_(True))
-    return query.order_by(CustomFieldDefinition.id).all()
+    def load() -> list[CustomFieldDefinition]:
+        query = db.query(CustomFieldDefinition).filter(
+            CustomFieldDefinition.tenant_id == tenant_id, CustomFieldDefinition.entity_type == entity_type
+        )
+        if active_only:
+            query = query.filter(CustomFieldDefinition.is_active.is_(True))
+        return query.order_by(CustomFieldDefinition.id).all()
+
+    # read for every record of a BIM load or a page: once per session (app/db.py cached)
+    return list(cached(db, ("custom_fields", tenant_id, entity_type, active_only), CustomFieldDefinition, load))
 
 
 def definition_by_key(db: Session, tenant_id: int, entity_type: str, key: str) -> CustomFieldDefinition | None:

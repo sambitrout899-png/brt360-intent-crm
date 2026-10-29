@@ -31,6 +31,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app import brt_id
+from app.db import cached
 from app.models.auth import User, UserRole
 from app.licensing import licensed_pages
 from app.models.crm import Lead, Opportunity, Quote
@@ -131,26 +132,27 @@ def default_pages(user: User) -> list[str]:
 
 
 def user_roles(db: Session, user: User) -> list[AppRole]:
-    return (
+    # asked for every intent and page checked in a request: once per session (app/db.py cached)
+    return list(cached(db, ("user_roles", user.id), (AppRole, UserAppRole), lambda: (
         db.query(AppRole)
         .join(UserAppRole, UserAppRole.role_id == AppRole.id)
         .filter(UserAppRole.user_id == user.id, AppRole.is_active.is_(True), AppRole.tenant_id == user.tenant_id)
         .order_by(AppRole.name)
         .all()
-    )
+    )))
 
 
 def has_assigned_roles(db: Session, user: User) -> bool:
     """Whether the user holds any role at all - switched-off ones included.
     Only a user who was never given a role keeps the open defaults; one whose
     roles are all switched off gets what those roles grant: nothing."""
-    return (
+    return cached(db, ("has_roles", user.id), (AppRole, UserAppRole), lambda: (
         db.query(UserAppRole.id)
         .join(AppRole, AppRole.id == UserAppRole.role_id)
         .filter(UserAppRole.user_id == user.id, AppRole.tenant_id == user.tenant_id)
         .first()
         is not None
-    )
+    ))
 
 
 def split_pages(raw: str | None) -> list[str]:

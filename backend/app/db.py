@@ -44,6 +44,48 @@ def _create_brt_id_register(target, connection, **kw) -> None:
     brt_id.create_counter(connection)
 
 
+# ---------------------------------------------------------------- per-session read cache
+#
+# Some lookups run many times in one request (the tenant's licences on every
+# intent the catalog checks, the tenant's intent settings) - and the session's
+# identity map only holds rows weakly, so even db.get() goes back to the
+# database once the caller lets go. cached() keeps one answer per session: a
+# flush that changes a row of the given model drops it, and so does the end of
+# the transaction, so it is never staler than the transaction would be.
+
+
+def cached(db: Session, key: tuple, models: type | tuple[type, ...], load):
+    """load() once per session (and transaction), until a row of `models` changes."""
+    store = db.info.setdefault("brt_cache", {})
+    if key not in store:
+        store[key] = (models if isinstance(models, tuple) else (models,), load())
+    return store[key][1]
+
+
+@event.listens_for(Session, "after_flush")
+def _drop_changed(session: Session, flush_context) -> None:
+    store = session.info.get("brt_cache")
+    if store:
+        # a row whose own columns changed - not one that only gained a related row (a definition's new value)
+        dirty = (o for o in session.dirty if session.is_modified(o, include_collections=False))
+        changed = {type(o) for o in (*session.new, *dirty, *session.deleted)}
+        for key in [k for k, (models, _) in store.items() if changed.intersection(models)]:
+            del store[key]
+
+
+@event.listens_for(Session, "after_soft_rollback")
+def _drop_all(session: Session, *args) -> None:
+    # any rollback, a savepoint's too: what was read since may be undone
+    session.info.pop("brt_cache", None)
+
+
+@event.listens_for(Session, "after_transaction_end")
+def _drop_at_end(session: Session, transaction) -> None:
+    # the transaction itself, not a savepoint (each BIM row has one): the next one reads afresh
+    if transaction.parent is None:
+        session.info.pop("brt_cache", None)
+
+
 def get_db() -> Generator[Session, None, None]:
     db = SessionLocal()
     try:

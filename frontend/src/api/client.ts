@@ -1672,6 +1672,11 @@ export function bimLoad(body: { entity?: string; interface_id?: number | null; c
   return request<BimJob>("/api/bim/load", { method: "POST", body: JSON.stringify(body) });
 }
 
+/** One load's progress - a large load runs in the background (status queued / running). */
+export function bimJob(id: number): Promise<BimJob> {
+  return request<BimJob>(`/api/bim/jobs/${id}`);
+}
+
 export function bimJobs(): Promise<BimJob[]> {
   return request<BimJob[]>("/api/bim/jobs");
 }

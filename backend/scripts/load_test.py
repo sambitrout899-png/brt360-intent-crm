@@ -203,9 +203,14 @@ async def main() -> int:
                             [f"{b},LT {run_id} bim {k},lt{k}@example.invalid,B2B,,Pune" for k, b in enumerate(ids)])
             started = time.perf_counter()
             job = await client.post("/api/bim/load", json={"entity": "prospect", "content": csv, "file_name": f"loadtest-{run_id}.csv"})
-            bim_seconds = time.perf_counter() - started
             body = job.json() if job.status_code == 200 else {}
-            bim_note = f"{body.get('inserted', 0)} inserted, {body.get('failed', '?')} failed" if body else f"HTTP {job.status_code}: {job.text[:150]}"
+            # a large load runs in the background: follow the job until it's done
+            while body.get("status") in ("queued", "running") and time.perf_counter() - started < 600:
+                await asyncio.sleep(1)
+                body = (await client.get(f"/api/bim/jobs/{body['id']}")).json()
+            bim_seconds = time.perf_counter() - started
+            bim_note = (f"{body.get('inserted', 0)} inserted, {body.get('failed', '?')} failed ({body.get('status')})" if body
+                        else f"HTTP {job.status_code}: {job.text[:150]}")
 
     # ---------------------------------------------------------------- report
     print(f"\n{'scenario':<16}{'calls':>7}{'errors':>8}{'per s':>8}{'p50 ms':>9}{'p95 ms':>9}{'p99 ms':>9}{'target':>9}  result")

@@ -29,6 +29,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.crm_core import custom_field_service
+from app.db import cached
 from app.models.custom_fields import CUSTOM_FIELD_DATA_TYPES, CustomFieldDefinition
 from app.models.pages import PageLayout, ValidationRule
 
@@ -281,11 +282,12 @@ def page(db: Session, tenant_id: int, entity_type: str, segment: str | None = No
     keys = [key] if key else []
     keys += [page_key(entity_type, segment)] if segment else []
     keys.append(entity_type)
-    rows = {
+    # read for every record a BIM load or a save validates: once per session (app/db.py cached)
+    rows = dict(cached(db, ("page_layouts", tenant_id, tuple(keys)), PageLayout, lambda: {
         r.page_key: r for r in db.query(PageLayout).filter(
             PageLayout.tenant_id == tenant_id, PageLayout.page_key.in_(keys), PageLayout.is_active.is_(True)
         )
-    }
+    }))
 
     def out(row: PageLayout) -> dict[str, Any]:
         return _page_out(row.entity_type, row.segment, row.page_key, row.name, reconcile(db, tenant_id, row.entity_type, row.segment, _layout_of(row)), row)
@@ -708,9 +710,9 @@ FORMATS: dict[str, tuple[str, str]] = {
 
 
 def rules_for(db: Session, tenant_id: int, entity_type: str, segment: str | None) -> list[ValidationRule]:
-    rows = db.query(ValidationRule).filter(
+    rows = cached(db, ("validation_rules", tenant_id, entity_type), ValidationRule, lambda: db.query(ValidationRule).filter(
         ValidationRule.tenant_id == tenant_id, ValidationRule.entity_type == entity_type, ValidationRule.is_active.is_(True)
-    ).order_by(ValidationRule.id).all()
+    ).order_by(ValidationRule.id).all())
     return [r for r in rows if r.segment is None or segment is None or r.segment == segment]
 
 
