@@ -40,7 +40,7 @@ _DOMAIN_WORDS: dict[str, tuple[str, ...]] = {
 }
 _EXTERNAL_DOMAINS = ("billing", "service", "network", "inventory")
 _COLORS = {
-    "red": "#e60000", "crimson": "#dc2626", "blue": "#3b82f6",
+    "vi red": "#e60000", "vodafone red": "#e60000", "red": "#e60000", "crimson": "#dc2626", "blue": "#3b82f6",
     "sky": "#38bdf8", "navy": "#1e3a8a", "teal": "#14b8a6", "cyan": "#22d3ee", "green": "#22c55e", "emerald": "#10b981",
     "purple": "#a855f7", "violet": "#8b5cf6", "lavender": "#a78bfa", "pink": "#ec4899", "magenta": "#d946ef",
     "orange": "#f97316", "amber": "#f59e0b", "yellow": "#eab308", "gold": "#f59e0b", "indigo": "#6366f1",

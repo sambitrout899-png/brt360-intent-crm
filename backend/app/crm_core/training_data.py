@@ -29,8 +29,8 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-_COMPANIES = ["Acme Telecom", "Globex", "Deccan Logistics", "Lotus Foods", "Meridian BPM", "Kaveri Retail", "Horizon Clinics",
-              "Everest Finance", "Jupiter Eats", "Crescent Bank Mumbai", "Sunrise Hotels", "Bharat Steel", "Nova Schools", "Orbit Media"]
+_COMPANIES = ["Acme Telecom", "Globex", "Tata Logistics", "Burger King", "Infosys BPM", "Reliance Retail", "Apollo Clinics",
+              "Mahindra Finance", "Zomato", "HDFC Branch Mumbai", "Sunrise Hotels", "Bharat Steel", "Nova Schools", "Orbit Media"]
 _PRODUCTS = ["Fiber 800", "Fiber 500", "Business Broadband 1G", "SD-WAN Pro", "MPLS 100", "Enterprise Voice", "IoT Fleet SIM", "5G Fixed Wireless"]
 _COMPONENTS = ["Fiber500", "VOIP", "Static IP", "Managed Router", "SIM", "Security Suite"]
 _SEGMENTS = ["B2C", "B2B", "B2B-SMB", "B2B-Enterprise"]
@@ -128,13 +128,13 @@ _T: list[tuple[str, list[tuple[str, dict[str, Any]]]]] = [
     # Product configuration (INT-42..45) - also last, for the same reason.
     ("INT-42", [("Design {product}: Bandwidth 100 Mbps +0, 1 Gbps +{price}; technical: VLAN ID required number",
                  {"offering_name": "{product}", "instruction": "Bandwidth 100 Mbps +0, 1 Gbps +{price}; technical: VLAN ID required number"}),
-                ("define attributes for {product}: Static IPs: 50 each; CPE type: Standard router, Business router",
-                 {"offering_name": "{product}", "instruction": "Static IPs: 50 each; CPE type: Standard router, Business router"})]),
+                ("define attributes for {product}: Static IPs: 50 each; CPE type: Cisco, Huawei",
+                 {"offering_name": "{product}", "instruction": "Static IPs: 50 each; CPE type: Cisco, Huawei"})]),
     ("INT-43", [("Put {product} on the Enterprise pricelist at {price}", {"offering_name": "{product}", "price_list": "Enterprise", "price": "{price}"}),
                 ("add {product} to the Government pricelist for {price}", {"offering_name": "{product}", "price_list": "Government", "price": "{price}"})]),
     ("INT-44", [("Use the Strategic pricelist for quote {id}", {"entity_type": "quote", "entity_id": "{id}", "price_list": "Strategic"}),
                 ("apply the Enterprise pricelist to customer {id}", {"entity_type": "party", "entity_id": "{id}", "price_list": "Enterprise"})]),
-    ("INT-45", [("Order {id}: VLAN ID {n}, CPE type Business router", {"order_id": "{id}", "technical_attributes": "VLAN ID {n}, CPE type Business router"}),
+    ("INT-45", [("Order {id}: VLAN ID {n}, CPE type Cisco", {"order_id": "{id}", "technical_attributes": "VLAN ID {n}, CPE type Cisco"}),
                 ("set technical attributes on order {id}: IP block /29", {"order_id": "{id}", "technical_attributes": "IP block /29"})]),
     # New Connect (INT-46) - last, for the same reason.
     ("INT-46", [("Generate a lead for prospect {id} interested in {product}", {"party_id": "{id}", "products": ["{product}"]}),

@@ -55,8 +55,7 @@ class LlmTarget:
 
     @property
     def label(self) -> str:
-        # the external model's name stays out of what the screens show
-        return f"own model ({self.model})" if self.provider == "local" else "external AI API"
+        return f"{'own model' if self.provider == 'local' else 'external API'} ({self.model})"
 
 
 def local_target(model: str | None = None, tenant_id: int | None = None) -> LlmTarget:

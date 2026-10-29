@@ -1348,7 +1348,7 @@ def _templates(offering: ProductOffering, lines: set[str]) -> list[dict[str, Any
                 [{"value": "99.9%", "type": "percent", "amount": 10}, {"value": "99.99%", "type": "percent", "amount": 25}], default="99.5%"),
         pricing("Static IPs", [], [{"value": "*", "type": "per_unit", "amount": unit}]),
         technical("VLAN ID", data_type="number", required=True),
-        technical("CPE type", ["Standard router", "Business router", "SD-WAN edge"], required=True),
+        technical("CPE type", ["Cisco", "Huawei", "Juniper"], required=True),
         technical("Handoff interface", ["Copper RJ45", "Fiber SFP"], required=True),
         technical("IP block", ["/30", "/29", "/28"]),
         technical("Circuit ID"),

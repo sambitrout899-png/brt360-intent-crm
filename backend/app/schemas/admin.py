@@ -256,8 +256,7 @@ class AiSettingsUpdate(BaseModel):
     # this endpoint never echoes a real key back, so "leave blank to keep"
     # is the only way to update just the model without re-pasting the key.
     api_key: str | None = None
-    # blank = the platform's default model (OPENAI_MODEL)
-    model: str = Field(default="", max_length=100)
+    model: str = Field(default="gpt-4o-mini", min_length=1, max_length=100)
     is_active: bool = True
     # external / local / rules - None leaves the current choice
     provider: str | None = None

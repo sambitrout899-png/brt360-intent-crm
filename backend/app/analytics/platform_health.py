@@ -52,14 +52,14 @@ def allowed(db: Session, access: Access) -> bool:
 def _get(path: str, params: dict[str, Any]) -> list[dict[str, Any]]:
     url = get_settings().prometheus_url.rstrip("/")
     if not url:
-        raise Unavailable("Monitoring isn't set up for this installation - ask the platform owner to connect it.")
+        raise Unavailable("Monitoring isn't set up for this installation (PROMETHEUS_URL is empty).")
     try:
         resp = httpx.get(f"{url}{path}", params=params, timeout=5.0)
         body = resp.json()
     except (httpx.HTTPError, ValueError) as exc:
-        raise Unavailable("Monitoring isn't running on this server - ask the platform owner to start it.") from exc
+        raise Unavailable("Monitoring isn't running here - start it with: docker compose --profile monitoring up -d") from exc
     if body.get("status") != "success":
-        raise Unavailable(f"The monitoring refused a query: {body.get('error', resp.status_code)}")
+        raise Unavailable(f"Prometheus refused a query: {body.get('error', resp.status_code)}")
     return body["data"]["result"]
 
 
@@ -198,7 +198,7 @@ def snapshot(hours: int = 6) -> dict[str, Any]:
     ]
     notes = []
     if down:
-        notes.append({"tone": "bad", "text": f"Down now: {', '.join(down)} - its screens fail until it is back."})
+        notes.append({"tone": "bad", "text": f"Down now: {', '.join(down)}. Check: docker compose ps; docker compose logs --tail 50 <service>"})
     if out["site"] == 0:
         notes.append({"tone": "bad", "text": "The public site is not answering its health check."})
     for k in kpis:

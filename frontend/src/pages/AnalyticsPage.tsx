@@ -1,8 +1,8 @@
 /**
  * Analytics & Reports - Explore (build any report, drill to the records),
  * Dashboards, the telecom scorecard, Predictions (forecasts and machine
- * learning) and, for the operator's admins, Platform health (the server
- * monitoring's numbers). Backend: app/analytics, /api/analytics.
+ * learning) and, for the operator's admins, Platform health (the Grafana
+ * dashboards' numbers). Backend: app/analytics, /api/analytics.
  */
 import { useEffect, useState } from "react";
 import { analyticsCatalog, listReports } from "../api/analytics";

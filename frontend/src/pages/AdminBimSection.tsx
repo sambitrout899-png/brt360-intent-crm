@@ -289,7 +289,7 @@ export default function AdminBimSection() {
         ))}
         {draft && (
           <div className="grid gap-2 rounded-lg border border-slate-700 p-3 sm:grid-cols-2">
-            <input value={draft.code} onChange={(e) => setDraft({ ...draft, code: e.target.value })} placeholder="Code, e.g. ERP-CUSTOMERS" className={INPUT_CLS} />
+            <input value={draft.code} onChange={(e) => setDraft({ ...draft, code: e.target.value })} placeholder="Code, e.g. SAP-CUSTOMERS" className={INPUT_CLS} />
             <input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder="Name" className={INPUT_CLS} />
             <select value={draft.entity} onChange={(e) => setDraft({ ...draft, entity: e.target.value })} className={INPUT_CLS}>
               {entities.map((e) => (

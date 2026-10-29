@@ -1,5 +1,5 @@
 /**
- * Explore: build any report by dragging fields onto shelves -
+ * Explore: build any report by dragging fields onto shelves (Tableau-style) -
  * dimensions (with date grains and number bins), values (aggregations and
  * table calculations), filters - pick a chart, drill into any mark, save it,
  * export it, or just ask in plain English.

@@ -33,13 +33,12 @@ from app.timeutils import utcnow
 
 KEY = "b2c_journey"
 CHANNELS: dict[str, str] = {
-    "ivr": "IVR", "retail_pos": "Retail sales point", "store": "Store visit", "chat": "Chat message", "sms": "SMS",
+    "ivr": "IVR", "retail_pos": "Retail sales point", "store": "Store visit", "whatsapp": "WhatsApp chat", "sms": "SMS",
     "ussd": "USSD", "web": "Web", "app": "Mobile app", "call_center": "Call centre", "field_agent": "Field agent", "email": "Email",
 }
 ALIASES = {"retail": "retail_pos", "pos": "retail_pos", "retail sales point": "retail_pos", "retail point": "retail_pos",
            "shop": "store", "walk-in": "store", "walk in": "store", "store visit": "store", "direct store visit": "store",
-           # what people type for a messaging-app chat (stored as "chat" since b8d2f4a6c1e3)
-           "whatsapp": "chat", "whats app": "chat", "wa": "chat", "chat message": "chat", "text": "sms", "phone": "call_center",
+           "whats app": "whatsapp", "wa": "whatsapp", "chat": "whatsapp", "text": "sms", "phone": "call_center",
            "call centre": "call_center", "call center": "call_center", "contact centre": "call_center", "website": "web",
            "online": "web", "mobile app": "app", "self-care app": "app", "agent": "field_agent", "door to door": "field_agent"}
 DEFAULTS: dict[str, Any] = {"direct_order": True, "auto_submit": True, "channels": list(CHANNELS),
@@ -62,7 +61,7 @@ def settings(db: Session, tenant_id: int) -> dict[str, Any]:
     out = dict(DEFAULTS)
     if isinstance(stored, dict):
         out.update({k: v for k, v in stored.items() if k in DEFAULTS})
-    out["channels"] = [c for c in (ALIASES.get(c, c) for c in out["channels"]) if c in CHANNELS] or list(CHANNELS)
+    out["channels"] = [c for c in out["channels"] if c in CHANNELS] or list(CHANNELS)
     return out
 
 

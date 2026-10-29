@@ -30,7 +30,7 @@ SPECS: dict[str, tuple[str, str, str, str, str | None, list[str], list[str]]] = 
                 ["Check capacity at BLR-EX-01", "How full is the network in Bangalore?"]),
     "INT-122": ("Receive equipment", "Record new equipment arriving at a store or site - ONTs, CPEs, routers, SIMs - named by the item "
                 "type's naming rule, ready to be reserved for orders.", "orders", "📦", None, ["item_type", "quantity", "location", "vendor", "model"],
-                ["Receive 20 ONTs into BLR-STORE", "Add 5 business routers to the Bangalore store"]),
+                ["Receive 20 ONTs into BLR-STORE", "Add 5 Cisco routers to the Bangalore store"]),
     "INT-123": ("Reserve inventory", "Hold ports, equipment and logical resources for a deal (Presales' feasibility) or an order - from "
                 "the location serving its site, nearest first. A deal's hold moves to the order created from it.", "orders", "📌", None,
                 ["opportunity_id", "order_id", "resources"],

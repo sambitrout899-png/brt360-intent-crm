@@ -162,7 +162,7 @@ export function MessagesSection({ canEdit }: { canEdit: boolean }) {
       >
         <p className="mb-2 text-xs text-slate-500">
           Messages go out automatically from session events; reminders skip anyone who has already completed the step. Email goes through the outbox adapter unless SMTP is
-          configured on the server; SMS and chat messaging plug into the same adapter interface.
+          configured on the server; SMS and WhatsApp plug into the same adapter interface.
         </p>
         <Note>{error || action.error}</Note>
         <Note kind="ok">{action.ok}</Note>

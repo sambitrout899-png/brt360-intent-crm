@@ -49,7 +49,7 @@ DEFAULTS: dict = {
         "pre_1_h": 48, "pre_2_h": 4, "session_day_h": 2, "post_send_min": 15,
         "post_1_h": 48, "post_2_before_close_h": 24, "cert_days": [60, 14],
     },
-    "channels": {"email": True, "sms": False, "chat": False},
+    "channels": {"email": True, "sms": False, "whatsapp": False},
     "qa_rubric": ["Preparation", "Delivery", "Engagement", "Content accuracy", "Time management"],
 }
 

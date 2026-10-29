@@ -40,13 +40,13 @@ def test_b2c_prospect_goes_straight_to_an_order_checked_by_the_order_module(clie
                order_channel="whatsapp", channel_reference="WA-77812", installation_address="4 Park Street, Kolkata")
     assert out["status"] == "executed", out
     r = out["result"]
-    assert r["order_placed"] and r["channel"] == "chat" and r["feasibility"] == "passed"  # typed "whatsapp", stored as the generic channel
+    assert r["order_placed"] and r["channel"] == "whatsapp" and r["feasibility"] == "passed"
     assert r["om_status"] in ("booked", "awaiting_shipping")
     areas = {c["area"] for c in r["checks"]}
     assert {"network", "eligibility", "availability"} <= areas  # all from the Order Module
     assert _counts(client) == before  # no lead, no opportunity, no quote
     view = client.get(f"/api/order-management/orders/{r['order_id']}").json()
-    assert view["channel"] == "chat" and view["installation_address"] == "4 Park Street, Kolkata"
+    assert view["channel"] == "whatsapp" and view["installation_address"] == "4 Park Street, Kolkata"
     assert view["feasibility"]["outcome"] == "passed" and [t["kind"] for t in view["channel_timeline"]] == ["order_started", "order_placed"]
     assert {line["product_name"] for line in view["lines"]} == {"Home Fiber 100", "Router CPE"}
     db = client.TestSessionLocal()
@@ -115,13 +115,13 @@ def test_one_order_across_channels(client):
     assert party["result"]["channel"] == "ussd"
     said = client.post("/api/intents", json={"text": f"Customer asked about order {order_id} on WhatsApp"}).json()
     assert said["intent_type"] == "INT-105" and said["status"] == "executed", said
-    assert said["result"]["started_on"] == "USSD" and said["result"]["channel"] == "chat"
+    assert said["result"]["started_on"] == "USSD" and said["result"]["channel"] == "whatsapp"
     store = _run(client, "INT-105", order_id=order_id, order_channel="store", interaction="payment", notes="paid the installation fee")
     assert store["status"] == "executed"
     paid = _run(client, "INT-57", order_id=order_id, payment_method="cash", order_channel="retail_pos", channel_reference="POS-12")
     assert paid["status"] == "executed", paid
     timeline = client.get(f"/api/order-management/orders/{order_id}/channels").json()
-    assert [t["channel"] for t in timeline] == ["ussd", "ussd", "chat", "store", "retail_pos"]
+    assert [t["channel"] for t in timeline] == ["ussd", "ussd", "whatsapp", "store", "retail_pos"]
 
 
 def test_b2c_order_from_natural_language_and_channel_validation(client):

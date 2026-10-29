@@ -35,7 +35,7 @@ export function TwoStepEnroll({ stepToken, onDone }: { stepToken?: string; onDon
   return (
     <form onSubmit={confirm} className="space-y-4">
       <ol className="list-decimal space-y-1 pl-5 text-sm text-slate-300">
-        <li>Open an authenticator app on your phone (any app that shows 6-digit sign-in codes).</li>
+        <li>Open an authenticator app on your phone (Google Authenticator, Microsoft Authenticator, 1Password…).</li>
         <li>Scan this code with it.</li>
         <li>Type the 6-digit code it shows.</li>
       </ol>

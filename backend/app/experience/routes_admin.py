@@ -640,7 +640,7 @@ def _ai_settings_out(db: Session, tenant_id: int, row) -> AiSettingsOut:
     return AiSettingsOut(
         configured=bool(row.api_key),
         masked_api_key=ai_settings_service.mask_key(row.api_key),
-        model="" if row.model == settings.openai_model else row.model,  # blank = the platform's default
+        model=row.model,
         is_active=row.is_active,
         using_global_fallback=not bool(row.api_key),
         provider=row.provider or settings.default_llm_provider,
@@ -668,7 +668,7 @@ def update_ai_settings(
         raise HTTPException(400, f"provider must be one of: {', '.join(llm.PROVIDERS)}")
     if payload.api_key:
         row.api_key = payload.api_key
-    row.model = payload.model.strip() or get_settings().openai_model
+    row.model = payload.model
     row.is_active = payload.is_active
     if payload.provider is not None:
         row.provider = payload.provider
@@ -717,7 +717,7 @@ def test_ai(payload: AiTestIn, db: Session = Depends(get_db), tenant_id: int = D
         own_key = row.api_key if row.is_active else None
         if not own_key and not llm.platform_key_available():
             return AiTestOut(ok=False, provider="external", model=None, latency_ms=0, intent_type=None, entities={}, rationale="",
-                             error="No API key - add your key above, or ask the platform owner to set the platform's key")
+                             error="No API key - add your key above, or ask the platform owner to set OPENAI_API_KEY")
         target = llm.LlmTarget("external", (row.model if own_key else None) or get_settings().openai_model,
                                own_key or get_settings().openai_api_key or "", None, 30.0, tenant_id)
     try:
@@ -754,8 +754,8 @@ def download_training_data(
 
 @router.delete("/ai-settings", status_code=204)
 def clear_ai_settings(db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> None:
-    """Clears this tenant's own key - falls back to the platform's key
-    (or, if that's unset too, the deterministic parser).
+    """Clears this tenant's own key - falls back to the global
+    OPENAI_API_KEY (or, if that's unset too, the deterministic parser).
     """
     row = ai_settings_service.get_or_create(db, tenant_id)
     row.api_key = None

@@ -478,7 +478,7 @@ def demo_rows(key: str, dataset: str, party: dict[str, Any]) -> list[dict[str, A
         return [{"id": i + 1, "resource_type": t, "identifier": ident, "status": "active", "site": "Head office"}
                 for i, (t, ident) in enumerate([("circuit", f"MPLS-{rnd.randint(10000, 99999)}"), ("ip_block", f"10.{rnd.randint(1, 250)}.0.0/28")])]
     if dataset == "devices":
-        models = ["Edge router 1100", "Branch firewall 300", "Access switch 7210", "Business router 6120"]
+        models = ["Cisco ISR 1100", "Juniper SRX300", "Nokia 7210 SAS", "Huawei AR6120"]
         return [{"device_id": f"SN{rnd.randint(10_000_000, 99_999_999)}", "model": rnd.choice(models),
                  "site": rnd.choice(["Head office", "Branch - Andheri", "Branch - Powai"]),
                  "status": rnd.choices(["in_service", "in_service", "in_service", "faulty", "spare"])[0],
