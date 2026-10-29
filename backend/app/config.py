@@ -67,6 +67,12 @@ class Settings(BaseSettings):
     # an external model (app/services/ai_redact.py); the answer gets them back.
     ai_gateway_redact: bool = True
 
+    # Analytics -> Platform health (app/analytics/platform_health.py) reads the server's
+    # Prometheus here; empty = the tab says monitoring isn't set up. Only admins of these
+    # organizations (slugs, comma-separated) see it - its numbers cover every organization.
+    prometheus_url: str = ""
+    platform_health_tenants: str = "default"
+
     # Confidence below this routes the plan to a human instead of auto-executing,
     # per HLD 4.3 / 8.5 (AI Governance).
     auto_execute_confidence_threshold: float = 0.75

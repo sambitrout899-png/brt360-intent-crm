@@ -122,6 +122,8 @@ services:
       BRT_SERVICE: core
       WEB_CONCURRENCY: ${API_WORKERS:-3}
       SCHEDULER_MODE: "off"   # the worker container runs the background jobs
+      # Analytics -> Platform health asks it (--profile monitoring; without it the tab says so)
+      PROMETHEUS_URL: http://prometheus:9090
     depends_on:
       migrate: {condition: service_completed_successfully}
       redis: {condition: service_healthy}

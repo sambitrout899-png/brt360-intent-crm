@@ -2,7 +2,7 @@
 import { API_BASE, getAccessToken, getWorkContext, request } from "./client";
 
 export type FieldKind = "dimension" | "number" | "date" | "bool";
-export type Fmt = "money" | "pct" | "days" | "hours" | "gb" | null | undefined;
+export type Fmt = "money" | "pct" | "days" | "hours" | "gb" | "ms" | null | undefined;
 
 export interface AField {
   key: string;
@@ -32,6 +32,44 @@ export interface ACatalog {
   calculations: string[];
   charts: string[];
   presets: { key: string; label: string; entity: string; grain: string; fmt?: string }[];
+  platform_health?: boolean; // the caller may see Platform health (the operator's admins)
+}
+
+export interface HealthKpi {
+  key: string;
+  label: string;
+  value: number | null;
+  fmt?: Fmt;
+  hint: string;
+  tone: "good" | "warn" | "bad" | "info";
+}
+export interface HealthChart {
+  key: string;
+  title: string;
+  labels: string[];
+  series: { name: string; values: (number | null)[] }[];
+  fmt?: Fmt;
+}
+export interface HealthService {
+  job: string;
+  name: string;
+  up: boolean | null;
+  requests_24h: number | null;
+  p95_ms: number | null;
+  error_pct: number | null;
+}
+export interface PlatformHealth {
+  available: boolean;
+  reason?: string;
+  generated_at: string;
+  hours: number;
+  kpis: HealthKpi[];
+  notes: Narrative[];
+  services: HealthService[];
+  charts: HealthChart[];
+  failing_routes: { method: string; route: string; status: string; count: number }[];
+  busiest_routes: { route: string; count: number }[];
+  ai_tokens: { tenant: string; tokens: number }[];
 }
 
 export interface Dim {
@@ -229,7 +267,10 @@ export const askAnalytics = (text: string) =>
 export const explainReport = (title: string, facts: string[], table: Record<string, unknown>[] = []) =>
   post<Explanation>("/api/analytics/explain", { title, facts, table });
 export const telecomScorecard = (months = 12) => request<Scorecard>(`/api/analytics/telecom?months=${months}`);
-export const runForecast = (body: Record<string, unknown>) => post<ForecastResult>("/api/analytics/forecast", body);
+// background = the tab's own refresh, which doesn't count as the user being active (idle timeout)
+export const platformHealth = (hours = 6, background = false) =>
+  request<PlatformHealth>(`/api/analytics/platform-health?hours=${hours}`, background ? { headers: { "X-BRT-Background": "1" } } : undefined);
+export const runForecast =(body: Record<string, unknown>) => post<ForecastResult>("/api/analytics/forecast", body);
 export const predictChurn = () => request<ChurnResult>("/api/analytics/predict/churn");
 export const predictWin = () => request<WinResult>("/api/analytics/predict/win");
 export const predictSegments = () => request<SegmentsResult>("/api/analytics/predict/segments");

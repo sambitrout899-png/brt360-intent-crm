@@ -1,13 +1,15 @@
 /**
  * Analytics & Reports - Explore (build any report, drill to the records),
- * Dashboards, the telecom scorecard and Predictions (forecasts and machine
- * learning). Backend: app/analytics, /api/analytics.
+ * Dashboards, the telecom scorecard, Predictions (forecasts and machine
+ * learning) and, for the operator's admins, Platform health (the Grafana
+ * dashboards' numbers). Backend: app/analytics, /api/analytics.
  */
 import { useEffect, useState } from "react";
 import { analyticsCatalog, listReports } from "../api/analytics";
 import type { ACatalog, SavedReport } from "../api/analytics";
 import Dashboards from "./analytics/Dashboards";
 import Explorer from "./analytics/Explorer";
+import PlatformHealth from "./analytics/PlatformHealth";
 import Predictions from "./analytics/Predictions";
 import Scorecard from "./analytics/Scorecard";
 import { input } from "./analytics/ui";
@@ -17,6 +19,7 @@ const TABS = [
   ["explore", "Explore", "Slice and dice any data"],
   ["dashboards", "Dashboards", "Your saved views"],
   ["predict", "Predictions", "Forecasts and machine learning"],
+  ["health", "Platform health", "Uptime, speed and errors of every service - the operator's admins only"],
 ] as const;
 type Tab = (typeof TABS)[number][0];
 const TAB_KEY = "brt360.analytics.tab";
@@ -62,7 +65,7 @@ export default function AnalyticsPage() {
         )}
       </div>
       <div className="flex flex-wrap gap-1 border-b border-slate-800">
-        {TABS.map(([k, label, hint]) => (
+        {TABS.filter(([k]) => k !== "health" || catalog?.platform_health).map(([k, label, hint]) => (
           <button key={k} type="button" onClick={() => go(k)} title={hint}
             className={`-mb-px border-b-2 px-4 py-2.5 text-sm font-semibold transition ${tab === k ? "border-sky-400 text-sky-200" : "border-transparent text-slate-400 hover:text-slate-100"}`}>
             {label}
@@ -77,6 +80,7 @@ export default function AnalyticsPage() {
       {catalog && tab === "dashboards" && <Dashboards catalog={catalog} onEdit={(r) => { setOpen(r); go("explore"); }} />}
       {tab === "scorecard" && <Scorecard />}
       {catalog && tab === "predict" && <Predictions catalog={catalog} />}
+      {catalog && tab === "health" && (catalog.platform_health ? <PlatformHealth /> : <Scorecard />)}
     </div>
   );
 }

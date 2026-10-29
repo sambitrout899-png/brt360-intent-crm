@@ -27,7 +27,8 @@ export function fmtValue(v: unknown, fmt?: Fmt, compact = false): string {
   if (fmt === "pct") return `${v.toLocaleString(undefined, { maximumFractionDigits: 1 })}%`;
   if (fmt === "days") return `${v.toLocaleString(undefined, { maximumFractionDigits: 1 })} d`;
   if (fmt === "hours") return `${v.toLocaleString(undefined, { maximumFractionDigits: 1 })} h`;
-  if (fmt === "gb") return `${v.toLocaleString(undefined, { maximumFractionDigits: 2 })} GB`;
+  if (fmt === "ms") return `${v.toLocaleString(undefined, { maximumFractionDigits: 0 })} ms`;
+  if (fmt === "gb")return `${v.toLocaleString(undefined, { maximumFractionDigits: 2 })} GB`;
   if (compact) {
     if (abs >= 1e9) return `${(v / 1e9).toFixed(1)}B`;
     if (abs >= 1e6) return `${(v / 1e6).toFixed(1)}M`;

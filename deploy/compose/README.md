@@ -224,6 +224,13 @@ from `.env`. The **BRT 360 / BRT 360 - API** dashboard shows uptime, error rate,
 p95 response time, traffic, the slowest routes and the routes failing with 5xx
 errors. It uses about 750 MB of RAM in total. Logs: `docker compose logs -f api worker`.
 
+The same numbers (both dashboards, plus server CPU, memory, disk, backup age and
+certificate expiry) are in the app: **Analytics & Reports -> Platform health**, for
+admins of the operator's organization only (`PLATFORM_HEALTH_TENANTS` in
+`backend/.env`, default `default` - they cover every organization). The API asks
+Prometheus (`PROMETHEUS_URL`, set in docker-compose.yml); without the monitoring
+profile running (staging) the tab says so.
+
 ### HTTPS - do this first, before stage A
 
 `brt360-tech.com` and `www.brt360-tech.com` already point at 187.127.132.149.

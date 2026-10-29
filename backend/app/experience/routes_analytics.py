@@ -14,11 +14,12 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.access import require_page
-from app.analytics import engine, insights, nl, predictive, semantic, telecom
+from app.analytics import engine, insights, nl, platform_health, predictive, semantic, telecom
 from app.crm_core.access_service import Access
 from app.db import get_db
 from app.models.analytics import AnalyticsReport
 from app.models.auth import UserRole
+from app.models.tenant import Tenant
 
 router = APIRouter(prefix="/api/analytics", tags=["analytics"])
 _PAGE = require_page("analytics")
@@ -38,7 +39,8 @@ def _run(fn, *args):
 def analytics_catalog(db: Session = Depends(get_db), access: Access = Depends(_PAGE)) -> dict[str, Any]:
     return {"entities": semantic.catalog(db, access.tenant_id), "operators": list(engine.OPERATORS), "grains": list(semantic.GRAINS),
             "aggregations": list(semantic.AGGREGATIONS), "calculations": list(engine.CALCS), "charts": list(nl.CHARTS),
-            "presets": [{k: p.get(k) for k in ("key", "label", "entity", "grain", "fmt")} for p in predictive.PRESETS]}
+            "presets": [{k: p.get(k) for k in ("key", "label", "entity", "grain", "fmt")} for p in predictive.PRESETS],
+            "platform_health": platform_health.allowed(db, access)}
 
 
 class QueryIn(BaseModel):
@@ -123,6 +125,18 @@ def explain(payload: ExplainIn, db: Session = Depends(get_db), access: Access = 
 @router.get("/telecom")
 def telecom_scorecard(months: int = 12, db: Session = Depends(get_db), access: Access = Depends(_PAGE)) -> dict[str, Any]:
     return telecom.scorecard(db, access.tenant_id, access, max(3, min(months, 36)))
+
+
+@router.get("/platform-health")
+def platform_health_snapshot(hours: int = 6, db: Session = Depends(get_db), access: Access = Depends(_PAGE)) -> dict[str, Any]:
+    if not platform_health.allowed(db, access):
+        raise HTTPException(403, "Platform health is for the platform operator's administrators.")
+    out = platform_health.snapshot(hours)
+    if out.get("ai_tokens"):
+        names = {str(t.id): t.name for t in db.query(Tenant).all()}
+        for row in out["ai_tokens"]:
+            row["tenant"] = names.get(row["tenant"], row["tenant"])
+    return out
 
 
 class ForecastIn(BaseModel):
