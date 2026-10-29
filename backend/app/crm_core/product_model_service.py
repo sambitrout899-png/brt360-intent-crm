@@ -801,7 +801,7 @@ def _check(rule_type: str, d: dict[str, Any], names: set[str]) -> dict[str, Any]
     return {"when": when, "then": then}
 
 
-_RULE_PROMPT = """You compile one plain-English product rule (telecom product catalog, like Siebel product rules) into JSON.
+_RULE_PROMPT = """You compile one plain-English product rule (telecom product catalog: eligibility, compatibility and constraint rules) into JSON.
 Rule types and shapes:
 - eligibility: {"mode": "only"|"not", "when": [cond]} - conditions on the CUSTOMER; fields: segment, region, party_type,
   account_status, industry, owns (products the customer already has), or a customer field listed below.

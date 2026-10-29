@@ -239,7 +239,7 @@ def test_reconciliation_dry_run_precedence_and_missing(client):
     ont = item(client, "ONT-BLR-0003")
     assert client.put(f"/api/inventory/items/{ont}", json={"attributes": {"mac": "aa:aa:aa:aa:aa:aa"}}).status_code == 200  # fixed by hand
     report = {"source": "nms-scan", "full_scan_of": "BLR-EX-02", "items": [
-        {"type": "card", "identifier": "BLR-EX-02-OLT-01/3", "parent": "BLR-EX-02-OLT-01", "model": "GPHF", "oper_status": "up"},
+        {"type": "card", "identifier": "BLR-EX-02-OLT-01/3", "parent": "BLR-EX-02-OLT-01", "model": "GPON-8", "oper_status": "up"},
         {"type": "port", "identifier": "BLR-EX-02-OLT-01/3/1", "parent": "BLR-EX-02-OLT-01/3", "attributes": {"speed": "XGS-PON"}},
         {"type": "olt", "identifier": "BLR-EX-02-OLT-01", "attributes": {"software": "R022"}, "oper_status": "degraded"},
         {"type": "ont", "identifier": "ONT-BLR-0003", "attributes": {"mac": "bb:bb:bb:bb:bb:bb"}},

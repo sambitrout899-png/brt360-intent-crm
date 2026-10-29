@@ -190,7 +190,7 @@ export default function AdminProductConfigSection() {
               <label className="text-xs font-semibold text-slate-300">
                 Describe changes to {selected} in your own words
                 <textarea rows={3} value={instruction} onChange={(e) => setInstruction(e.target.value)}
-                  placeholder="e.g. Bandwidth: 100 Mbps +0, 500 Mbps +800, 1 Gbps +1500; Contract term: 12 months, 36 months -10%; Static IPs: 50 each; technical: VLAN ID required number; CPE type: Cisco, Huawei; if Bandwidth is 1 Gbps then SLA is required; remove Static IPs"
+                  placeholder="e.g. Bandwidth: 100 Mbps +0, 500 Mbps +800, 1 Gbps +1500; Contract term: 12 months, 36 months -10%; Static IPs: 50 each; technical: VLAN ID required number; CPE type: Standard router, Business router; if Bandwidth is 1 Gbps then SLA is required; remove Static IPs"
                   className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200" />
               </label>
               <div className="mt-2 flex gap-2">

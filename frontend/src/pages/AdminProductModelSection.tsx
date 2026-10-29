@@ -434,14 +434,14 @@ export default function AdminProductModelSection() {
           <h2 className="text-lg font-semibold text-slate-100">Product Modeller</h2>
           <p className="text-sm text-slate-400">
             Product hierarchies - root product, child products and their attributes - with pricing and provisioning impact, imported from or exported to the
-            same spreadsheet product managers keep, and Siebel-style eligibility, compatibility and constraint rules written in plain English.
+            same spreadsheet product managers keep, and eligibility, compatibility and constraint rules written in plain English.
           </p>
         </div>
         <button type="button" onClick={() => download({ template: true, format: "xlsx" })} className="rounded-lg border border-slate-600 px-3 py-1.5 text-xs text-slate-300">
           ⬇ Template
         </button>
         <button type="button" onClick={() => download({ format: "xlsx" })} className="rounded-lg border border-slate-600 px-3 py-1.5 text-xs text-slate-300">
-          ⬇ Export all (Excel)
+          ⬇ Export all (.xlsx)
         </button>
         <button type="button" onClick={() => (setTab("import"), setPreview(null))} className="rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-semibold text-white">
           ⬆ Import
@@ -510,7 +510,7 @@ export default function AdminProductModelSection() {
             <div className="space-y-3 rounded-xl border border-slate-800 p-4">
               <h3 className="text-sm font-semibold text-slate-200">Import products</h3>
               <p className="text-xs text-slate-400">
-                Excel (.xlsx) or CSV with the columns <b>Product Element, Type, Parent, Description, Mandatory/Optional, Pricing Impact, Provisioning Impact</b> - Type is Root
+                A spreadsheet (.xlsx) or CSV with the columns <b>Product Element, Type, Parent, Description, Mandatory/Optional, Pricing Impact, Provisioning Impact</b> - Type is Root
                 Product, Child Product or Product Attribute; an attribute's Description is its values (comma-separated), a range ("512 Kbps to 4Mbps") or an inventory type (IP
                 Address, Place, Logical Device, Device Interface). Optional: Price, Charge Type, Price Impacts, Segment ... and a <b>Rules</b> sheet. Nothing is removed - existing
                 products are updated.
@@ -573,7 +573,7 @@ export default function AdminProductModelSection() {
                   </button>
                 )}
                 <button type="button" onClick={() => download({ names: [tree.name], format: "xlsx" })} className="rounded-lg border border-slate-600 px-2.5 py-1 text-xs text-slate-300">
-                  ⬇ Excel
+                  ⬇ .xlsx
                 </button>
                 <button type="button" onClick={() => download({ names: [tree.name], format: "csv" })} className="rounded-lg border border-slate-600 px-2.5 py-1 text-xs text-slate-300">
                   ⬇ CSV

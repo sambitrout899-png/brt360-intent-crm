@@ -9,7 +9,7 @@ import type { AiProvider, AiSettings, AiTestResult, LocalModelStatus } from "../
 
 const OPTIONS: { id: AiProvider; icon: string; title: string; text: string }[] = [
   { id: "local", icon: "🏠", title: "Our own model (this server)", text: "BRT 360's telecom model runs on your server. Private - no data leaves it, no per-call fees." },
-  { id: "external", icon: "☁️", title: "External AI API", text: "OpenAI with your key (or the platform's). Highest raw quality; requests go to the provider." },
+  { id: "external", icon: "☁️", title: "External AI API", text: "A hosted AI service with your key (or the platform's). Highest raw quality; requests go to the provider." },
   { id: "rules", icon: "⚙️", title: "Built-in rules only", text: "No AI model. Instant and private; understands the standard phrasings and field: value text." },
 ];
 
@@ -17,7 +17,7 @@ export default function AdminAiSection() {
   const [settings, setSettings] = useState<AiSettings | null>(null);
   const [choice, setChoice] = useState<AiProvider>("rules");
   const [apiKey, setApiKey] = useState("");
-  const [model, setModel] = useState("gpt-4o-mini");
+  const [model, setModel] = useState(""); // blank = the platform's default model
   const [localModel, setLocalModel] = useState("brt360-telecom");
   const [liveAssist, setLiveAssist] = useState(false);
   const [status, setStatus] = useState<LocalModelStatus | null>(null);
@@ -49,7 +49,7 @@ export default function AdminAiSection() {
     setBusy("save");
     setError("");
     try {
-      apply(await updateAiSettings({ api_key: apiKey.trim() || null, model: model.trim() || "gpt-4o-mini", is_active: true, provider: choice, local_model: localModel, local_live_assist: liveAssist }));
+      apply(await updateAiSettings({ api_key: apiKey.trim() || null, model: model.trim(), is_active: true, provider: choice, local_model: localModel, local_live_assist: liveAssist }));
       setApiKey("");
       flash("Saved - new requests use this now.");
     } catch (e) {
@@ -199,19 +199,19 @@ export default function AdminAiSection() {
           <h3 className="text-base font-bold text-slate-100">External API</h3>
           <div className="grid gap-3 md:grid-cols-2">
             <label className="text-xs text-slate-400">
-              OpenAI API key
+              API key
               <input
                 type="password"
                 value={apiKey}
                 onChange={(e) => setApiKey(e.target.value)}
                 className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200"
-                placeholder={settings?.configured ? `${settings.masked_api_key} - type to replace` : settings?.platform_key_available ? "blank = use the platform's key" : "sk-..."}
+                placeholder={settings?.configured ? `${settings.masked_api_key} - type to replace` : settings?.platform_key_available ? "blank = use the platform's key" : "your provider's API key"}
                 autoComplete="off"
               />
             </label>
             <label className="text-xs text-slate-400">
               Model
-              <input value={model} onChange={(e) => setModel(e.target.value)} className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200" placeholder="gpt-4o-mini" />
+              <input value={model} onChange={(e) => setModel(e.target.value)} className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200" placeholder="blank = the platform's default model" />
             </label>
           </div>
           {settings?.configured && (
@@ -235,7 +235,7 @@ export default function AdminAiSection() {
           <div className={`mt-3 rounded-lg border p-3 text-xs ${test.ok ? "border-emerald-500/30 bg-emerald-500/5" : "border-rose-500/30 bg-rose-500/10"}`}>
             <p className={`font-semibold ${test.ok ? "text-emerald-300" : "text-rose-300"}`}>
               {test.ok ? "✓ Understood" : "✕ Didn't work"} · {(test.latency_ms / 1000).toFixed(1)} s · {test.provider}
-              {test.model ? ` (${test.model})` : ""}
+              {test.model && test.provider === "local" ? ` (${test.model})` : ""}
             </p>
             {test.intent_type && (
               <p className="mt-1 text-slate-300">

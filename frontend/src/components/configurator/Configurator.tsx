@@ -70,7 +70,7 @@ function Choice({ v, onPick }: { v: CfgVariable; onPick: (value: string) => void
   );
 }
 
-/** Interactive configuration (Siebel-style): every pick is propagated by the
+/** Interactive configuration: every pick is propagated by the
  * engine - impossible options grey out with the reason, forced ones are added
  * for you, clashes come with ranked repairs, the price follows. */
 export default function Configurator({

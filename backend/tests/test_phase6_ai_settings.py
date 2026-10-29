@@ -27,7 +27,7 @@ def test_ai_settings_default_uses_global_fallback(client):
     assert body["configured"] is False
     assert body["using_global_fallback"] is True
     assert body["masked_api_key"] is None
-    assert body["model"] == "gpt-4o-mini"
+    assert body["model"] == ""  # blank = the platform's default model (no product name on the screen)
 
 
 def test_ai_settings_update_and_clear(client):
@@ -49,7 +49,7 @@ def test_ai_settings_update_and_clear(client):
     # Updating just the model (blank api_key) must not clear the stored key.
     model_only = client.put("/api/admin/ai-settings", json={"api_key": None, "model": "gpt-4o-mini"})
     assert model_only.json()["configured"] is True
-    assert model_only.json()["model"] == "gpt-4o-mini"
+    assert model_only.json()["model"] == ""  # the platform's default model shows as blank
 
     clear_resp = client.delete("/api/admin/ai-settings")
     assert clear_resp.status_code == 204

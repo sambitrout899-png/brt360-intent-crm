@@ -1621,17 +1621,17 @@ def load_sample(db: Session, tenant_id: int, actor_id: int | None = None) -> dic
                           attributes_={"coverage": "5th block"}, **kw)
     for ex, olt_count in ((exchange, 1), (exchange2, 1)):
         for o in range(olt_count):
-            olt = create_item(db, tenant_id, "olt", parent=ex.id, vendor="Huawei", model="MA5800-X7", serial=f"OLT{ex.id:03d}{o:02d}",
+            olt = create_item(db, tenant_id, "olt", parent=ex.id, vendor="Generic", model="OLT-16G", serial=f"OLT{ex.id:03d}{o:02d}",
                               attributes_={"slots": 2, "management_ip": f"10.255.{ex.id % 250}.{o + 1}"}, oper_status="up", **kw)
             for c in range(2):
-                card = create_item(db, tenant_id, "card", f"{olt.identifier}/{c + 1}", parent=olt.id, attributes_={"slot": c + 1}, model="GPHF",
+                card = create_item(db, tenant_id, "card", f"{olt.identifier}/{c + 1}", parent=olt.id, attributes_={"slot": c + 1}, model="GPON-8",
                                    oper_status="up", **kw)
                 for p in range(8):
                     create_item(db, tenant_id, "port", f"{card.identifier}/{p + 1}", parent=card.id, attributes_={"speed": "GPON"}, oper_status="up", **kw)
     splitter = create_item(db, tenant_id, "splitter", parent=cabinet.id, attributes_={"ratio": "1:8"}, oper_status="up", **kw)
     for p in range(8):
         create_item(db, tenant_id, "splitter_port", f"{splitter.identifier}:{p + 1}", parent=splitter.id, **kw)
-    for code, count, vendor, model in (("ont", 12, "Huawei", "HG8245H"), ("cpe", 6, "TP-Link", "Archer C6"), ("router", 4, "Cisco", "ISR 1111")):
+    for code, count, vendor, model in (("ont", 12, "Generic", "ONT-G4"), ("cpe", 6, "Generic", "CPE-AC1200"), ("router", 4, "Generic", "RTR-1100")):
         for n in range(count):
             create_item(db, tenant_id, code, f"{code.upper()}-BLR-{n + 1:04d}", parent=store.id, vendor=vendor, model=model,
                         serial=f"{code.upper()}SN{tenant_id:03d}{n + 1:05d}", attributes_={"mac": f"02:{tenant_id % 256:02x}:{['ont', 'cpe', 'router'].index(code):02x}:00:{n // 256:02x}:{n % 256:02x}"},

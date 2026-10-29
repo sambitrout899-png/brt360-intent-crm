@@ -36,11 +36,11 @@ SPECS: dict[str, tuple[str, str, str, str, str | None, list[str], list[str]]] = 
     "INT-110": ("Cancel an asset change", "Cancel a change order before it is fulfilled - the installed service stays exactly as it is.",
                 "orders", "🚫", "order", ["order_id", "asset_id", "reason"],
                 ["Cancel change order 12", "Cancel the pending change on asset 4"]),
-    "INT-111": ("Revise an asset change", "Revise a change order in flight (Siebel's Revise) - a new revision with another quantity, "
+    "INT-111": ("Revise an asset change", "Revise a change order in flight - a new revision with another quantity, "
                 "speed, product, site or due date replaces it.", "orders", "✏️", "order",
                 ["order_id", "asset_id", *_CHANGE_FIELDS, "reason"],
                 ["Revise change order 12 to 500 Mbps", "Amend the pending change on asset 4: quantity 3"]),
-    "INT-112": ("Bulk asset change", "One change for many installed services (Siebel's bulk request) - each gets its own change order; "
+    "INT-112": ("Bulk asset change", "One change for many installed services (a bulk request) - each gets its own change order; "
                 "one that can't change is reported and the rest go ahead.", "orders", "📦", "order",
                 ["asset_ids", "party_id", "current_offering", *_CHANGE_FIELDS],
                 ["Suspend assets 4, 5 and 6", "Upgrade all Home Fiber services of customer 7 to 500 Mbps"]),

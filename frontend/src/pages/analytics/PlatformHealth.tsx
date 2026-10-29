@@ -1,6 +1,6 @@
 /**
- * Platform health: Grafana's "BRT 360 - API" and "BRT 360 - Services" dashboards,
- * drawn here (app/analytics/platform_health.py asks Prometheus). The operator's
+ * Platform health: the server monitoring's API and Services dashboards, drawn
+ * here (app/analytics/platform_health.py asks the monitoring). The operator's
  * admins only - the numbers cover the whole server and every organization.
  */
 import { useEffect, useState } from "react";
@@ -101,7 +101,7 @@ export default function PlatformHealth() {
       </Card>
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6">{data.kpis.map((k) => <HealthTile key={k.key} k={k} />)}</div>
 
-      <Card title="Services" sub="Up = Prometheus reaches it now; requests over 24 hours; p95 and server errors over the last hour">
+      <Card title="Services" sub="Up = the monitoring reaches it now; requests over 24 hours; p95 and server errors over the last hour">
         <Table head={["Service", "Status", "Requests, 24 h", "p95", "Server errors"]} empty="No service has reported yet."
           rows={data.services.map((s) => [
             s.name,

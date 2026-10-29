@@ -29,7 +29,7 @@ SPECS: dict[str, tuple[str, str, str, str, str | None, list[str], list[str]]] = 
                 "orders", "🔧", "order",
                 ["asset_id", "asset_operation", "offering_name", "quantity", "pricing_attributes", "technical_attributes", "requested_discount_pct",
                  "target_service_account_id", "target_site", "port_number", "donor_operator", "order_id", "target_party_id", "promotion",
-                 "recipient_operator", "waive_penalty", "due_date"], ["Modify an installed asset", "Upgrade asset 4 to 500 Mbps", "Port out number 9876543210 to Airtel"]),
+                 "recipient_operator", "waive_penalty", "due_date"], ["Modify an installed asset", "Upgrade asset 4 to 500 Mbps", "Port out number 9876543210 to another operator"]),
     "INT-108": ("Confirm order fulfillment", "Record fulfillment completion and assetize the order lines. Only confirm after orchestration has completed.", "orders", "✅", "order", ["order_id"], ["Confirm fulfillment of order 12"]),
     "INT-106": ("Order an offering", "Create an order and its line without a quote. Silent uses product defaults and no discount; interactive opens configuration before explicit provisioning submission.",
                 "orders", "🛒", "order",
@@ -37,15 +37,15 @@ SPECS: dict[str, tuple[str, str, str, str, str | None, list[str], list[str]]] = 
                 ["Order an offering for customer 12", "Order an offering in silent mode"]),
     "INT-104": ("Place a B2C order", "A consumer's order straight from the prospect - no lead, opportunity or quote. The Order Module checks "
                 "feasibility (service at the address, eligibility, stock, credit) and books it. From any channel: IVR, retail point, store, "
-                "WhatsApp, SMS, USSD, web, app.",
+                "chat, SMS, USSD, web, app.",
                 "orders", "🛒", "order",
                 ["party_id", "products", "order_channel", "channel_reference", "installation_address", "payment_method", "card_last4"],
-                ["Place a B2C order for customer 12: Home Fiber 100 at 4 Park Street, Kolkata via WhatsApp",
+                ["Place a B2C order for customer 12: Home Fiber 100 at 4 Park Street, Kolkata via chat",
                  "Book a home broadband order for prospect 9 at the store - Home Fiber 100 and Router CPE"]),
-    "INT-105": ("Log an order interaction", "The customer came back about an order on another channel - a WhatsApp message, a store visit, an "
+    "INT-105": ("Log an order interaction", "The customer came back about an order on another channel - a chat message, a store visit, an "
                 "IVR call - it is added to the order's channel timeline and the order's status comes back.",
                 "orders", "💬", "order", ["order_id", "party_id", "order_channel", "interaction", "channel_reference", "notes"],
-                ["Customer asked about order 7 on WhatsApp", "Log a store visit for order 7 - came to pick up the router"]),
+                ["Customer asked about order 7 on chat", "Log a store visit for order 7 - came to pick up the router"]),
 }
 LABELS: dict[str, str] = {code: spec[0] for code, spec in SPECS.items()}
 
@@ -70,7 +70,7 @@ LIB: dict[str, dict[str, Any]] = {
     "submit_for_provisioning": {"label": "Submit configured order", "type": "boolean", "default": False},
     "order_channel": {"label": "Channel", "type": "picklist", "values": list(CHANNELS), "default": "store",
                       "help": "Where the order came in - " + ", ".join(CHANNELS.values())},
-    "channel_reference": {"label": "Channel reference", "placeholder": "e.g. IVR call id, WhatsApp conversation, POS terminal",
+    "channel_reference": {"label": "Channel reference", "placeholder": "e.g. IVR call id, chat conversation, POS terminal",
                           "help": "Links this order to the conversation or transaction on that channel"},
     "installation_address": {"label": "Installation address", "placeholder": "e.g. 4 Park Street, Kolkata",
                              "help": "The Order Module checks service feasibility here"},
@@ -107,7 +107,7 @@ def missing(code: str, entities: dict[str, Any]) -> list[str]:
     return [" or ".join(g) for g in EITHER.get(code, []) if not any(entities.get(k) not in (None, "", []) for k in g)]
 
 
-_CH = r"(?:ivr|whats\s?app|sms|text\s+message|ussd|the\s+store|a\s+store|store\s+visit|walk-?in|retail(?:\s+(?:sales\s+)?point|\s+pos)?|pos|web(?:site)?|online|(?:mobile\s+|self-?care\s+)?app|call\s+cent(?:re|er)|field\s+agent)"
+_CH = r"(?:ivr|whats\s?app|chat|sms|text\s+message|ussd|the\s+store|a\s+store|store\s+visit|walk-?in|retail(?:\s+(?:sales\s+)?point|\s+pos)?|pos|web(?:site)?|online|(?:mobile\s+|self-?care\s+)?app|call\s+cent(?:re|er)|field\s+agent)"
 _OPS = r"(?:upgrade|downgrade|modify|change(?!\s+requests?\b)|switch|suspend|resume|reactivate|terminate|disconnect|cancel|cease|relocat\w*|move|shift|transfer|port)"
 _SERVICE = r"(?:asset|service|connection|line|subscription|order)"
 # Post-order changes to an installed service. "Upgrade this service. order_id: 5, new_price: ..." stays INT-08
@@ -126,11 +126,11 @@ _ASSET_CHANGE = re.compile(
 RULES: list[tuple[str, re.Pattern]] = [
     ("INT-107", _ASSET_CHANGE),
     ("INT-106", re.compile(r"\border\s+an?\s+offering\b", re.I)),
-    # an interaction on an existing order: "asked about order 7 on WhatsApp", "log a store visit for order 7"
+    # an interaction on an existing order: "asked about order 7 on chat", "log a store visit for order 7"
     ("INT-105", re.compile(rf"\b(?:log|record|note)\w*\b[^.]{{0,40}}\b(?:interaction|contact|touch-?point|visit|call|chat|message)\b[^.]{{0,40}}\border\s*#?\s*\d"
                            rf"|\b(?:asked|enquired|called|messaged|texted|came\s+back|walked\s+in|visited)\b[^.]{{0,40}}\border\s*#?\s*\d+[^.]{{0,30}}\b(?:on|via|over|through|at|from)\s+{_CH}"
                            rf"|\border\s*#?\s*\d+\b[^.]{{0,30}}\b(?:on|via|over|through|at|from)\s+{_CH}\b[^.]{{0,40}}\b(?:asked|enquir\w*|status|update|follow)", re.I)),
-    # a new consumer order: "place a B2C order ...", "book a home broadband order via WhatsApp"
+    # a new consumer order: "place a B2C order ...", "book a home broadband order via chat"
     ("INT-104", re.compile(rf"\b(?:place|book|take|capture|create|raise|start|open)\w*\s+(?:a\s+|an\s+|the\s+)?(?:new\s+)?"
                            rf"(?:b2c|consumer|home(?:\s+broadband|\s+fibre|\s+fiber)?|retail|residential|omni-?channel)\s+order\b(?!\s*#?\s*\d)"
                            rf"|\b(?:place|book|take|capture)\w*\s+(?:a\s+|an\s+|the\s+)?(?:new\s+)?order\b(?!\s*#?\s*\d)[^.]{{0,60}}\b(?:via|over|through|on|from|at)\s+{_CH}\b", re.I)),
@@ -139,7 +139,7 @@ RULES: list[tuple[str, re.Pattern]] = [
 
 def _channel(text: str) -> str | None:
     lowered = text.lower()
-    for word, key in [("whatsapp", "whatsapp"), ("whats app", "whatsapp"), ("ussd", "ussd"), ("ivr", "ivr"), ("sms", "sms"), ("text message", "sms"),
+    for word, key in [("whatsapp", "chat"), ("whats app", "chat"), ("chat", "chat"), ("ussd", "ussd"), ("ivr", "ivr"), ("sms", "sms"), ("text message", "sms"),
                       ("retail", "retail_pos"), ("pos", "retail_pos"), ("store", "store"), ("walk-in", "store"), ("walk in", "store"),
                       ("mobile app", "app"), ("self-care app", "app"), (" app", "app"), ("website", "web"), ("online", "web"), (" web", "web"),
                       ("call centre", "call_center"), ("call center", "call_center"), ("field agent", "field_agent")]:
@@ -267,13 +267,13 @@ NEXT: dict[str, list[tuple[str, str]]] = {
 # Generated training templates (appended at the END of training_data._T).
 TRAINING: list[tuple[str, list[tuple[str, dict[str, Any]]]]] = [
     ("INT-104", [
-        ("Place a B2C order for customer {id}: {product} at 4 Park Street, Kolkata via WhatsApp",
-         {"party_id": "{id}", "products": ["{product}"], "installation_address": "4 Park Street, Kolkata", "order_channel": "whatsapp"}),
+        ("Place a B2C order for customer {id}: {product} at 4 Park Street, Kolkata via chat",
+         {"party_id": "{id}", "products": ["{product}"], "installation_address": "4 Park Street, Kolkata", "order_channel": "chat"}),
         ("book a home order for prospect {id} at the store: {product}", {"party_id": "{id}", "products": ["{product}"], "order_channel": "store"}),
         ("Take a consumer order over IVR for customer {id}: {product}", {"party_id": "{id}", "products": ["{product}"], "order_channel": "ivr"}),
     ]),
     ("INT-105", [
-        ("Customer asked about order {id} on WhatsApp", {"order_id": "{id}", "order_channel": "whatsapp", "interaction": "enquiry"}),
+        ("Customer asked about order {id} on chat", {"order_id": "{id}", "order_channel": "chat", "interaction": "enquiry"}),
         ("Log a store visit for order {id} - came to pick up the router", {"order_id": "{id}", "order_channel": "store", "interaction": "enquiry"}),
         ("order {id} via USSD - customer checked the status", {"order_id": "{id}", "order_channel": "ussd", "interaction": "status_check"}),
     ]),
@@ -281,10 +281,10 @@ TRAINING: list[tuple[str, list[tuple[str, dict[str, Any]]]]] = [
         ("Upgrade asset {id} to 500 Mbps", {"asset_id": "{id}", "asset_operation": "modify", "pricing_attributes": {"Bandwidth": "500 Mbps"}}),
         ("Downgrade asset {id} to 100 Mbps", {"asset_id": "{id}", "asset_operation": "modify", "pricing_attributes": {"Bandwidth": "100 Mbps"}}),
         ("Change the product of asset {id} to {product}", {"asset_id": "{id}", "asset_operation": "product_change", "offering_name": "{product}"}),
-        ("Port out number 9876543210 of asset {id} to Airtel", {"asset_id": "{id}", "asset_operation": "port_out", "port_number": "9876543210",
-                                                                 "recipient_operator": "Airtel"}),
-        ("Port in number 9876543210 from Jio to asset {id}", {"asset_id": "{id}", "asset_operation": "number_portability", "port_number": "9876543210",
-                                                               "donor_operator": "Jio"}),
+        ("Port out number 9876543210 of asset {id} to Northwind Mobile", {"asset_id": "{id}", "asset_operation": "port_out", "port_number": "9876543210",
+                                                                           "recipient_operator": "Northwind Mobile"}),
+        ("Port in number 9876543210 from Contoso Telecom to asset {id}", {"asset_id": "{id}", "asset_operation": "number_portability", "port_number": "9876543210",
+                                                                           "donor_operator": "Contoso Telecom"}),
         ("Transfer asset {id} to customer 7", {"asset_id": "{id}", "asset_operation": "customer_transfer", "target_party_id": 7}),
         ("Relocate asset {id} to 5 MG Road, Bengaluru", {"asset_id": "{id}", "asset_operation": "relocate", "target_site": "5 MG Road, Bengaluru"}),
         ("Change the promotion on asset {id} to SUMMER25", {"asset_id": "{id}", "asset_operation": "promotion_change", "promotion": "SUMMER25"}),

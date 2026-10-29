@@ -43,7 +43,7 @@ from app.models.lifecycle import Position
 from app.orchestration import flow_engine
 from app.crm_core.record_service import _SNAPSHOT_FIELDS
 
-CHANNELS = ["email", "sms", "whatsapp", "in_app", "popup"]  # popup: a message box on the person's screen
+CHANNELS = ["email", "sms", "chat", "in_app", "popup"]  # popup: a message box on the person's screen; chat: a messaging app
 STRATEGIES = ["position", "round_robin"]
 
 # Inputs each built-in intent may carry beyond its required fields (see
@@ -583,7 +583,7 @@ def review_graph(graph: dict[str, Any], catalog: dict[str, Any], custom_intent: 
         users[_norm(u["email"])] = u["email"]
         users[_norm(u["name"])] = u["email"]
     positions = {_norm(p): p for p in catalog["positions"]}
-    channels = {_norm(c): c for c in catalog["channels"]}
+    channels = {_norm(c): c for c in catalog["channels"]} | {"whatsapp": "chat"}  # flows saved before "chat"
 
     for node in graph.get("nodes") or []:
         node_type = node.get("type")

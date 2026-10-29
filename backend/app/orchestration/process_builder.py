@@ -962,7 +962,7 @@ _AI_PROMPT = (
     "approved quote, a proposal, an order, an account), optionally only for prospects with a field value. Write e.g. 'Create an order "
     "automatically for B2B prospects with Company type Government'. Keep the field, value and product the user gave.\n"
     "- engineering: anything none of these can do (an outside system or API, a new record type/module, a schedule or timer, a "
-    "predictive model, a new channel such as WhatsApp, payments). Keep the user's words.\n"
+    "predictive model, a new messaging channel, payments). Keep the user's words.\n"
     'Return strict JSON {"steps": [{"kind": "approval|flow|page|assignment|journey|goal|engineering", "text": "..."}], "name": "short process name"}. '
     "Use the names, numbers and positions the user gave; do not invent requirements. Known positions: {positions}. "
     "Record types and stages: {states}."

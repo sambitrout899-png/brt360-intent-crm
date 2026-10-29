@@ -278,7 +278,7 @@ BUILTIN: dict[str, IntentMeta] = {m.code: m for m in [
        ["entity_type", "entity_id", "price_list"], ["Use the Strategic pricelist for quote 12"]),
     _B("INT-45", "Set technical attributes", "Record what provisioning needs on an order - VLAN, CPE, IP block ... - "
        "it goes to the work orders, the network and inventory.", "orders", "🔧", "order",
-       ["order_id", "technical_attributes"], ["Order 12: VLAN ID 120, CPE type Cisco"]),
+       ["order_id", "technical_attributes"], ["Order 12: VLAN ID 120, CPE type Business router"]),
     _B("INT-46", "Generate a lead", "Open a lead for a prospect and select one or more products they're interested in.",
        "sales", "🌱", "lead", ["party_id", "products", "source", "region", "details"],
        ["Generate a lead for prospect 7 interested in Fiber 800 and VOIP"]),
@@ -339,7 +339,7 @@ _FIELD_OVERRIDES: dict[tuple[str, str], dict[str, Any]] = {
     ("INT-41", "order_channel"): {"default": None},
     ("INT-42", "instruction"): {"label": "Describe the attributes",
                                 "placeholder": "e.g. Bandwidth: 100 Mbps +0, 500 Mbps +800, 1 Gbps +1500; Static IPs: 50 each; "
-                                               "technical: VLAN ID required number; CPE type: Cisco, Huawei; if Bandwidth is 1 Gbps then SLA is required",
+                                               "technical: VLAN ID required number; CPE type: Standard router, Business router; if Bandwidth is 1 Gbps then SLA is required",
                                 "help": "Pricing attributes change the price (+amount, +/-%, or an amount each); technical ones are what provisioning needs"},
     ("INT-05", "price_list"): {"label": "This quote's pricelist", "help": "Blank = the opportunity's, else the customer's, else the default"},
     ("INT-44", "entity_type"): {"label": "Apply to", "values": ["party", "opportunity", "quote"], "source": ""},

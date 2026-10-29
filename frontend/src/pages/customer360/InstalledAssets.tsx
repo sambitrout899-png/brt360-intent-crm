@@ -61,7 +61,7 @@ export default function InstalledAssets({ accounts, compact = false, onOpen, ini
   const config = object(data.configuration);
   const operations = ["modify", "product_change", "promotion_change", "disconnect", "terminate", "suspend", "resume", "relocate", "customer_transfer", "number_portability", "port_out"].filter(op => op !== (asset?.status === "suspended" ? "suspend" : "resume"));
   const chosenOperation = operations.includes(operation) ? operation : "modify";
-  // Siebel's open orders: change orders still to be fulfilled (the open one, and any queued behind it)
+  // open orders: change orders still to be fulfilled (the open one, and any queued behind it)
   const openChanges = (asset?.order_history ?? []).filter(h => h.operation && (h.status === "submitted" || h.status === "queued"));
   return <section className={`installed-assets ${compact ? "installed-assets-compact" : ""}`} aria-label="Installed assets">
     <header className="asset-heading"><div><h3>Service accounts & installed assets <span>{accounts.length} accounts · {rows.length} assets</span></h3>{!compact && <p>Customer → Service account → Installed asset. Select an asset to inspect or change it.</p>}</div>{compact && <button className="asset-view-all" onClick={() => onOpen?.()}>View all →</button>}</header>

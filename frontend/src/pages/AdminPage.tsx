@@ -862,7 +862,7 @@ function OrchestrationPoliciesSection() {
         How the order-fulfilment steps decide what happens next: "deterministic"
         (default - a fixed, tested step sequence) or "llm_planned" (an LLM chooses which pre-vetted operation runs
         next, only from a short explicit allow-list - never arbitrary code). llm_planned silently falls back to
-        deterministic whenever no OPENAI_API_KEY is configured or the LLM's plan doesn't validate, so this is always
+        deterministic whenever no AI key is configured or the LLM's plan doesn't validate, so this is always
         safe to turn on. "Every fulfilment step" covers them all at once; a row for one specific step wins over it.
       </p>
 

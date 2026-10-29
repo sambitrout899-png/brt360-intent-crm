@@ -64,7 +64,7 @@ def test_operators_admin_sees_the_dashboards(client, monkeypatch):
 def test_without_monitoring_the_tab_says_so(client, monkeypatch):
     monkeypatch.setattr(get_settings(), "prometheus_url", "")
     out = client.get("/api/analytics/platform-health").json()
-    assert out["available"] is False and "PROMETHEUS_URL" in out["reason"]
+    assert out["available"] is False and "isn't set up" in out["reason"]
 
     def down(*a, **k):
         raise httpx.ConnectError("no such host")
@@ -72,7 +72,7 @@ def test_without_monitoring_the_tab_says_so(client, monkeypatch):
     monkeypatch.setattr(get_settings(), "prometheus_url", "http://prometheus:9090")
     monkeypatch.setattr(platform_health.httpx, "get", down)
     out = client.get("/api/analytics/platform-health").json()
-    assert out["available"] is False and "--profile monitoring" in out["reason"]
+    assert out["available"] is False and "isn't running" in out["reason"]
 
 
 def test_other_organizations_and_non_admins_cannot_see_it(client, monkeypatch):

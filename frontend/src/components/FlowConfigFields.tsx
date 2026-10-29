@@ -293,7 +293,7 @@ function CodePicker({ value, options, onChange }: { value: string; options: Flow
   );
 }
 
-const CHANNEL_LABELS: Record<string, string> = { popup: "message box on screen", in_app: "in-app notification", sms: "SMS", whatsapp: "WhatsApp" };
+const CHANNEL_LABELS: Record<string, string> = { popup: "message box on screen", in_app: "in-app notification", sms: "SMS", chat: "Chat message" };
 
 /** A Run-an-action node's values, edited as JSON - kept as an object. */
 /** Every setting of a node, each with the input that fits it. */
