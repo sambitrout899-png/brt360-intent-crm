@@ -64,7 +64,9 @@ export function conditionText(when?: MapEdge["when"]): string {
   if (!when) return "";
   if (when.operator === "otherwise") return "otherwise";
   const op = OPERATORS.find((o) => o.key === when.operator);
-  const key = (when.field ?? "").split(".").slice(1).join(".").replace(/_/g, " ");
+  // entities.x / result.x / record.x read as "x"; customer.x as "customer x"; parent.opportunity.x as "opportunity x"
+  const parts = (when.field ?? "").split(".");
+  const key = (parts[0] === "customer" ? parts : parts.slice(1)).join(" ").replace(/_/g, " ");
   return `${key} ${op?.short ?? when.operator}${op?.noValue ? "" : ` ${when.value ?? ""}`}`.trim();
 }
 

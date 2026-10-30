@@ -216,6 +216,53 @@ def test_a_rewired_step_overrides_the_built_in_outcome_rule(client):
     assert offered(failed) == ["INT-37"]  # not feasible still goes back to reconfiguring
 
 
+def test_skipping_the_quote_after_feasibility_is_followed_everywhere(client):
+    """Feasibility -> Order an offering (no quote): what's next, the opportunity's
+    buttons and Customer 360's suggestions follow the map, prefilled from the deal;
+    a condition can test the opportunity's lead (a parent record)."""
+    from test_sales_to_order import _launch, _opportunity, run
+
+    _launch(client)
+    draft = _draft(_mine(client))
+    draft["edges"] = [e for e in draft["edges"] if e["source"] != "INT-18"]
+    draft["edges"].append({"source": "INT-18", "target": "INT-106", "kind": "next", "why": "Feasible - order it, no quote"})
+    _apply(client, draft)
+
+    opp = _opportunity(client, "Skip Co")
+    run(client, "INT-37", opportunity_id=opp, offering_name="Fiber 900", pricing_attributes={"Bandwidth": "100 Mbps", "Contract term": "36 months"})
+    run(client, "INT-38", opportunity_id=opp, address="12 King Fahd Road")
+    passed = run(client, "INT-18", opportunity_id=opp, decision="feasible")
+    nxt = passed["next_actions"]
+    assert [a["code"] for a in nxt] == ["INT-106"], nxt
+    assert nxt[0]["entities"]["offering_name"] == "Fiber 900" and nxt[0]["entities"]["party_id"]
+
+    buttons = {a["intent"] for a in client.get(f"/api/records/opportunity/{opp}").json()["actions"]}
+    assert "INT-106" in buttons and "INT-05" not in buttons, buttons  # the record's buttons follow the map
+    party = nxt[0]["entities"]["party_id"]
+    codes = [a["code"] for a in client.get(f"/api/customers/{party}/overview").json()["next_actions"]]
+    assert "INT-106" in codes and "INT-05" not in codes, codes  # and so does Customer 360
+
+    # a condition on a parent record: offered only when the opportunity's lead came by referral
+    draft = _draft(_mine(client))
+    for e in draft["edges"]:
+        if e["source"] == "INT-18":
+            e["when"] = {"field": "parent.lead.source", "operator": "eq", "value": "referral"}
+    planned, vid = _plan(client, draft)
+    assert any("the lead's source is referral" in c["text"] for c in planned["changes"]), planned["changes"]
+    assert not planned["problems"]
+    client.post(f"{MAP}/versions/{vid}/activate")
+
+    def feasible(company, source):
+        lead = client.post("/api/intents", json={"text": f"Qualify this lead. company_name: {company}, source: {source}, region: North"}).json()
+        o = lead["result"]["opportunity_id"]
+        run(client, "INT-37", opportunity_id=o, offering_name="Fiber 900", pricing_attributes={"Bandwidth": "100 Mbps", "Contract term": "36 months"})
+        run(client, "INT-38", opportunity_id=o, address="12 King Fahd Road")
+        return [a["code"] for a in run(client, "INT-18", opportunity_id=o, decision="feasible")["next_actions"]]
+
+    assert feasible("Referred Co", "referral") == ["INT-106"]  # the lead (a parent record) came by referral
+    assert "INT-106" not in feasible("Web Co", "website")
+
+
 def test_the_map_in_use_and_the_original_cannot_be_changed_directly(client):
     draft = _draft(_mine(client))
     _node(draft, "INT-03")["active"] = False

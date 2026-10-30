@@ -210,7 +210,16 @@ def overview(db: Session, tenant_id: int, access: Access, party: Party) -> dict[
         elif o.stage == OpportunityStage.configured:
             add("INT-38", "Send to Presales", f"{o.name} is configured - feasibility is next", {"opportunity_id": o.id}, 70)
         elif o.stage == OpportunityStage.feasible:
-            add("INT-05", "Prepare the quote", f"{o.name} is feasible", {"opportunity_id": o.id, "offering_name": o.offering_name}, 75)
+            from app.intent_engine import intent_registry
+            from app.orchestration import function_map
+
+            quote = {"opportunity_id": o.id, "offering_name": o.offering_name}
+            # the Functional Map in use may send a feasible deal elsewhere than the quote (e.g. straight to an order)
+            for code, why in function_map.rewired_steps(db, tenant_id, "INT-18") or [("INT-05", "")]:
+                if code == "INT-05":
+                    add(code, "Prepare the quote", why or f"{o.name} is feasible", quote, 75)
+                else:
+                    add(code, intent_registry.label_of(db, tenant_id, code) or code, why or f"{o.name} is feasible", {**quote, "party_id": party.id}, 75)
     for q in quotes:
         if any(o.quote_id == q.id for o in orders):
             continue

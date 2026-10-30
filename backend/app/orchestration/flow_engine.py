@@ -229,7 +229,7 @@ def _lookup(ctx: dict[str, Any], path: str, default=None) -> Any:
     path = path.strip()
     # "error": the failure being handled - set on an error path or after a Catch errors step;
     # "approval": the answer to a Wait for approval step (flow_runs.resume) - decision, note, by
-    if path.split(".")[0] in ("steps", "entities", "result", "record", "customer", "trigger", "flow", "error", "approval"):
+    if path.split(".")[0] in ("steps", "entities", "result", "record", "customer", "parent", "trigger", "flow", "error", "approval"):
         value = ctx
         for part in path.split("."):
             if isinstance(value, dict):
@@ -439,6 +439,30 @@ def resolve_target(db: Session, tenant_id: int, flow: FlowDefinition, ctx: dict[
     return entity_type, None
 
 
+# A sales record's parents, nearest first: what conditions read as parent.<type>.<field>.
+PARENT_CHAIN: dict[str, tuple[str, ...]] = {"opportunity": ("lead",), "quote": ("opportunity", "lead"), "order": ("quote", "opportunity", "lead")}
+
+
+def parents_of(db: Session, entity_type: str | None, record: Any) -> dict[str, Any]:
+    """{"quote": <Quote>, "opportunity": ..., "lead": ...} - up the road order -> quote -> opportunity -> lead."""
+    from app.models.crm import Lead, Opportunity, Quote
+
+    out: dict[str, Any] = {}
+    step = record
+    for parent, column, model in (("quote", "quote_id", Quote), ("opportunity", "opportunity_id", Opportunity), ("lead", "lead_id", Lead)):
+        if parent not in PARENT_CHAIN.get(entity_type or "", ()) or step is None:
+            continue
+        found = db.get(model, getattr(step, column)) if getattr(step, column, None) else None
+        if found is not None:
+            out[parent] = found
+            step = found
+    return out
+
+
+def parent_snapshots(db: Session, tenant_id: int, entity_type: str | None, record: Any) -> dict[str, dict[str, Any]]:
+    return {t: record_service.snapshot(db, tenant_id, t, obj) for t, obj in parents_of(db, entity_type, record).items()}
+
+
 def customer_of(db: Session, entity_type: str | None, record: Any) -> Any:
     """The party a sales record belongs to: itself, or up the road order/quote -> opportunity -> lead -> party."""
     from app.models.crm import Lead, Opportunity, Party, Quote
@@ -503,6 +527,8 @@ def run_flow(db: Session, tenant_id: int, execution_id: int, flow: FlowDefinitio
         # the customer behind the record - "only when the prospect's Company type is Government" on a quote's flow
         party = customer_of(db, entity_type, record)
         ctx["customer"] = record_service.snapshot(db, tenant_id, "party", party) if party is not None else {}
+        # the records above it - "only when the opportunity's lead came from a referral" on a quote's flow
+        ctx["parent"] = parent_snapshots(db, tenant_id, entity_type, record) if record is not None else {}
 
     refresh_record()
     if resume is None and flow.trigger_type in ("intent", "state_enter"):

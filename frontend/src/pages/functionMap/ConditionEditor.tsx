@@ -15,7 +15,7 @@ function fieldsAfter(node: MapNode): Promise<FlowFieldDef[]> {
   if (!catalogs.has(key)) {
     const load = (entity_type: string | null) =>
       flowFieldCatalog({ entity_type, trigger_type: "intent", trigger_intent_type: node.code, required_fields: null }).then((c) =>
-        c.fields.filter((f) => /^(entities|result|record)\./.test(f.path)),
+        c.fields.filter((f) => /^(entities|result|record|customer|parent\.(lead|opportunity|quote))\./.test(f.path)),
       );
     catalogs.set(
       key,
@@ -29,6 +29,11 @@ const GROUPS: [string, string][] = [
   ["entities.", "What was entered"],
   ["result.", "What it produced"],
   ["record.", "The record afterwards"],
+  // the records above it (an opportunity's lead, a quote's opportunity ...) and the customer behind it
+  ["parent.quote.", "Its quote"],
+  ["parent.opportunity.", "Its opportunity"],
+  ["parent.lead.", "Its lead"],
+  ["customer.", "The customer"],
 ];
 
 const input = "mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2.5 py-1.5 text-sm text-slate-200 focus:border-sky-500 focus:outline-none";
@@ -117,7 +122,7 @@ export default function ConditionEditor({
                   <optgroup key={prefix} label={label}>
                     {group.map((f) => (
                       <option key={f.path} value={f.path}>
-                        {f.label.replace(/^Intent (input|result): /, "")}
+                        {f.label.replace(/^(Intent (input|result)|Customer|Lead|Opportunity|Quote): /, "")}
                       </option>
                     ))}
                   </optgroup>

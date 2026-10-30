@@ -1095,13 +1095,19 @@ def _map_facts(db: Session, tenant_id: int, code: str, entities: dict[str, Any],
 
     if not function_map.decides(db, tenant_id, code):
         return None
+    from app.orchestration import flow_engine
+
     facts: dict[str, Any] = {"entities": {k: v for k, v in entities.items() if not str(k).startswith("_")},
-                             "result": {k: v for k, v in result.items() if k != "flows_run"}, "record": {}}
+                             "result": {k: v for k, v in result.items() if k != "flows_run"}, "record": {}, "customer": {}, "parent": {}}
     target = (intent_registry.entry(db, tenant_id, code) or {}).get("target")
     if target and target in LIFECYCLE_TYPES and merged.get(f"{target}_id"):
         obj =lifecycle_service.get_record(db, tenant_id, target, merged[f"{target}_id"])
         if obj is not None:
             facts["record"] = record_service.snapshot(db, tenant_id, target, obj)
+            # the customer behind it and the records above it (lead, opportunity, quote) - as Flow Studio's conditions see them
+            party = flow_engine.customer_of(db, target, obj)
+            facts["customer"] = record_service.snapshot(db, tenant_id, "party", party) if party is not None else {}
+            facts["parent"] = flow_engine.parent_snapshots(db, tenant_id, target, obj)
     return facts
 
 
@@ -1125,6 +1131,18 @@ def _next_entities(db: Session, tenant_id: int, code: str, result: dict[str, Any
     out = {k: v for k, v in merged.items() if k in keys and isinstance(v, (int, str)) and v != ""}
     if "quote_id" in keys and merged.get("new_quote_id"):
         out["quote_id"] = merged["new_quote_id"]
+    if merged.get("opportunity_id") and ({"party_id", "offering_name"} & keys) - out.keys():
+        # a step the map puts straight after the opportunity (e.g. Order an offering after feasibility): its customer and product
+        from app.models.crm import Opportunity
+        from app.orchestration import flow_engine
+
+        opp = db.get(Opportunity, merged["opportunity_id"])
+        if opp is not None and opp.tenant_id == tenant_id:
+            party = flow_engine.customer_of(db, "opportunity", opp)
+            if "party_id" in keys and party is not None:
+                out.setdefault("party_id", party.id)
+            if "offering_name" in keys and opp.offering_name:
+                out.setdefault("offering_name", opp.offering_name)
     if code == "INT-23" and merged.get("quote_id"):
         proposal = db.query(Proposal).filter(Proposal.tenant_id == tenant_id, Proposal.quote_id == merged["quote_id"]).order_by(Proposal.id.desc()).first()
         if proposal:

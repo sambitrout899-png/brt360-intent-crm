@@ -106,6 +106,27 @@ def _process_steps(db: Session, entity_type: str, obj) -> list[dict[str, Any]]:
     return out
 
 
+def _feasible_by_map(db: Session, tenant_id: int, user: User, opp, actions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """A feasible opportunity's buttons when the Functional Map in use re-wired
+    what follows Check feasibility: its steps are offered, and the quote only
+    if the map still leads there."""
+    from app.intent_engine import intent_registry
+    from app.orchestration import flow_engine, function_map
+
+    steps = function_map.rewired_steps(db, tenant_id, "INT-18")
+    if steps is None:
+        return actions
+    codes = [c for c, _ in steps]
+    out = [a for a in actions if a.get("intent") != "INT-05" or "INT-05" in codes]
+    party = flow_engine.customer_of(db, "opportunity", opp)
+    for code in codes:
+        if any(a.get("intent") == code for a in out) or intent_registry.availability(db, tenant_id, user, code):
+            continue
+        out.append({"label": intent_registry.label_of(db, tenant_id, code) or code, "intent": code,
+                    "entities": {"opportunity_id": opp.id, "offering_name": opp.offering_name, **({"party_id": party.id} if party else {})}})
+    return out
+
+
 def for_record(db: Session, tenant_id: int, user: User, entity_type: str, obj) -> list[dict[str, Any]]:
     from app.intent_engine import intent_registry
     if entity_type == "order" and obj.status.value == "completed":
@@ -140,6 +161,8 @@ def for_record(db: Session, tenant_id: int, user: User, entity_type: str, obj) -
             actions.append({"label": _label(t["action"], t["to_label"]), "intent": "INT-31", "to_state": t["to_state"],
                             "entities": {"entity_type": entity_type, "entity_id": obj.id, "action": t["action"]}})
     actions += _process_steps(db, entity_type, obj)
+    if entity_type == "opportunity" and obj.stage.value == "feasible":
+        actions = _feasible_by_map(db, tenant_id, user, obj, actions)
     if entity_type == "order" and obj.status.value == "activating" and role == "admin":
         from app.models.abo import AssetChange
         change = db.query(AssetChange).filter(AssetChange.order_id == obj.id, AssetChange.status == "submitted").first()

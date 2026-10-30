@@ -333,6 +333,17 @@ def field_catalog(
         for d in custom_field_service.list_definitions(db, tenant_id, "party"):
             values = custom_field_service.allowed_values(d) if d.data_type == "picklist" else (["true", "false"] if d.data_type == "boolean" else [])
             fields.append(FieldDef(f"customer.{d.key}", d.key, f"Customer: {d.label}", d.data_type, "customer", values))
+    from app.orchestration.flow_engine import PARENT_CHAIN
+
+    for parent in PARENT_CHAIN.get(entity_type or "", ()):
+        # the records above it (flow_engine.parents_of) - read-only from this flow
+        model, title = lifecycle_service.ENTITY_MODELS[parent], parent.capitalize()
+        for key in _SNAPSHOT_FIELDS[parent]:
+            data_type, values = _column_type(model, key)
+            fields.append(FieldDef(f"parent.{parent}.{key}", key, f"{title}: {_label(key)}", data_type, "parent", values))
+        for d in custom_field_service.list_definitions(db, tenant_id, parent):
+            values = custom_field_service.allowed_values(d) if d.data_type == "picklist" else (["true", "false"] if d.data_type == "boolean" else [])
+            fields.append(FieldDef(f"parent.{parent}.{d.key}", d.key, f"{title}: {d.label}", d.data_type, "parent", values))
 
     inputs: list[str] = []
     if trigger_intent_type in _INTENT_INPUTS:

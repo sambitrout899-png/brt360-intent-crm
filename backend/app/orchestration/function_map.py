@@ -236,7 +236,8 @@ def release_merge(edges: list[dict[str, Any]], base: list | None) -> tuple[list[
     return out, notes
 
 
-_FIELD = re.compile(r"^(entities|result|record)\.[A-Za-z_][A-Za-z0-9_.]{0,80}$")
+# what a condition tests: the step's input, its result, its record, the customer behind it, or a record above it
+_FIELD = re.compile(r"^(entities|result|record|customer|parent\.(?:lead|opportunity|quote))\.[A-Za-z_][A-Za-z0-9_.]{0,80}$")
 OPERATOR_WORDS = {"eq": "is", "ne": "is not", "gt": "is more than", "gte": "is at least", "lt": "is less than", "lte": "is at most",
                   "contains": "contains", "in": "is one of", "empty": "is empty", "not_empty": "is filled in"}
 
@@ -264,7 +265,11 @@ def describe_when(when: dict[str, str] | None) -> str:
     if when.get("operator") == "otherwise":
         return "otherwise (when none of the other conditions holds)"
     scope, _, key = when["field"].partition(".")
-    what = {"entities": "the input", "result": "the result", "record": "the record's"}[scope]
+    if scope == "parent":
+        parent, _, key = key.partition(".")
+        what = f"the {parent}'s"
+    else:
+        what = {"entities": "the input", "result": "the result", "record": "the record's", "customer": "the customer's"}[scope]
     words = OPERATOR_WORDS.get(when["operator"], when["operator"])
     tail = "" if when["operator"] in ("empty", "not_empty") else f" {when['value']}"
     return f"when {what} {key.replace('_', ' ')} {words}{tail}"
@@ -286,6 +291,15 @@ def rewired(db: Session, tenant_id: int, code: str) -> bool:
         return False
     original = {e["target"] for e in _vanilla_edges() if e["source"] == code}
     return {e["target"] for e in mine} != original
+
+
+def rewired_steps(db: Session, tenant_id: int, code: str) -> list[tuple[str, str]] | None:
+    """The map in use's next steps after `code` when it re-wired them (no
+    condition decides - those need the step's facts); None = BRT's built-in
+    suggestions stand. Customer 360 and a record's buttons follow these."""
+    if not rewired(db, tenant_id, code):
+        return None
+    return [(e["target"], e.get("why") or "") for e in _saved_from(db, tenant_id, code) or [] if not clean_when(e.get("when"))]
 
 
 def decides(db: Session, tenant_id: int, code: str) -> bool:
