@@ -102,6 +102,53 @@ def test_a_blocking_question_holds_the_design_and_the_answer_settles_it(client, 
     assert settled["ready"] and not settled["questions"]
 
 
+def test_a_condition_in_an_automation_sentence_is_kept_and_holds_at_run_time(client):
+    """“When a lead is approved, check the Prospect “Company type” and if it is Public Limited, check the Prospect
+    to an Account” (from a user's BRD): the condition used to be dropped - every approved lead converted."""
+    from test_phase5_fulfillment import _launch_bundle
+
+    from app.crm_core import custom_field_service
+    from app.models.crm import Party
+    from app.models.custom_fields import CustomFieldDefinition
+    from app.models.tenant import Tenant
+
+    client.get("/api/admin/pages")  # the standard page fields (Company type among them) are set up on first use
+    with client.TestSessionLocal() as db:
+        tid = db.query(Tenant).filter(Tenant.slug == "default").one().id
+        if not db.query(CustomFieldDefinition).filter_by(tenant_id=tid, entity_type="party", key="company_type").first():
+            db.add(CustomFieldDefinition(tenant_id=tid, entity_type="party", key="company_type", label="Company type", data_type="picklist",
+                                         allowed_values="Private Limited,Public Limited,Government"))
+            db.commit()
+    _launch_bundle(client, name="Fiber 700 Bundle", price=700)
+    text = "When a lead is approved, check the Prospect “Company type” and if it is Public Limited, check the Prospect to an Account"
+    bp = client.post("/api/process-builder/design", json={"request": text}).json()
+    flow = next(c for c in bp["components"] if c["kind"] == "flow")
+    check = next(n for n in flow["spec"]["graph"]["nodes"] if n["type"] == "condition")
+    assert check["config"] == {"field": "customer.company_type", "operator": "eq", "value": "Public Limited"}
+    built = client.post("/api/process-builder/build", json={"request": text, "steps": bp["steps"], "answers": bp["answers"], "mode": "execute",
+                                                           "graphs": {flow["id"]: flow["spec"]["graph"]}}).json()
+    assert built["status"] == "built", built
+
+    def qualified(name, company_type):
+        def run(code, **entities):
+            out = client.post("/api/intents", json={"text": code, "structured": {"intent_type": code, "entities": entities}}).json()
+            assert out["status"] == "executed", out
+            return out["result"]
+
+        party = run("INT-15", name=name, segment="B2B")["party_id"]
+        with client.TestSessionLocal() as db:
+            defn = db.query(CustomFieldDefinition).filter_by(tenant_id=tid, entity_type="party", key="company_type").one()
+            custom_field_service.set_value(db, tid, "party", party, defn, company_type)
+            db.commit()
+        lead = run("INT-46", party_id=party, products=["Fiber 700 Bundle"])["lead_id"]
+        run("INT-17", lead_id=lead, decision="approve")
+        with client.TestSessionLocal() as db:
+            return db.get(Party, party).party_type
+
+    assert qualified("Big Public Co", "Public Limited") != "prospect"  # converted to an account
+    assert qualified("Small Private Co", "Private Limited") == "prospect"  # the condition held it back
+
+
 def test_the_brd_upload_hands_the_whole_document_to_the_architect(client):
     import base64
 

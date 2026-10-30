@@ -374,6 +374,50 @@ class _Design:
         else:
             self.unclear(cid, text, "I couldn't tell which engine this belongs to.")
 
+    def flow_condition(self, cid: str, text: str, entity_type: str | None, catalog: dict[str, Any]) -> dict[str, str] | bool | None:
+        """The condition a flow sentence sets ("check the Prospect “Company type” and if it is Public Limited, ...")
+        as {field, value, label}: the field read from the record, the customer behind it or a record above it
+        (flow_engine.parents_of), the value one of the field's own. None: no condition; False: asked about it."""
+        from app.orchestration import reasoner
+        from app.orchestration.flow_engine import PARENT_CHAIN
+
+        m = _FLOW_IF.search(text)
+        if not m:
+            return None
+        who = (m.group("ent2") or m.group("ent1") or "").lower()
+        said = (m.group("field2") or m.group("field1") or "").strip()
+        if who in ("prospect", "customer", "account", "company", "party"):
+            scope = "record." if entity_type == "party" else "customer."
+        elif who in PARENT_CHAIN.get(entity_type or "", ()):
+            scope = f"parent.{who}."
+        else:
+            scope = "record."
+        fields = [f for f in catalog.get("fields", []) if str(f.get("path", "")).startswith(scope) and str(f["path"]).count(".") == scope.count(".")]
+        plain = lambda f: re.sub(r"^[A-Z][a-z]+:\s*", "", f.get("label") or f["key"])  # noqa: E731 - "Customer: Company type" -> "Company type"
+        chosen = self.answers.get(f"{cid}.field")
+        found = next((f for f in fields if f["path"] == chosen), None) if chosen else None
+        if found is None and said:
+            key = re.sub(r"[^a-z0-9]+", "_", said.lower()).strip("_")
+            found = next((f for f in fields if plain(f).lower() == said.lower() or f["key"] == key), None)
+        if found is None:
+            whose = {"customer.": "the customer's", "record.": f"the {RECORD_WORDS.get(entity_type or '', entity_type)}'s"}.get(scope, f"the {who}'s")
+            got = self.ask(f"{cid}.field", f"Which of {whose} fields is “{said or 'it'}”? (“{text}”)",
+                           [(f["path"], plain(f)) for f in fields][:20])
+            if got is None:
+                return False
+            found = next((f for f in fields if f["path"] == got), None)
+            if found is None:
+                return False
+        values = [str(v) for v in found.get("values") or []]
+        value = self.answers.get(f"{cid}.value") or reasoner._pick_value(m.group("value").strip(), values)
+        if not value:
+            got = self.ask(f"{cid}.value", f"“{m.group('value').strip()}” isn't one of {plain(found)}'s values - which one? (“{text}”)",
+                           [(v, v) for v in values][:20])
+            if got is None:
+                return False
+            value = got
+        return {"field": found["path"], "value": str(value), "label": f"{plain(found)} is {value}"}
+
     def unclear(self, cid: str, text: str, why: str) -> None:
         self.ask(f"{cid}.unclear", f"“{text}” - {why} What should I do with it?",
                  [("skip", "Leave it out"), ("engineering", "Treat it as an engineering request")], text=True,
@@ -555,12 +599,22 @@ class _Design:
                 self.unclear(cid, text, f"“{label}” needs {missing}, which a {RECORD_WORDS.get(entity_type, entity_type)} doesn't lead to.")
                 return
             if not isinstance(graph, dict) or not graph.get("nodes"):
+                # a condition said in the sentence gates the actions - never dropped (it would run for every record)
+                gate = self.flow_condition(cid, rest or text, entity_type, catalog)
+                if gate is False:
+                    return  # asked about it
                 chain = [*steps_first, (code, entities)]
                 nodes = [{"id": "n1", "type": "start", "label": "Start", "config": {}}]
+                if gate:
+                    nodes.append({"id": "check", "type": "condition", "label": gate["label"][:120],
+                                  "config": {"field": gate["field"], "operator": "eq", "value": gate["value"]}})
                 nodes += [{"id": f"n{i + 2}", "type": "action", "label": self.action_label(c), "config": {"intent": c, "entities": e}}
                           for i, (c, e) in enumerate(chain)]
-                nodes.append({"id": f"n{len(chain) + 2}", "type": "end", "label": "End", "config": {}})
-                edges = [{"id": f"e{i + 1}", "source": nodes[i]["id"], "target": nodes[i + 1]["id"], "label": ""} for i in range(len(nodes) - 1)]
+                nodes.append({"id": "end", "type": "end", "label": "End", "config": {}})
+                edges = [{"id": f"e{i + 1}", "source": nodes[i]["id"], "target": nodes[i + 1]["id"], "label": "true" if nodes[i]["type"] == "condition" else ""}
+                         for i in range(len(nodes) - 1)]
+                if gate:
+                    edges.append({"id": "e_false", "source": "check", "target": "end", "label": "false"})
                 graph = flow_ai.layout({"nodes": nodes, "edges": edges})
                 source = "rules"
         if not isinstance(graph, dict) or not graph.get("nodes"):
@@ -790,7 +844,10 @@ _BUSINESS_ACTIONS: list[tuple[str, re.Pattern, dict[str, Any]]] = [
     ("INT-06", re.compile(r"\b(?:auto(?:matically)?[- ]?)?approve\w*\s+(?:the\s+|this\s+|its\s+)?quot(?:e|ation)\b", re.I), {"decision": "approve"}),
     ("INT-40", re.compile(r"\b(?:create|place|raise|generate|convert\w*\s+(?:it\s+)?(?:in)?to)\s+(?:an?\s+|the\s+)?order\b", re.I), {}),
     # "convert the prospect into an account", "should be auto-converted to Account", "convert it as Account"
-    ("INT-35", re.compile(r"\bconvert\w*\b[^.]{0,40}?\b(?:(?:in)?to|as)\s+(?:an?\s+|the\s+)?account\b", re.I), {}),
+    # "convert it to an account" - and how people also write it: "check / move / turn / change / upgrade the prospect to an account"
+    ("INT-35", re.compile(r"\bconvert\w*\b[^.]{0,40}?\b(?:(?:in)?to|as)\s+(?:an?\s+|the\s+)?account\b|"
+                          r"\b(?:check|move|turn|change|upgrade|promote|make)\w*\s+(?:the\s+|this\s+|that\s+)?(?:prospect|customer|party|company)\s+"
+                          r"(?:in)?to\s+(?:an?\s+|the\s+)?account\b", re.I), {}),
     ("INT-37", re.compile(r"\bconfigure\w*\s+(?:it|the\s+product|this|the\s+(?:default\s+)?configuration|(?:with\s+)?(?:the\s+)?defaults?)\b", re.I), {}),
     ("INT-17", re.compile(r"(?:\bauto(?:matically)?[- ]?(?:qualify|approve)\b|\b(?:qualify|approve)\s+(?:the\s+|this\s+|that\s+|a\s+)?lead\b)"
                           r"(?![^.]*\b(?:quote|order|opportunity|proposal|discount)\b)", re.I), {"decision": "approve"}),
@@ -812,8 +869,22 @@ _REACHES: dict[str, set[str]] = {"lead": {"lead", "opportunity", "party"}, "oppo
                                  "party": {"party"}}
 
 
+# A condition said inside a flow sentence - the action runs only when it holds:
+#   "check the Prospect “Company type” and if it is Public Limited, convert ..."
+#   "if the prospect's Company type is Public Limited, convert ..."
+_FLOW_IF = re.compile(
+    r"(?:\b(?:check|look\s+at|read)\s+(?:the\s+)?(?P<ent1>prospect|customer|account|company|party|lead|opportunity|quote|order)(?:'s|’s)?\s+"
+    r"[\"“'‘]?(?P<field1>[A-Za-z][\w /-]{1,40}?)[\"”'’]?\s*,?\s*and\s+)?"
+    r"\b(?:if|only\s+if|when)\s+(?:(?:it|that|this)\b|(?:the\s+)?(?P<ent2>prospect|customer|account|company|party|lead|opportunity|quote|order)(?:'s|’s)?\s+"
+    r"[\"“'‘]?(?P<field2>[A-Za-z][\w /-]{1,40}?)[\"”'’]?)\s+(?:is|=|equals|is\s+equal\s+to|is\s+set\s+to)\s+"
+    r"[\"“'‘]?(?P<value>[A-Za-z0-9][^\"”'’,;]{0,40}?)[\"”'’]?\s*(?:,\s*(?:then\s+)?|\s+then\s+)(?P<action>.+)$", re.I)
+
+
 def _business_action(text: str) -> tuple[str, dict[str, Any]] | None:
     body = re.sub(r"^\s*(?:when|whenever|once|after|as\s+soon\s+as|if)\b[^,]*,\s*", "", text, flags=re.I)  # the action follows the trigger
+    m = _FLOW_IF.search(body)
+    if m:  # the action is what follows the condition
+        body = m.group("action")
     for code, pattern, entities in _BUSINESS_ACTIONS:
         if pattern.search(body):
             return code, dict(entities)

@@ -77,6 +77,8 @@ export default function ProcessBuilder({
   const [brdNote, setBrdNote] = useState("");
   // the AI solution architect on a whole document (a BRD, or a long description)
   const [architect, setArchitect] = useState<{ key: number; text: string; name: string | null; placement: ProcessPlacement | null } | null>(null);
+  // the last BRD uploaded - the architect reads all of it again (with its name and business function), not the short request
+  const [brdDoc, setBrdDoc] = useState<{ request: string; text: string; name: string | null; placement: ProcessPlacement | null } | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   useEffect(() => {
     processPlacements().then((p) => setProcesses(p.processes)).catch(() => setProcesses([]));
@@ -142,7 +144,9 @@ export default function ProcessBuilder({
       );
       setBusy("");
       // the whole document goes to the architect - not sentence by sentence
-      openArchitect(read.text || read.request, read.name, read.placement ? where : null);
+      const doc = { request: read.request, text: read.text || read.request, name: read.name, placement: read.placement ? where : null };
+      setBrdDoc(doc);
+      openArchitect(doc.text, doc.name, doc.placement);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Couldn't read that document");
       setBusy("");
@@ -298,7 +302,9 @@ export default function ProcessBuilder({
           ))}
           <button
             type="button"
-            onClick={() => openArchitect(text.trim())}
+            onClick={() =>
+              brdDoc && text.trim() === brdDoc.request.trim() ? openArchitect(brdDoc.text, brdDoc.name, brdDoc.placement) : openArchitect(text.trim())
+            }
             disabled={text.trim().length < 20 || busy !== ""}
             title="Reads the whole description, matches it to your setup and designs the process end to end - requirements, steps, hand-offs, configuration, gaps"
             className="ml-auto rounded-lg border border-sky-500/50 px-4 py-2 text-sm font-semibold text-sky-200 hover:bg-sky-500/10 disabled:opacity-40"
