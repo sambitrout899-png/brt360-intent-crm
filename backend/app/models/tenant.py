@@ -51,3 +51,6 @@ class Tenant(Base):
     # Signed out after this many minutes without activity (None/0 = only when
     # the session itself expires). Enforced by the server, warned in the browser.
     idle_timeout_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # the administrator who deploys configuration releases (orchestration/change_control.py);
+    # empty = the organization's first administrator
+    root_admin_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)

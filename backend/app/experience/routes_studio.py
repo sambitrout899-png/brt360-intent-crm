@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlalchemy.orm import Session
 
 from app.auth import get_current_user, require_roles
@@ -28,8 +28,9 @@ from app.models.lifecycle import (
     StateModelState,
     StateModelTransition,
 )
+from app.models.change_control import Workspace
 from app.models.org import AppRole, Department
-from app.orchestration import flow_ai, flow_engine, flow_errors, flow_schema
+from app.orchestration import change_control, flow_ai, flow_engine, flow_errors, flow_schema
 from app.schemas.studio import (
     AssignmentRuleIn,
     AssignmentRuleOut,
@@ -464,12 +465,37 @@ def delete_custom_field(field_id: int, db: Session = Depends(get_db), tenant_id:
 
 
 # ---------- AI Flow Studio ----------
+#
+# In a workspace (X-BRT-Workspace) a flow's changes are drafts of it there
+# (orchestration/change_control.py) - live is untouched until a release; a
+# flow made in a workspace shows with a negative id. Outside one the flow is
+# changed live - unless someone's workspace holds it.
 
 
-def _flow_out(db: Session, flow: FlowDefinition, corrections: list[dict] | None = None) -> FlowOut:
+def workspace(x_brt_workspace: int | None = Header(default=None), db: Session = Depends(get_db),
+              tenant_id: int = Depends(get_current_tenant_id), user: User = Depends(get_current_user)) -> Workspace | None:
+    try:
+        return change_control.working(db, tenant_id, user, x_brt_workspace)
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except change_control.ChangeError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+def _guard(fn, *args):
+    try:
+        return fn(*args)
+    except change_control.ChangeError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+def _flow_out(db: Session, flow: FlowDefinition, corrections: list[dict] | None = None, draft: bool = False) -> FlowOut:
     graph = flow_engine.load_graph(flow)
     review = flow_schema.review_graph(graph, flow_schema.catalog_for_flow(db, flow.tenant_id, flow), flow.trigger_type == "custom_intent")
+    lock = change_control.lock_out(db, change_control.lock_of(db, flow.tenant_id, "flow", change_control.key_of(flow.id)))
     return FlowOut(
+        draft=draft,
+        locked_by=lock,
         id=flow.id,
         name=flow.name,
         description=flow.description,
@@ -594,21 +620,75 @@ def review_flow(payload: FlowReviewIn, db: Session = Depends(get_db), tenant_id:
     return FlowReviewOut(**flow_schema.review_graph(payload.graph, catalog, payload.trigger_type == "custom_intent"))
 
 
+def _editable(db: Session, tenant_id: int, ws: Workspace | None, flow_id: int) -> tuple[FlowDefinition, bool]:
+    """The flow as the caller works on it: their workspace's draft, else live.
+    In a workspace a live flow comes back as a copy - never the live row."""
+    key = change_control.key_of(flow_id)
+    snap = change_control.draft(db, tenant_id, ws, "flow", key)
+    if snap is not None:
+        if snap.get("deleted"):
+            raise HTTPException(404, "Flow deleted in this workspace")
+        return change_control.FlowAdapter.materialize(tenant_id, key, snap), True
+    if flow_id < 0:
+        raise HTTPException(404, "Flow not found")
+    live = _owned_flow(db, tenant_id, flow_id)
+    if ws is None:
+        return live, False
+    return change_control.FlowAdapter.materialize(tenant_id, key, change_control.FlowAdapter.snapshot(live)), True
+
+
+def _save_draft(db: Session, tenant_id: int, user: User, ws: Workspace, flow: FlowDefinition, key: str | None,
+                corrections: list[dict] | None = None) -> FlowOut:
+    snap = change_control.FlowAdapter.snapshot(flow)
+    key = _guard(change_control.save, db, tenant_id, user, ws, "flow", key, snap, flow.name)
+    shown = change_control.FlowAdapter.materialize(tenant_id, key, snap)
+    return _flow_out(db, shown, corrections, draft=True)
+
+
+def _check_live(db: Session, tenant_id: int, user: User, flow: FlowDefinition) -> None:
+    _guard(change_control.check_free, db, tenant_id, "flow", str(flow.id), user, None, f"Flow “{flow.name}”")
+
+
 @router.get("/flows", response_model=list[FlowOut])
-def list_flows(db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> list[FlowOut]:
+def list_flows(db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id),
+               ws: Workspace | None = Depends(workspace)) -> list[FlowOut]:
     flows = db.query(FlowDefinition).filter(FlowDefinition.tenant_id == tenant_id).order_by(FlowDefinition.name).all()
-    return [_flow_out(db, f) for f in flows if flow_available(db, tenant_id, f)]
+    drafts = change_control.drafts(db, tenant_id, ws, "flow")
+    out = []
+    for f in flows:
+        snap = drafts.pop(str(f.id), None)
+        if snap is not None and not snap.get("deleted"):
+            out.append(_flow_out(db, change_control.FlowAdapter.materialize(tenant_id, str(f.id), snap), draft=True))
+        elif snap is None and flow_available(db, tenant_id, f):
+            out.append(_flow_out(db, f))
+    out += [_flow_out(db, change_control.FlowAdapter.materialize(tenant_id, key, snap), draft=True)
+            for key, snap in drafts.items() if key.startswith("new-") and not snap.get("deleted")]
+    return sorted(out, key=lambda f: f.name.lower())
 
 
 @router.get("/flows/{flow_id}", response_model=FlowOut)
-def get_flow(flow_id: int, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> FlowOut:
-    return _flow_out(db, _owned_flow(db, tenant_id, flow_id))
+def get_flow(flow_id: int, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id),
+             ws: Workspace | None = Depends(workspace)) -> FlowOut:
+    flow, draft = _editable(db, tenant_id, ws, flow_id)
+    return _flow_out(db, flow, draft=draft)
+
+
+@router.get("/flows/{flow_id}/history")
+def flow_history(flow_id: int, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> dict:
+    """Every revision of the flow made in workspaces, and who holds it now."""
+    key = change_control.key_of(flow_id)
+    return {"revisions": change_control.history(db, tenant_id, "flow", key),
+            "locked_by": change_control.lock_out(db, change_control.lock_of(db, tenant_id, "flow", key))}
 
 
 @router.post("/flows", response_model=FlowOut, status_code=201)
-def create_flow(payload: FlowIn, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> FlowOut:
+def create_flow(payload: FlowIn, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id),
+                ws: Workspace | None = Depends(workspace), user: User = Depends(get_current_user)) -> FlowOut:
     flow = FlowDefinition(tenant_id=tenant_id, is_active=False)
     corrections = _apply_flow_payload(db, tenant_id, flow, payload)
+    if ws is not None:
+        flow.version = 1
+        return _save_draft(db, tenant_id, user, ws, flow, None, corrections)
     db.add(flow)
     db.commit()
     db.refresh(flow)
@@ -616,45 +696,63 @@ def create_flow(payload: FlowIn, db: Session = Depends(get_db), tenant_id: int =
 
 
 @router.put("/flows/{flow_id}", response_model=FlowOut)
-def update_flow(flow_id: int, payload: FlowIn, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> FlowOut:
+def update_flow(flow_id: int, payload: FlowIn, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id),
+                ws: Workspace | None = Depends(workspace), user: User = Depends(get_current_user)) -> FlowOut:
     """Saving a draft is always allowed; an ACTIVE flow must stay valid -
     an edit that breaks it is rejected rather than silently deactivating."""
-    flow = _owned_flow(db, tenant_id, flow_id)
+    flow, _draft = _editable(db, tenant_id, ws, flow_id)
+    if ws is None:
+        _check_live(db, tenant_id, user, flow)
     corrections = _apply_flow_payload(db, tenant_id, flow, payload)
     if flow.is_active:
         errors = flow_engine.validate_graph(flow_engine.load_graph(flow), flow)
         if errors:
             raise HTTPException(400, f"Active flow would become invalid: {'; '.join(errors)} - deactivate it first to save a draft")
-    flow.version += 1
+    flow.version = (flow.version or 0) + 1
+    if ws is not None:
+        return _save_draft(db, tenant_id, user, ws, flow, change_control.key_of(flow_id), corrections)
     db.commit()
     db.refresh(flow)
     return _flow_out(db, flow, corrections)
 
 
-@router.post("/flows/{flow_id}/activate", response_model=FlowOut)
-def activate_flow(flow_id: int, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> FlowOut:
-    flow = _owned_flow(db, tenant_id, flow_id)
-    errors = flow_engine.validate_graph(flow_engine.load_graph(flow), flow)
-    if errors:
-        raise HTTPException(400, f"Cannot activate an invalid flow: {'; '.join(errors)}")
-    flow.is_active = True
+def _switch(db: Session, tenant_id: int, ws: Workspace | None, user: User, flow_id: int, on: bool) -> FlowOut:
+    flow, _draft = _editable(db, tenant_id, ws, flow_id)
+    if ws is None:
+        _check_live(db, tenant_id, user, flow)
+    if on:
+        errors = flow_engine.validate_graph(flow_engine.load_graph(flow), flow)
+        if errors:
+            raise HTTPException(400, f"Cannot activate an invalid flow: {'; '.join(errors)}")
+    flow.is_active = on
+    if ws is not None:
+        return _save_draft(db, tenant_id, user, ws, flow, change_control.key_of(flow_id))
     db.commit()
     db.refresh(flow)
     return _flow_out(db, flow)
+
+
+@router.post("/flows/{flow_id}/activate", response_model=FlowOut)
+def activate_flow(flow_id: int, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id),
+                  ws: Workspace | None = Depends(workspace), user: User = Depends(get_current_user)) -> FlowOut:
+    return _switch(db, tenant_id, ws, user, flow_id, True)
 
 
 @router.post("/flows/{flow_id}/deactivate", response_model=FlowOut)
-def deactivate_flow(flow_id: int, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> FlowOut:
-    flow = _owned_flow(db, tenant_id, flow_id)
-    flow.is_active = False
-    db.commit()
-    db.refresh(flow)
-    return _flow_out(db, flow)
+def deactivate_flow(flow_id: int, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id),
+                    ws: Workspace | None = Depends(workspace), user: User = Depends(get_current_user)) -> FlowOut:
+    return _switch(db, tenant_id, ws, user, flow_id, False)
 
 
 @router.delete("/flows/{flow_id}", status_code=204)
-def delete_flow(flow_id: int, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> None:
-    db.delete(_owned_flow(db, tenant_id, flow_id))
+def delete_flow(flow_id: int, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id),
+                ws: Workspace | None = Depends(workspace), user: User = Depends(get_current_user)) -> None:
+    flow, _draft = _editable(db, tenant_id, ws, flow_id)
+    if ws is not None:
+        _guard(change_control.save, db, tenant_id, user, ws, "flow", change_control.key_of(flow_id), {"deleted": True}, flow.name)
+        return
+    _check_live(db, tenant_id, user, flow)
+    db.delete(flow)
     db.commit()
 
 
@@ -683,11 +781,13 @@ def ai_generate_flow(payload: FlowGenerateIn, db: Session = Depends(get_db), ten
 
 @router.post("/flows/{flow_id}/simulate", response_model=FlowSimulateOut)
 def simulate_flow(
-    flow_id: int, payload: FlowSimulateIn, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)
+    flow_id: int, payload: FlowSimulateIn, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id),
+    ws: Workspace | None = Depends(workspace),
 ) -> FlowSimulateOut:
     """Dry run: executes the flow for real against a record, reports the
-    trace, then rolls everything back - nothing it does is kept."""
-    flow = _owned_flow(db, tenant_id, flow_id)
+    trace, then rolls everything back - nothing it does is kept. In a
+    workspace it is the workspace's draft of the flow that runs."""
+    flow, _draft = _editable(db, tenant_id, ws, flow_id)
     log = audit.start_execution(db, tenant_id, f"[flow simulation] {flow.name}", channel="agent")
     ctx = {"entities": payload.entities, "result": payload.result,
            "trigger": {"intent": flow.trigger_intent_type, "input": payload.entities, "output": payload.result}}

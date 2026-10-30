@@ -90,6 +90,11 @@ def build_process(payload: BuildIn, db: Session = Depends(get_db), tenant_id: in
     version of the map in use, with the process in it, activated."""
     if payload.mode not in ("rehearse", "simulate", "execute"):
         raise HTTPException(422, "mode must be rehearse, simulate or execute")
+    if payload.mode == "execute":  # it activates a map version - the root administrator's call; others save it as a draft version
+        from app.orchestration import change_control
+
+        if not change_control.is_root(db, user):
+            raise HTTPException(403, "Only the organization's root administrator activates a process - save it as a draft map version instead")
     with llm.budget(AI_SECONDS):
         steps, answers, graphs = _steps(payload), payload.answers, payload.graphs
         if not steps:

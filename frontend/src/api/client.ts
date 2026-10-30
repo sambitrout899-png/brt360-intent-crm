@@ -173,6 +173,39 @@ export function setWorkContext(next: { positionId: number | null; scope: string 
   }
 }
 
+// The administrator's workspace (change control, /api/admin/change): set, the
+// Studio's saves are drafts there - nothing live changes until a release.
+const WORKSPACE_KEY = "brt360_workspace";
+let workspaceId: number | null = (() => {
+  try {
+    return Number(localStorage.getItem(WORKSPACE_KEY)) || null;
+  } catch {
+    return null;
+  }
+})();
+const workspaceListeners = new Set<(id: number | null) => void>();
+
+export function getWorkspace(): number | null {
+  return workspaceId;
+}
+
+export function setWorkspace(id: number | null): void {
+  workspaceId = id;
+  try {
+    if (id) localStorage.setItem(WORKSPACE_KEY, String(id));
+    else localStorage.removeItem(WORKSPACE_KEY);
+  } catch {
+    // per-session only when storage is unavailable
+  }
+  workspaceListeners.forEach((fn) => fn(id));
+}
+
+/** Told when the workspace changes - screens reload what they show. */
+export function onWorkspaceChange(fn: (id: number | null) => void): () => void {
+  workspaceListeners.add(fn);
+  return () => workspaceListeners.delete(fn);
+}
+
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const token = getAccessToken();
   const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -181,6 +214,7 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
   if (workContext.positionId) headers["X-Position-Id"] = String(workContext.positionId);
   if (workContext.scope) headers["X-Data-Scope"] = workContext.scope;
+  if (workspaceId && path.startsWith("/api/admin/flows")) headers["X-BRT-Workspace"] = String(workspaceId);
   const res = await fetch(`${API_BASE}${path}`, {
     ...init,
     headers: { ...headers, ...(init?.headers as Record<string, string> | undefined) },
@@ -437,6 +471,11 @@ export function functionMapMine(): Promise<FunctionMap & MapVersions> {
 
 export function functionMapVersions(): Promise<MapVersions> {
   return request<MapVersions>("/api/admin/function-map/versions");
+}
+
+/** The next revision of a version (v3 -> v3.1): a draft to work on, keeping its number. */
+export function functionMapRevise(id: number): Promise<FunctionMap> {
+  return request<FunctionMap>(`/api/admin/function-map/versions/${id}/revise`, { method: "POST" });
 }
 
 /** A new draft copied from BRT's original, the map in use or another version (its id). */

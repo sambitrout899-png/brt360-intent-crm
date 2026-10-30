@@ -79,8 +79,25 @@ def save_version(version_id: int, payload: VersionUpdate, db: Session = Depends(
 
 
 @router.delete("/versions/{version_id}", status_code=204)
-def delete_version(version_id: int, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> None:
-    _run(function_map.delete_version, db, tenant_id, version_id)
+def delete_version(version_id: int, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id),
+                   user: User = Depends(get_current_user)) -> None:
+    _run(function_map.delete_version, db, tenant_id, version_id, user.id)
+
+
+@router.post("/versions/{version_id}/revise")
+def revise_version(version_id: int, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id),
+                   user: User = Depends(get_current_user)) -> dict[str, Any]:
+    """The next revision of a version (v3 -> v3.1): a draft to work on, keeping its number."""
+    return _run(function_map.revise_version, db, tenant_id, version_id, user.id)
+
+
+def _root(db: Session, user: User) -> None:
+    from app.orchestration import change_control
+
+    try:
+        change_control.require_root(db, user, "activate a version of the map")
+    except change_control.NotRoot as exc:
+        raise HTTPException(403, str(exc)) from exc
 
 
 @router.post("/versions/{version_id}/plan")
@@ -102,7 +119,9 @@ def simulate_version(version_id: int, db: Session = Depends(get_db), tenant_id: 
 @router.post("/versions/{version_id}/activate")
 def activate_version(version_id: int, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id),
                      user: User = Depends(get_current_user)) -> dict[str, Any]:
-    """Re-orchestrates the engines to this version; the one it replaces is retired."""
+    """Re-orchestrates the engines to this version; the one it replaces is retired.
+    Only the organization's root administrator activates."""
+    _root(db, user)
     return _run(function_map.activate, db, tenant_id, version_id, user.id)
 
 
@@ -115,5 +134,6 @@ def plan_original(db: Session = Depends(get_db), tenant_id: int = Depends(get_cu
 @router.post("/original/activate")
 def activate_original(db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id),
                       user: User = Depends(get_current_user)) -> dict[str, Any]:
-    """Runs BRT's original map again; the active version is retired."""
+    """Runs BRT's original map again; the active version is retired. Only the root administrator."""
+    _root(db, user)
     return function_map.activate(db, tenant_id, None, user.id)

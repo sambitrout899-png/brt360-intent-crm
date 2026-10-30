@@ -81,7 +81,7 @@ def route_module(request):
         return 'telecom_crm'
     if path.startswith(('/api/admin/price-lists', '/api/admin/process-roles')):
         return 'telecom_crm'
-    if owner in {'routes_function_map', 'routes_builder', 'routes_conflicts'}:
+    if owner in {'routes_function_map', 'routes_builder', 'routes_conflicts', 'routes_change'}:
         return 'custom_development'
     if path in ('/api/intents/lookup', '/api/pages/offerings') or path.startswith('/api/pages/lead/'):
         return 'telecom_crm'

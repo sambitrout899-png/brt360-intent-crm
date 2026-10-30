@@ -11,7 +11,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 PREFIXES = (
-    "/api/admin/flows", "/api/admin/flow-runs", "/api/flow-approvals", "/api/process-builder/", "/api/admin/function-map",
+    "/api/admin/flows", "/api/admin/flow-runs", "/api/flow-approvals", "/api/process-builder/", "/api/admin/function-map", "/api/admin/change",
     "/api/approvals", "/api/admin/approval-policy", "/api/admin/approval-rules", "/api/admin/approvals",
     "/api/admin/price-lists", "/api/admin/process-roles", "/api/admin/quote-document-templates",
     "/api/admin/state-models", "/api/admin/positions", "/api/admin/assignment-rules", "/api/admin/custom-fields",
@@ -19,7 +19,7 @@ PREFIXES = (
 
 
 def routers() -> list[APIRouter]:
-    from app.experience import routes_builder, routes_function_map, routes_process, routes_studio
+    from app.experience import routes_builder, routes_change, routes_function_map, routes_process, routes_studio
 
     return [routes_studio.router, routes_studio.approvals_router, routes_process.admin_router, routes_process.router,
-            routes_function_map.router, routes_builder.router]
+            routes_function_map.router, routes_builder.router, routes_change.router]

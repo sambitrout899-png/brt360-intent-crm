@@ -308,7 +308,13 @@ export default function FlowList({
                       <button onClick={() => onOpen(f)} className="min-w-0 flex-1 text-left">
                         <span className="flex flex-wrap items-center gap-2">
                           <span className="truncate text-sm font-semibold text-slate-100 hover:text-sky-300">{shortName}</span>
-                          <span className="rounded bg-slate-800 px-1.5 py-0.5 font-mono text-[10px] text-slate-400">{f.intent_code ?? `FLOW-${f.id}`}</span>
+                          <span className="rounded bg-slate-800 px-1.5 py-0.5 font-mono text-[10px] text-slate-400">{f.id < 0 ? "new" : f.intent_code ?? `FLOW-${f.id}`}</span>
+                          {f.draft && <span className="rounded bg-violet-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-violet-300">🧪 Draft</span>}
+                          {f.locked_by && !f.draft && (
+                            <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-amber-300" title={`In ${f.locked_by.workspace ?? "their work"} - saving is refused until it is released or discarded`}>
+                              🔒 {f.locked_by.user}
+                            </span>
+                          )}
                           <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${f.is_active ? "bg-emerald-500/15 text-emerald-300" : "bg-slate-800 text-slate-400"}`}>
                             {f.is_active ? "Active" : "Inactive"}
                           </span>

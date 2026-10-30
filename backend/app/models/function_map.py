@@ -26,6 +26,9 @@ class FunctionMapVersion(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id"))
     number: Mapped[int] = mapped_column(Integer)  # 1, 2, 3 ... per tenant
+    # revisions of one version share its number: v3 (0), v3.1, v3.2 ... - Revise makes the next
+    revision: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    parent_id: Mapped[int | None] = mapped_column(Integer, nullable=True)  # the revision it was revised from
     name: Mapped[str] = mapped_column(String(150))
     notes: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(String(20), default="draft")

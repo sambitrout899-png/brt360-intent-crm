@@ -173,6 +173,9 @@ class FlowOut(BaseModel):
     # Fixes applied automatically by the save that returned this.
     corrections: list[dict[str, Any]] = []
     updated_at: dt.datetime
+    # change control: shown from the caller's workspace (not live), and who holds the flow
+    draft: bool = False
+    locked_by: dict[str, Any] | None = None
 
 
 class FlowDecisionIn(BaseModel):

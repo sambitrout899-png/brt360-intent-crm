@@ -5,6 +5,7 @@ import {
   functionMapMine,
   functionMapNewVersion,
   functionMapPlanActivation,
+  functionMapRevise,
   functionMapSaveVersion,
   functionMapSimulate,
   functionMapVanilla,
@@ -559,6 +560,19 @@ export default function AdminFunctionMap({ onOpenFlowStudio, onOpenIntents }: { 
     }
   }
 
+  /** The next revision of the version on screen (v3 -> v3.1) - then it is on screen to work on. */
+  async function revise() {
+    if (!version) return;
+    if (dirty && !window.confirm("This draft has unsaved changes. Leave without saving them?")) return;
+    const made = await work(() => functionMapRevise(version.id), "Couldn't make the revision");
+    if (made?.version) {
+      await refreshVersions();
+      setSelection(null);
+      setApplied(null);
+      setShowing(made.version.id);
+    }
+  }
+
   async function rename() {
     if (!version) return;
     const name = window.prompt("Rename this version", version.name)?.trim();
@@ -709,7 +723,8 @@ export default function AdminFunctionMap({ onOpenFlowStudio, onOpenIntents }: { 
             <option value="original">🔒 BRT original</option>
             {(versions?.versions ?? []).map((v) => (
               <option key={v.id} value={v.id}>
-                v{v.number} · {v.name} - {STATUS[v.status].label}
+                {v.label ?? `v${v.number}`} · {v.name} - {STATUS[v.status].label}
+                {v.locked_by ? ` · 🔒 ${v.locked_by.user}` : ""}
               </option>
             ))}
           </select>
@@ -756,9 +771,10 @@ export default function AdminFunctionMap({ onOpenFlowStudio, onOpenIntents }: { 
             <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${STATUS[version.status].cls}`}>{STATUS[version.status].label}</span>
             <span className="min-w-0 flex-1">
               <span className="font-semibold text-slate-200">
-                v{version.number} · {version.name}
+                {version.label ?? `v${version.number}`} · {version.name}
               </span>{" "}
               - from {version.based_on}
+              {version.locked_by && ` · 🔒 being worked on by ${version.locked_by.user} - others revise or copy it`}
               {version.status === "draft" && `, saved ${ago(version.updated_at)}${dirty ? " · unsaved changes" : ""}. Nothing runs from a draft until it is activated.`}
               {version.status === "active" && ` - active since ${ago(version.activated_at)}. Read-only: to change it, make a new version from it.`}
               {version.status === "retired" && " - no longer in use; kept to activate again."}
@@ -768,6 +784,9 @@ export default function AdminFunctionMap({ onOpenFlowStudio, onOpenIntents }: { 
                 Rename
               </button>
             )}
+            <button onClick={revise} disabled={busy} className={btn} title="The next revision of this version (keeps its number) - a draft to work on">
+              ✎ Revise
+            </button>
             <button onClick={() => newVersion(version.id)} disabled={busy} className={btn}>
               ＋ Copy as a new version
             </button>

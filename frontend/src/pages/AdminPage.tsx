@@ -1,4 +1,6 @@
-import { request } from "../api/client";
+import { getWorkspace, onWorkspaceChange, request } from "../api/client";
+import WorkspaceBar from "../components/admin/WorkspaceBar";
+import AdminReleasesSection from "./AdminReleasesSection";
 import { getInventorySync, saveInventorySync, runInventorySync, type InventorySyncSettings } from "../api/client";
 import { useEffect, useState } from "react";
 import {
@@ -82,7 +84,7 @@ import AdminCommsSection from "./AdminCommsSection";
 import AdminProductModelSection from "./AdminProductModelSection";
 import AttributeLibrary from "./AdminAttributeLibrary";
 
-type Section = "functionmap" | "conflicts" | "org" | "access" | "intents" | "pages" | "bim" | "productmodel" | "lifecycle" | "assignment" | "customfields" | "recordtypes" | "flows" | "approvals" | "broadcasts" | "roles" | "pricelists" | "productconfig" | "sla" | "attributes" | "identity" | "ponr" | "feasibility" | "orchestration" | "ai" | "users" | "tests" | "ordermgmt" | "fulfillment" | "comms" | "quotedocs";
+type Section = "releases" | "functionmap" | "conflicts" | "org" | "access" | "intents" | "pages" | "bim" | "productmodel" | "lifecycle" | "assignment" | "customfields" | "recordtypes" | "flows" | "approvals" | "broadcasts" | "roles" | "pricelists" | "productconfig" | "sla" | "attributes" | "identity" | "ponr" | "feasibility" | "orchestration" | "ai" | "users" | "tests" | "ordermgmt" | "fulfillment" | "comms" | "quotedocs";
 
 const CLOCK_STATUS_STYLES: Record<string, string> = {
   running: "bg-sky-500/15 text-sky-400 border-sky-500/30",
@@ -1244,6 +1246,7 @@ const NAV: NavGroup[] = [
   {
     title: "Platform", icon: "🛠️", blurb: "AI, identity verification and quality.",
     items: [
+      { id: "releases", label: "Releases & Workspaces", icon: "🚀", hint: "Admins' workspaces, locks, and the releases the root administrator deploys or rolls back", wide: "lg" },
       { id: "ai", label: "AI Settings", icon: "🤖", hint: "Which AI model the platform uses" },
       { id: "identity", label: "Identity Providers", icon: "🪪", hint: "KYC / ID verification services" },
       { id: "tests", label: "Test Suite", icon: "🧪", hint: "Run the platform's checks" },
@@ -1298,11 +1301,14 @@ export default function AdminPage({ onAccessChanged }: { onAccessChanged?: () =>
   const [moduleError, setModuleError] = useState('');
   useEffect(() => { request<{key:string; enabled:boolean}[]>('/api/modules').then(rows => setModules(rows.filter(r => r.enabled).map(r => r.key))).catch(e => setModuleError(String(e))); }, []);
   const allowed = (id: Section) => {
-    if (['org','access','users','ai','broadcasts','approvals','roles','lifecycle','assignment'].includes(id)) return true;
+    if (['org','access','users','ai','broadcasts','approvals','roles','lifecycle','assignment','releases'].includes(id)) return true;
     const module = id==='flows' ? 'flow_studio' : id==='pages' ? 'page_designer' : ['intents','customfields','recordtypes','functionmap','conflicts'].includes(id) ? 'custom_development' : 'telecom_crm';
     return modules.includes(module);
   };
   const section = selectedSection==='home' || allowed(selectedSection) ? selectedSection : 'home';
+  // Flow Studio shows the selected workspace's drafts - it reloads when the workspace changes
+  const [workspaceKey, setWorkspaceKey] = useState(() => String(getWorkspace() ?? "live"));
+  useEffect(() => onWorkspaceChange((id) => setWorkspaceKey(String(id ?? "live"))), []);
   const [filter, setFilter] = useState("");
   const setSection = (id: Section | "home") => {
     setSectionState(id);
@@ -1397,7 +1403,13 @@ export default function AdminPage({ onAccessChanged }: { onAccessChanged?: () =>
           {section === "org" && <OrgStructureSection />}
           {section === "access" && <RolesAccessSection onAccessChanged={onAccessChanged} />}
           {section === "intents" && <AdminIntentsSection onOpenFlowStudio={() => setSection("flows")} />}
-          {section === "flows" && <FlowStudioSection />}
+          {section === "flows" && (
+            <>
+              <WorkspaceBar onOpenReleases={() => setSection("releases")} />
+              <FlowStudioSection key={workspaceKey} />
+            </>
+          )}
+          {section === "releases" && <AdminReleasesSection />}
           {section === "conflicts" && <AdminConflictsSection onOpenFlowStudio={() => setSection("flows")} />}
           {section === "functionmap" && <AdminFunctionMap onOpenFlowStudio={() => setSection("flows")} onOpenIntents={() => setSection("intents")} />}
           {section === "pages" && <AdminPageDesignerSection />}

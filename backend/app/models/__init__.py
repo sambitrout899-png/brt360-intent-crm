@@ -289,3 +289,4 @@ from app.models import inventory  # noqa: F401
 from app.models import audit_chain  # noqa: F401
 from app.models import notifications  # noqa: F401
 from app.models import function_map  # noqa: F401
+from app.models import change_control  # noqa: F401

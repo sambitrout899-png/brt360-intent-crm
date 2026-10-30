@@ -1438,6 +1438,10 @@ export interface Flow {
   warnings: string[];
   corrections: FlowCorrection[];
   updated_at: string;
+  /** change control: shown from your workspace (a draft, not live) */
+  draft?: boolean;
+  /** who holds it in their workspace - nobody else changes it meanwhile */
+  locked_by?: { user_id: number; user: string | null; workspace_id: number | null; workspace: string | null; since: string } | null;
 }
 
 export type FlowInput = Omit<

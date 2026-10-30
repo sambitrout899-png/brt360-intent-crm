@@ -104,6 +104,13 @@ export interface MapSimulation {
 export interface MapVersion {
   id: number;
   number: number;
+  /** v3 = 0, v3.1 = 1 ... (Revise) */
+  revision?: number;
+  /** "v3" or "v3.1" */
+  label?: string;
+  parent_id?: number | null;
+  /** the administrator working on this draft - nobody else changes it meanwhile */
+  locked_by?: { user_id: number; user: string | null; workspace: string | null; since: string } | null;
   name: string;
   notes: string;
   status: "draft" | "active" | "retired";

@@ -82,7 +82,7 @@ function blankFlow(): FlowInput {
 }
 
 function toInput(f: Flow): FlowInput {
-  const { id: _id, version: _v, is_active: _a, intent_code: _c, validation_errors: _e, updated_at: _u, ...input } = f;
+  const { id: _id, version: _v, is_active: _a, intent_code: _c, validation_errors: _e, updated_at: _u, draft: _d, locked_by: _l, ...input } = f;
   return { ...input, graph: editableFlowGraph(input.graph) };
 }
 
@@ -681,6 +681,12 @@ export default function FlowStudioSection() {
             {current && (
               <span className={`rounded-md border px-2 py-0.5 text-xs ${current.is_active ? "border-emerald-500/40 text-emerald-400" : "border-slate-700 text-slate-500"}`}>
                 v{current.version} · {current.is_active ? "active" : "inactive"}
+              </span>
+            )}
+            {current?.draft && <span className="rounded-md border border-violet-500/40 px-2 py-0.5 text-xs text-violet-300">🧪 draft in your workspace</span>}
+            {current?.locked_by && !current.draft && (
+              <span className="rounded-md border border-amber-500/40 px-2 py-0.5 text-xs text-amber-300" title="Saving is refused until that work is released or discarded">
+                🔒 locked by {current.locked_by.user}{current.locked_by.workspace ? ` (${current.locked_by.workspace})` : ""}
               </span>
             )}
           </div>

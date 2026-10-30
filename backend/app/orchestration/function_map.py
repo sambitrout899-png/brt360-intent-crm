@@ -804,8 +804,13 @@ def _summary(db: Session, v) -> dict[str, Any]:
         user = db.get(User, uid) if uid else None
         return user.name if user is not None else None
 
+    from app.orchestration import change_control
+
     iso = lambda t: t.isoformat(timespec="seconds") if t else None  # noqa: E731
-    return {"id": v.id, "number": v.number, "name": v.name, "notes": v.notes or "", "status": v.status, "based_on": v.based_on,
+    revision = v.revision or 0
+    return {"id": v.id, "number": v.number, "revision": revision, "label": f"v{v.number}" + (f".{revision}" if revision else ""),
+            "parent_id": v.parent_id, "locked_by": change_control.lock_out(db, change_control.lock_of(db, v.tenant_id, "map_version", str(v.id))),
+            "name": v.name, "notes": v.notes or "", "status": v.status, "based_on": v.based_on,
             "created_at": iso(v.created_at), "created_by": who(v.created_by_id), "updated_at": iso(v.updated_at),
             "activated_at": iso(v.activated_at), "activated_by": who(v.activated_by_id),
             "builds": [{"name": b.get("name"), "status": b.get("status")} for b in _read(v).get("builds") or [] if isinstance(b, dict)]}
@@ -899,6 +904,7 @@ def stage(db: Session, tenant_id: int, user_id: int | None, spec: dict[str, Any]
         v = _get(db, tenant_id, version_id)
         if v.status != "draft":
             raise VersionError(f"Version {v.number} is {v.status} - put the process into a draft version")
+        _claim(db, tenant_id, v, user_id)
     else:
         made = create_version(db, tenant_id, user_id, f"{blueprint['name']} - new process"[:150], "active")
         v = _get(db, tenant_id, made["version"]["id"])
@@ -992,13 +998,46 @@ def version_map(db: Session, tenant_id: int, version_id: int) -> dict[str, Any]:
     return {**view, "version": _summary(db, v), "release_notes": notes}
 
 
+def _claim(db: Session, tenant_id: int, v, user_id: int | None) -> None:
+    """A draft version is locked to the first administrator who changes it -
+    another one works on their own revision or copy (change_control)."""
+    from app.models.auth import User
+    from app.orchestration import change_control
+
+    user = db.get(User, user_id) if user_id else None
+    if user is None:
+        return
+    try:
+        change_control.claim(db, tenant_id, "map_version", str(v.id), user, None, f"Map version {v.number}")
+    except change_control.ChangeError as exc:
+        raise VersionError(f"{exc} Make a revision or a copy of it to work on.") from exc
+
+
+def revise_version(db: Session, tenant_id: int, version_id: int, user_id: int | None) -> dict[str, Any]:
+    """The next revision of a version (v3 -> v3.1 -> v3.2): a draft with its
+    picture and processes, keeping its number - activating it supersedes the
+    revision in use."""
+    from sqlalchemy import func
+
+    from app.models.function_map import FunctionMapVersion
+
+    src = _get(db, tenant_id, version_id)
+    revision = (db.query(func.max(FunctionMapVersion.revision))
+                .filter(FunctionMapVersion.tenant_id == tenant_id, FunctionMapVersion.number == src.number).scalar() or 0) + 1
+    v = _new(db, tenant_id, user_id, src.name, f"revision of v{src.number}" + (f".{src.revision}" if src.revision else ""), _read(src))
+    v.number, v.revision, v.parent_id = src.number, revision, src.id
+    db.commit()
+    return version_map(db, tenant_id, v.id)
+
+
 def save_version(db: Session, tenant_id: int, version_id: int, user_id: int | None, payload: dict[str, Any]) -> dict[str, Any]:
     """A draft's picture, name or notes - nothing changes in the engines."""
     from app.timeutils import utcnow
 
     v = _get(db, tenant_id, version_id)
     if v.status != "draft":
-        raise VersionError(f"Version {v.number} is {v.status} - it can't be changed. Make a new version from it to work on.")
+        raise VersionError(f"Version {v.number} is {v.status} - it can't be changed. Make a revision of it to work on.")
+    _claim(db, tenant_id, v, user_id)
     if payload.get("name") is not None:
         v.name = str(payload["name"]).strip()[:150] or v.name
     if payload.get("notes") is not None:
@@ -1012,10 +1051,16 @@ def save_version(db: Session, tenant_id: int, version_id: int, user_id: int | No
     return version_map(db, tenant_id, v.id)
 
 
-def delete_version(db: Session, tenant_id: int, version_id: int) -> None:
+def delete_version(db: Session, tenant_id: int, version_id: int, user_id: int | None = None) -> None:
+    from app.orchestration import change_control
+
     v = _get(db, tenant_id, version_id)
     if v.status == "active":
         raise VersionError("The active version can't be deleted - activate another version (or BRT's original) first.")
+    lock = change_control.lock_of(db, tenant_id, "map_version", str(v.id))
+    if lock is not None and user_id is not None and lock.user_id != user_id:
+        raise VersionError(f"Map version {v.number} is being worked on by {change_control.lock_out(db, lock)['user']} - it can't be deleted now")
+    change_control.unlock(db, tenant_id, "map_version", str(v.id))
     db.delete(v)
     db.commit()
 
@@ -1106,8 +1151,11 @@ def activate(db: Session, tenant_id: int, version_id: int | None, user_id: int |
                     o["steps"] = [*o["steps"], *[c for c in process_builder.process_steps(bp, made) if c not in o["steps"]]]
             built.append({"build": b, "blueprint": bp, "made": made, "impact": impact})
         if v is not None:
+            from app.orchestration import change_control
+
             v.picture_json = json.dumps(pic)
             v.status, v.activated_at, v.activated_by_id = "active", utcnow(), user_id
+            change_control.unlock(db, tenant_id, "map_version", str(v.id))  # active is read-only - nobody holds it
             desired = _picture_of(_view(db, tenant_id, pic)[0])
         else:
             desired = _picture_of(restore_draft(db, tenant_id))
