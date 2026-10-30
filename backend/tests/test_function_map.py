@@ -189,6 +189,33 @@ def test_every_save_is_kept_and_only_administrators_see_the_map(client):
     assert client.post(f"{MAP}/original/activate", headers=_as(rep)).status_code == 403
 
 
+def test_a_rewired_step_overrides_the_built_in_outcome_rule(client):
+    """Feasibility passed used to go to "Create a quote" whatever the map said;
+    once the map in use re-wires it, the map decides - a failure keeps its own path."""
+    from test_sales_to_order import _launch, _opportunity, run
+
+    def at_presales(company):
+        opp = _opportunity(client, company)
+        run(client, "INT-37", opportunity_id=opp, offering_name="Fiber 900", pricing_attributes={"Bandwidth": "100 Mbps", "Contract term": "36 months"})
+        assert run(client, "INT-38", opportunity_id=opp, address="12 King Fahd Road")["result"]["stage"] == "in_feasibility"
+        return opp
+
+    _launch(client)
+    offered = lambda body: [a["code"] for a in body["next_actions"]]  # noqa: E731
+    before = run(client, "INT-18", opportunity_id=at_presales("Before Co"), decision="feasible")
+    assert before["result"]["presales_outcome"] == "passed" and offered(before) == ["INT-05"]  # BRT's original: the quote
+
+    draft = _draft(_mine(client))
+    draft["edges"] = [e for e in draft["edges"] if e["source"] != "INT-18"]
+    draft["edges"].append({"source": "INT-18", "target": "INT-24", "kind": "next", "why": "Feasible - order it straight away"})
+    _apply(client, draft)
+
+    passed = run(client, "INT-18", opportunity_id=at_presales("After Co"), decision="feasible")
+    assert offered(passed) == ["INT-24"], passed["next_actions"]
+    failed = run(client, "INT-18", opportunity_id=at_presales("Failing Co"), decision="not_feasible", notes="No duct")
+    assert offered(failed) == ["INT-37"]  # not feasible still goes back to reconfiguring
+
+
 def test_the_map_in_use_and_the_original_cannot_be_changed_directly(client):
     draft = _draft(_mine(client))
     _node(draft, "INT-03")["active"] = False

@@ -277,6 +277,17 @@ def _saved_from(db: Session, tenant_id: int, code: str) -> list[dict[str, Any]] 
     return [e for e in mine["edges"] if isinstance(e, dict) and e.get("source") == code and e.get("target")]
 
 
+def rewired(db: Session, tenant_id: int, code: str) -> bool:
+    """Whether the tenant's map in use changed this step's next steps from
+    BRT's original - then the map, not the built-in outcome rules, says where
+    a successful outcome goes (a failure still takes its built-in path)."""
+    mine = _saved_from(db, tenant_id, code)
+    if mine is None:
+        return False
+    original = {e["target"] for e in _vanilla_edges() if e["source"] == code}
+    return {e["target"] for e in mine} != original
+
+
 def decides(db: Session, tenant_id: int, code: str) -> bool:
     """Whether the tenant's map has conditions on this step's next steps -
     then the map alone decides them (the built-in outcome rules step aside)."""

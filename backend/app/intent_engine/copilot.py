@@ -1231,9 +1231,10 @@ def outcome(
     if map_decides:
         pass  # the conditions drawn on the map decide this step's outcomes
     elif code == "INT-18" and "presales_outcome" in result:
-        # Presales' conclusion: feasible -> quote; not feasible -> back to configuring.
-        candidates = {"passed": [("INT-05", "Feasible - prepare the quote")],
-                      "failed": [("INT-37", "Not feasible - reconfigure with the customer")]}.get(result["presales_outcome"], [])
+        # Presales' conclusion: feasible -> quote (or wherever the tenant's map re-wired it); not feasible -> back to configuring.
+        if not (result["presales_outcome"] == "passed" and function_map.rewired(db, tenant_id, code)):
+            candidates = {"passed": [("INT-05", "Feasible - prepare the quote")],
+                          "failed": [("INT-37", "Not feasible - reconfigure with the customer")]}.get(result["presales_outcome"], [])
         if result.get("waiting_for"):
             candidates = []
     elif code == "INT-18" and result.get("outcome") != "passed":
@@ -1253,7 +1254,8 @@ def outcome(
         candidates = function_map.next_steps(db, tenant_id, last_code, _NEXT.get(last_code, []),
                                              _map_facts(db, tenant_id, last_code, {}, last_out, merged))
         last_decides = function_map.decides(db, tenant_id, last_code)
-        if not last_decides and last_code == "INT-18" and "presales_outcome" in last_out:
+        if (not last_decides and last_code == "INT-18" and "presales_outcome" in last_out
+                and not (last_out["presales_outcome"] == "passed" and function_map.rewired(db, tenant_id, last_code))):
             candidates = {"passed": [("INT-05", "Feasible - prepare the quote")],
                           "failed": [("INT-37", "Not feasible - reconfigure with the customer")]}.get(last_out["presales_outcome"], [])
         if last_out.get("waiting_for") or last_out.get("approval_status") == "pending" or (not last_decides and last_out.get("decision") == "reject"):
