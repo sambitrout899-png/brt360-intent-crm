@@ -2,9 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import { downloadBrdTemplate, processBuild, processDesign, processPlacements, processReadBrd, processRecipes, processStage } from "../../api/client";
 import type { FunctionMap } from "../../api/functionMapTypes";
 import type { IntentDef, ProcessBlueprint, ProcessBuild, ProcessInput, ProcessPlacement, ProcessQuestion } from "../../api/types";
+import { downloadUseCaseTemplate, listUseCaseSets, uploadUseCases, type UseCaseSet, type UseCaseSetBrief } from "../../api/useCases";
 import { notifyIntentExecuted } from "../../workspace";
 import AgentPanel from "./AgentPanel";
 import ArchitectPanel from "./ArchitectPanel";
+import UseCaseStudio from "./UseCaseStudio";
 
 const EXAMPLES = [
   "Build a B2C process - customer -> identity verification -> raise order -> installation -> service activation on network -> connectivity testing -> acceptance -> start billing -> installed asset",
@@ -80,8 +82,14 @@ export default function ProcessBuilder({
   // the last BRD uploaded - the architect reads all of it again (with its name and business function), not the short request
   const [brdDoc, setBrdDoc] = useState<{ request: string; text: string; name: string | null; placement: ProcessPlacement | null } | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
+  // functional use cases (the use case template): reviewed, committed and tested in the use case studio
+  const useCaseInput = useRef<HTMLInputElement>(null);
+  const [useCases, setUseCases] = useState<{ id: number; initial: UseCaseSet | null } | null>(null);
+  const [useCaseSets, setUseCaseSets] = useState<UseCaseSetBrief[]>([]);
+  const refreshSets = () => listUseCaseSets().then(setUseCaseSets).catch(() => setUseCaseSets([]));
   useEffect(() => {
     processPlacements().then((p) => setProcesses(p.processes)).catch(() => setProcesses([]));
+    void refreshSets();
   }, []);
   // decisions taken from my own suggestions - shown, and changeable
   const [decided, setDecided] = useState<{ prompt: string; answer: string }[]>([]);
@@ -119,8 +127,27 @@ export default function ProcessBuilder({
     setBuilt(null);
     setStaged(null);
     setArchitect(null);
+    setUseCases(null);
     setConsent(false);
     setError("");
+  }
+
+  /** Use cases (Word, RTF or text) read, restructured and mapped on the Functional Map - then reviewed in the studio. */
+  async function uploadUseCaseFile(file: File) {
+    setBusy("brd");
+    setError("");
+    setBrdNote("");
+    try {
+      const set = await uploadUseCases(file);
+      reset();
+      setUseCases({ id: set.id, initial: set });
+      setBrdNote(`${file.name}: ${set.summary.use_cases} use case(s) mapped on the Functional Map`);
+      void refreshSets();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't read that document");
+    } finally {
+      setBusy("");
+    }
   }
 
   function openArchitect(doc: string, name: string | null = null, where: ProcessPlacement | null = null) {
@@ -281,6 +308,44 @@ export default function ProcessBuilder({
           >
             Get the BRD template
           </button>
+          <input
+            ref={useCaseInput}
+            type="file"
+            accept=".docx,.rtf,.txt,.md"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              e.target.value = "";
+              if (file) void uploadUseCaseFile(file);
+            }}
+          />
+          <button
+            type="button"
+            onClick={() => useCaseInput.current?.click()}
+            disabled={busy !== ""}
+            title="Functional use cases on top of BRT's Functional Map - each step mapped to the map's actions, the rest shown as new requirements or process gaps"
+            className="rounded-lg border border-emerald-600/50 px-3 py-1.5 font-semibold text-emerald-200 hover:border-emerald-400 disabled:opacity-40"
+          >
+            {busy === "brd" ? "Reading…" : "📋 Upload use cases (.docx, .rtf)"}
+          </button>
+          <button
+            type="button"
+            onClick={() => downloadUseCaseTemplate().catch((e) => setError(e instanceof Error ? e.message : "Couldn't download the template"))}
+            className="text-slate-400 underline decoration-slate-600 underline-offset-2 hover:text-slate-200"
+          >
+            Get the use case template
+          </button>
+          {useCaseSets.length > 0 && (
+            <select
+              value=""
+              disabled={busy !== ""}
+              onChange={(e) => { const id = Number(e.target.value); if (id) { reset(); setUseCases({ id, initial: null }); } }}
+              className="rounded-lg border border-slate-700 bg-slate-950 px-2 py-1.5 text-slate-300"
+            >
+              <option value="">Open saved use cases…</option>
+              {useCaseSets.map((s) => <option key={s.id} value={s.id}>{s.name} - {s.status}</option>)}
+            </select>
+          )}
           {brdNote && <span className="text-slate-500">· {brdNote}</span>}
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -336,6 +401,11 @@ export default function ProcessBuilder({
       )}
 
       {error && <p className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">{error}</p>}
+
+      {useCases && (
+        <UseCaseStudio key={useCases.id} setId={useCases.id} initial={useCases.initial} intents={intents} processes={processes}
+          onClose={() => { setUseCases(null); void refreshSets(); }} />
+      )}
 
       {architect && (
         <ArchitectPanel key={architect.key} text={architect.text} name={architect.name} placement={architect.placement} onClose={() => setArchitect(null)} />

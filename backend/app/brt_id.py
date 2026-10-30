@@ -66,7 +66,7 @@ PREFIXES: dict[str, str] = {
     "training_attendance": "TAT", "training_qa_reviews": "TQA", "training_outcomes": "TOC",
     "training_notify_templates": "TNT", "training_notifications": "TNO", "training_settings": "TSG",
     "training_audit": "TAD", "training_otps": "TOP",
-    "om_channel_interactions": "OCI", "function_map_versions": "FMV",
+    "om_channel_interactions": "OCI", "function_map_versions": "FMV", "use_case_sets": "UCS",
     "change_workspaces": "CWS", "change_locks": "CLK", "change_revisions": "CRV", "change_releases": "REL",
     # the PDFs of a quote and their templates
     "quote_documents": "QDC", "quote_document_templates": "QDT",

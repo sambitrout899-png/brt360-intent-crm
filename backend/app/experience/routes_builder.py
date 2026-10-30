@@ -217,6 +217,191 @@ def read_brd(payload: BrdIn, db: Session = Depends(get_db), tenant_id: int = Dep
         raise HTTPException(422, str(exc)) from exc
 
 
+# ---------------------------------------------------------------- use cases (orchestration/use_cases.py)
+
+_DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+
+class UseCasesIn(BaseModel):
+    name: str = Field(min_length=1, max_length=150)
+    use_cases: list[dict[str, Any]] = Field(max_length=40)
+
+
+class UseCaseCommitIn(BaseModel):
+    answers: dict[str, dict[str, Any]] = {}  # {group: {question id: answer}} - the builder's questions, per process
+    activate: bool = False  # the root administrator: activate the map version at once
+
+
+def _use_case_set(db: Session, tenant_id: int, set_id: int):
+    from app.models.use_cases import UseCaseSet
+
+    s = db.query(UseCaseSet).filter(UseCaseSet.tenant_id == tenant_id, UseCaseSet.id == set_id).first()
+    if s is None:
+        raise HTTPException(404, "No such use case set")
+    return s
+
+
+@router.get("/use-case-template")
+def use_case_template() -> Response:
+    """The BRT 360 use case template (Word): one worked example, a delta on B2B Sales to Order."""
+    from app.orchestration import use_cases
+
+    return Response(use_cases.template_docx(), media_type=_DOCX,
+                    headers={"Content-Disposition": 'attachment; filename="BRT360-use-case-template.docx"'})
+
+
+@router.get("/use-cases")
+def list_use_case_sets(db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> list[dict]:
+    from app.models.use_cases import UseCaseSet
+    from app.orchestration import use_cases
+
+    rows = db.query(UseCaseSet).filter(UseCaseSet.tenant_id == tenant_id).order_by(UseCaseSet.id.desc()).limit(50).all()
+    return [use_cases.out(s, full=False) for s in rows]
+
+
+@router.post("/use-cases")
+def upload_use_cases(payload: BrdIn, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id),
+                     user: User = Depends(get_current_user)) -> dict:
+    """A use case document (Word, RTF or text) read into structured use cases,
+    mapped on the Functional Map and saved for review - nothing is built."""
+    import base64
+    import binascii
+    import json
+
+    from app.models.use_cases import UseCaseSet
+    from app.orchestration import process_brd, use_cases
+
+    try:
+        data = base64.b64decode(payload.content_base64, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise HTTPException(422, "The file didn't arrive whole - upload it again") from exc
+    try:
+        with llm.budget(100.0):  # a free-text document is restructured by the model - inside nginx's 120 s
+            read = use_cases.read(db, tenant_id, payload.filename, data)
+    except (process_brd.BrdError, use_cases.UseCaseError) as exc:
+        raise HTTPException(422, str(exc)) from exc
+    mapped = use_cases.map_cases(db, tenant_id, read["use_cases"])
+    s = UseCaseSet(tenant_id=tenant_id, name=read["name"][:150], filename=payload.filename[:200], read_by=read["read_by"],
+                   use_cases_json=json.dumps(mapped), created_by_id=user.id)
+    db.add(s)
+    db.commit()
+    return {**use_cases.out(s), "examples_dropped": read["examples_dropped"]}
+
+
+@router.get("/use-cases/{set_id}")
+def get_use_case_set(set_id: int, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> dict:
+    from app.orchestration import use_cases
+
+    return use_cases.out(_use_case_set(db, tenant_id, set_id))
+
+
+@router.put("/use-cases/{set_id}")
+def save_use_case_set(set_id: int, payload: UseCasesIn, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> dict:
+    """The reviewed use cases, mapped again. A committed set goes back to draft -
+    commit it again for the change to reach the map; its test cases are marked out of date."""
+    import json
+
+    from app.orchestration import use_cases
+    from app.timeutils import utcnow
+
+    s = _use_case_set(db, tenant_id, set_id)
+    cases = use_cases.normalize(payload.use_cases)
+    if not cases:
+        raise HTTPException(422, "A use case set needs at least one use case")
+    s.name = payload.name.strip()[:150]
+    s.use_cases_json = json.dumps(use_cases.map_cases(db, tenant_id, cases))
+    s.status = "draft"
+    tests = json.loads(s.tests_json or "{}")
+    if tests:
+        s.tests_json = json.dumps({**tests, "stale": True})
+    s.updated_at = utcnow()
+    db.commit()
+    return use_cases.out(s)
+
+
+@router.delete("/use-cases/{set_id}", status_code=204)
+def delete_use_case_set(set_id: int, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> Response:
+    """The set only - a map version it was committed into stays (retire or delete it on the map)."""
+    db.delete(_use_case_set(db, tenant_id, set_id))
+    db.commit()
+    return Response(status_code=204)
+
+
+@router.post("/use-cases/{set_id}/preview")
+def preview_use_cases(set_id: int, payload: UseCaseCommitIn, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> dict:
+    """What committing would build, per process: steps, hand-offs, configuration,
+    gaps, the decisions taken and the questions still open - nothing is changed."""
+    from app.orchestration import use_cases
+
+    with llm.budget(AI_SECONDS):
+        return {"designs": use_cases.preview(db, tenant_id, _use_case_set(db, tenant_id, set_id), payload.answers)}
+
+
+@router.post("/use-cases/{set_id}/commit")
+def commit_use_cases(set_id: int, payload: UseCaseCommitIn, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id),
+                     user: User = Depends(get_current_user), ws: Workspace | None = Depends(current_workspace)) -> dict:
+    """The use cases into a draft Functional Map version - the existing actions
+    placed and linked, the customizations and new actions staged as builds -
+    activated at once only by the root administrator outside a workspace.
+    Questions the builder can't decide come back unanswered: nothing is changed."""
+    from app.orchestration import change_control, function_map, use_cases
+
+    if payload.activate:
+        if not change_control.is_root(db, user):
+            raise HTTPException(403, "Only the organization's root administrator activates a map version - commit it as a draft instead")
+        if ws is not None:
+            raise HTTPException(409, f"You are working in the workspace “{ws.name}” - commit as a draft; it goes live with the workspace's release")
+    s = _use_case_set(db, tenant_id, set_id)
+    with llm.budget(AI_SECONDS):
+        try:
+            done = use_cases.commit(db, tenant_id, user.id, s, payload.answers, ws, payload.activate)
+        except LookupError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except function_map.VersionError as exc:
+            raise HTTPException(409, str(exc)) from exc
+    return {**done, "set": use_cases.out(s)}
+
+
+@router.post("/use-cases/{set_id}/tests")
+def generate_use_case_tests(set_id: int, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> dict:
+    """Manual and automation test cases - after the use cases are committed."""
+    import json
+
+    from app.orchestration import use_cases
+
+    s = _use_case_set(db, tenant_id, set_id)
+    if s.status == "draft":
+        raise HTTPException(409, "Commit the use cases first - the test cases are written for what was implemented")
+    s.tests_json = json.dumps(use_cases.generate_tests(s))
+    db.commit()
+    return use_cases.out(s)
+
+
+@router.get("/use-cases/{set_id}/tests/{kind}")
+def download_use_case_tests(set_id: int, kind: str, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> Response:
+    """manual.docx | manual.csv | automation.py"""
+    import json
+    import re
+
+    from app.orchestration import use_cases
+
+    s = _use_case_set(db, tenant_id, set_id)
+    tests = json.loads(s.tests_json or "{}")
+    if not tests.get("manual"):
+        raise HTTPException(404, "Generate the test cases first")
+    stem = re.sub(r"[^\w-]+", "-", s.name).strip("-").lower() or "use-cases"
+    if kind == "manual.docx":
+        return Response(use_cases.tests_docx(s, tests["manual"]), media_type=_DOCX,
+                        headers={"Content-Disposition": f'attachment; filename="test-cases-{stem}.docx"'})
+    if kind == "manual.csv":
+        return Response("﻿" + use_cases.tests_csv(tests["manual"]), media_type="text/csv; charset=utf-8",
+                        headers={"Content-Disposition": f'attachment; filename="test-cases-{stem}.csv"'})
+    if kind == "automation.py":
+        return Response(tests["automation"], media_type="text/x-python; charset=utf-8",
+                        headers={"Content-Disposition": f'attachment; filename="test_{stem.replace("-", "_")}.py"'})
+    raise HTTPException(404, "manual.docx, manual.csv or automation.py")
+
+
 @router.get("/brd-template")
 def brd_template() -> Response:
     """The BRD template (Word), its sections read back by /brd."""

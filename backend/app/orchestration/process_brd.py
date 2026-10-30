@@ -60,6 +60,10 @@ def read(filename: str, data: bytes) -> str:
                 return data.decode(encoding)
             except UnicodeDecodeError:
                 continue
+    if name.endswith(".rtf"):
+        return rtf_text(data)
+    if name.endswith(".doc"):
+        raise BrdError("Old Word (.doc) files can't be read - save it as .docx or .rtf and upload it again")
     if name.endswith(".docx"):
         try:
             with zipfile.ZipFile(io.BytesIO(data)) as z:
@@ -78,11 +82,80 @@ def read(filename: str, data: bytes) -> str:
                     cells = [" ".join(_text(p) for p in cell.iter(f"{_W}p")).strip() for cell in row.iter(f"{_W}tc")]
                     lines.append(" | ".join(c for c in cells if c))
         return "\n".join(lines)
-    raise BrdError("Upload a Word document (.docx) or a text file (.txt, .md)")
+    raise BrdError("Upload a Word document (.docx), a rich text file (.rtf) or a text file (.txt, .md)")
 
 
 def _text(paragraph) -> str:
     return "".join(t.text or "" for t in paragraph.iter(f"{_W}t")).strip()
+
+
+# groups whose text is not the document's (fonts, styles, pictures, metadata ...)
+_RTF_SKIP = {"fonttbl", "colortbl", "stylesheet", "info", "pict", "object", "header", "footer", "headerl", "headerr", "footerl", "footerr",
+             "listtable", "listoverridetable", "rsidtbl", "generator", "themedata", "colorschememapping", "latentstyles", "datastore",
+             "xmlnstbl", "mmathPr", "fldinst", "bkmkstart", "bkmkend", "pgdsctbl", "revtbl", "filetbl"}
+_RTF_TOKEN = re.compile(r"\\([a-zA-Z]+)(-?\d+)? ?|\\'([0-9a-fA-F]{2})|\\([^a-zA-Z])|([{}])|([^\\{}\r\n]+)|[\r\n]+")
+
+
+def rtf_text(data: bytes) -> str:
+    """A rich text (.rtf) document's text, one paragraph per line - Word's
+    "Save as RTF" and WordPad both write it. Standard library only."""
+    raw = data.decode("latin-1")
+    if not raw.lstrip().startswith("{\\rtf"):
+        raise BrdError("That isn't a rich text (.rtf) document - save it as .rtf or .docx again")
+    out: list[str] = []
+    stack: list[tuple[bool, int]] = []
+    skip, uc, pending_skip = False, 1, 0  # pending_skip: the \uN fallback characters still to drop
+    star = False
+    for m in _RTF_TOKEN.finditer(raw):
+        word, arg, hexa, sym, brace, text = m.groups()
+        if brace == "{":
+            stack.append((skip, uc))
+            star = False
+            continue
+        if brace == "}":
+            skip, uc = stack.pop() if stack else (False, 1)
+            continue
+        if sym is not None:
+            if sym == "*":
+                star = True
+            elif not skip and sym in "\\{}":
+                out.append(sym)
+            elif not skip and sym == "~":
+                out.append(" ")
+            continue
+        if word is not None:
+            if star or word in _RTF_SKIP:
+                skip, star = True, False
+                continue
+            if skip:
+                continue
+            if word in ("par", "line", "row", "sect", "page"):
+                out.append("\n")
+            elif word in ("tab", "cell"):
+                out.append(" | " if word == "cell" else "\t")
+            elif word == "uc":
+                uc = int(arg or 1)
+            elif word == "u":
+                n = int(arg or 0)
+                out.append(chr(n + 65536 if n < 0 else n))
+                pending_skip = uc
+            elif word in ("emdash", "endash"):
+                out.append("-")
+            elif word in ("bullet",):
+                out.append("•")
+            continue
+        if hexa is not None:
+            if pending_skip:
+                pending_skip -= 1
+            elif not skip:
+                out.append(bytes([int(hexa, 16)]).decode("cp1252", errors="replace"))
+            continue
+        if text and not skip:
+            if pending_skip:
+                text, pending_skip = text[pending_skip:], max(0, pending_skip - len(text))
+            out.append(text)
+    lines = [re.sub(r"[ \t]+", " ", line).strip(" |") for line in "".join(out).split("\n")]
+    return "\n".join(lines).strip()
 
 
 def _sections(text: str) -> dict[str, list[str]]:
@@ -186,8 +259,8 @@ def template_docx() -> bytes:
 
 def docx(blocks: list[tuple[str, str]]) -> bytes:
     """A Word document from (style, text) paragraphs: "Title", "Heading1",
-    "Guidance" (grey italic) or "" (body)."""
-    body = [_para(text, "Heading1" if style == "Heading1" else "Title" if style == "Title" else None, italic=style == "Guidance")
+    "Heading2", "Guidance" (grey italic) or "" (body)."""
+    body = [_para(text, style if style in ("Title", "Heading1", "Heading2") else None, italic=style == "Guidance")
             for style, text in blocks if text is not None]
     document = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
                 '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>'
@@ -199,7 +272,10 @@ def docx(blocks: list[tuple[str, str]]) -> bytes:
               '<w:pPr><w:spacing w:after="240"/></w:pPr><w:rPr><w:b/><w:sz w:val="40"/></w:rPr></w:style>'
               '<w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:basedOn w:val="Normal"/>'
               '<w:pPr><w:keepNext/><w:spacing w:before="320" w:after="80"/><w:outlineLvl w:val="0"/></w:pPr>'
-              '<w:rPr><w:b/><w:sz w:val="28"/></w:rPr></w:style></w:styles>')
+              '<w:rPr><w:b/><w:sz w:val="28"/></w:rPr></w:style>'
+              '<w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="heading 2"/><w:basedOn w:val="Normal"/>'
+              '<w:pPr><w:keepNext/><w:spacing w:before="200" w:after="60"/><w:outlineLvl w:val="1"/></w:pPr>'
+              '<w:rPr><w:b/><w:color w:val="1F4E79"/><w:sz w:val="24"/></w:rPr></w:style></w:styles>')
     content_types = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
                      '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
                      '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
