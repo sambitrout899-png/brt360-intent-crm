@@ -449,6 +449,8 @@ def _handle(
             intent_icon=_icon(db, tenant_id, classification.intent_type),
             summary=f"Nothing was changed: {saga_result.error}" + (f" (handled by: {', '.join(handled)})" if handled else ""),
             error=error,
+            next_actions=[] if rehearse is not None else copilot.recovery(db, tenant_id, user, classification.intent_type,
+                                                                          classification.entities, saga_result.error),
         )
 
     # 5. Verification

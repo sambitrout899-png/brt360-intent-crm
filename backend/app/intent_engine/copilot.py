@@ -1164,6 +1164,27 @@ def _next_entities(db: Session, tenant_id: int, code: str, result: dict[str, Any
     return out
 
 
+def recovery(db: Session, tenant_id: int, user: User, code: str | None, entities: dict[str, Any], error: str | None) -> list[dict[str, Any]]:
+    """What fixes a run that stopped: the step that clears what it was missing."""
+    actions: list[tuple[str, str, dict[str, Any]]] = []
+    if code == "INT-25" and (error or "").startswith("Set the technical attributes") and entities.get("order_id"):
+        # approving needs the technical attributes provisioning uses - one action per product still missing some
+        from app.crm_core import product_config_service
+
+        order = db.get(Order, int(entities["order_id"]))
+        if order is not None and order.tenant_id == tenant_id:
+            for product, missing in product_config_service.order_missing_by_product(db, tenant_id, order):
+                names = ", ".join(m.removesuffix(" is required") for m in missing)
+                actions.append(("INT-45", f"{product} still needs: {names}", {"order_id": order.id, "offering_name": product}))
+    out = []
+    for next_code, why, prefill in actions:
+        if intent_registry.availability(db, tenant_id, user, next_code):
+            continue
+        entry = intent_registry.entry(db, tenant_id, next_code)
+        out.append({"code": next_code, "label": entry["label"], "icon": entry["icon"], "reason": why, "entities": prefill})
+    return out[:3]
+
+
 # Records without a lifecycle that an intent creates.
 _CREATES = {"INT-01": "product_offering", "INT-10": "ticket", "INT-12": "work_order", "INT-22": "proposal"}
 

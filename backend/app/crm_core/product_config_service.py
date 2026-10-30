@@ -840,19 +840,26 @@ def order_item_attributes(db: Session, order_item_id: int | None) -> tuple[dict[
     return (loads(row.pricing_attributes_json), loads(row.technical_attributes_json)) if row else None
 
 
-def order_missing_technical(db: Session, tenant_id: int, order) -> list[str]:
-    """Required technical attributes an order's products still lack."""
-    missing: list[str] = []
+def order_missing_by_product(db: Session, tenant_id: int, order) -> list[tuple[str, list[str]]]:
+    """(product, what it still lacks) for each of an order's products missing required technical attributes."""
+    from app.crm_core import instance_service
+
+    out: list[tuple[str, list[str]]] = []
     for item in order.items:
         attrs = order_item_attributes(db, item.id)
         offering = db.get(ProductOffering, item.product_offering_id)
         if attrs is None or offering is None:
             continue
-        from app.crm_core import instance_service
-
         frozen = instance_service.design_for(db, tenant_id, "order", order.id, offering.name)
-        missing += [f"{offering.name}: {m}" for m in missing_technical(db, tenant_id, offering.name, attrs[0], attrs[1], frozen)]
-    return missing
+        missing = missing_technical(db, tenant_id, offering.name, attrs[0], attrs[1], frozen)
+        if missing:
+            out.append((offering.name, missing))
+    return out
+
+
+def order_missing_technical(db: Session, tenant_id: int, order) -> list[str]:
+    """Required technical attributes an order's products still lack."""
+    return [f"{name}: {m}" for name, missing in order_missing_by_product(db, tenant_id, order) for m in missing]
 
 
 # ---------------------------------------------------------------- pricelists

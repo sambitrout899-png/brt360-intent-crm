@@ -129,6 +129,11 @@ def test_technical_attributes_flow_to_order_work_orders_provisioning_and_invento
     assert order["configuration"][0]["missing"] == ["VLAN ID is required"]
     blocked = run(client, "INT-25", order_id=order_id, decision="approve")
     assert blocked["status"] == "failed" and "VLAN ID is required" in blocked["rationale"]
+    # the failed approval offers the step that fixes it, for this order and product
+    fix = blocked["next_actions"]
+    assert [(n["code"], n["entities"]) for n in fix] == [("INT-45", {"order_id": order_id, "offering_name": "Fiber 900"})]
+    assert fix[0]["reason"] == "Fiber 900 still needs: VLAN ID"
+    assert run(client, "INT-45", **fix[0]["entities"], technical_attributes={"VLAN ID": "119"})["status"] == "executed"
 
     set_attrs = say(client, f"Order {order_id}: VLAN ID 120")
     assert set_attrs["intent_type"] == "INT-45" and set_attrs["status"] == "executed", set_attrs["rationale"]
