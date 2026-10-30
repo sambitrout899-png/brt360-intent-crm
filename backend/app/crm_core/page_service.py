@@ -1264,12 +1264,15 @@ def _design_rules(instruction: str, fields: list[dict[str, Any]]) -> list[dict[s
             if mt := re.search(r"\s+(?:as\s+)?(?:a\s+|an\s+)?(" + "|".join(map(re.escape, types)) + r")(?:\s+field)?\s*$", rest, re.I):
                 data_type = "picklist" if values else types[mt.group(1).lower()]
                 rest = rest[: mt.start()]
-            label = rest.strip(" ,:'\"").strip()
-            if not label:
-                continue
-            label = label[0].upper() + label[1:]
-            ops.append({"op": "add_field", "key": re.sub(r"[^a-z0-9]+", "_", label.lower()).strip("_")[:60], "label": label,
-                        "data_type": data_type, "values": values, "section": section, "mandatory": mandatory})
+            # "two new fields CP1 and CP2" / "fields Region, Tier and Owner" - one field per name, never one field called all of it
+            many = re.match(r"^(?:(?:two|three|four|five|six|seven|eight|nine|ten|\d+)\s+)?(?:new\s+)?(?:(?:mandatory|required)\s+)?fields\b"
+                            r"\s*(?:called|named|:)?\s*(.+)$", rest.strip(), re.I)
+            labels = [x.strip(" ,:'\"“”").strip() for x in re.split(r",|\s+and\s+|\s*&\s*", many.group(1)) if x.strip(" ,:'\"“”")] if many \
+                else [rest.strip(" ,:'\"").strip()]
+            for label in [x for x in labels if x]:
+                label = label[0].upper() + label[1:]
+                ops.append({"op": "add_field", "key": re.sub(r"[^a-z0-9]+", "_", label.lower()).strip("_")[:60], "label": label,
+                            "data_type": data_type, "values": values, "section": section, "mandatory": mandatory})
     return ops
 
 

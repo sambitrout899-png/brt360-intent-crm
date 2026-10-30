@@ -152,13 +152,26 @@ def _ask_model(db: Session, tenant_id: int, text: str, ctx: dict[str, Any], extr
 def _rules_design(db: Session, tenant_id: int, text: str, name: str | None, placement: dict[str, Any] | None) -> dict[str, Any]:
     """Without a model: the document's own sentences are the requirements and
     the Process Builder's rule readers design the pieces."""
-    from app.orchestration import process_builder
+    from app.orchestration import process_brd, process_builder
 
+    goal = ""
+    if len(process_brd._sections(text)) >= 3:
+        # a BRD on the template: only its requirement sections are read - the name, business function and
+        # goal are about the process, not pieces of it ("Process name:" is no requirement)
+        try:
+            brd = process_brd.to_request(text)
+        except process_brd.BrdError:
+            brd = None
+        if brd is not None:
+            text = brd["request"]
+            name = name or brd["name"]
+            placement = placement or brd["placement"]
+            goal = " ".join(brd.get("sections", {}).get("Goal", []))
     steps = process_builder.split(text)
     reqs = [{"id": f"R{i}", "text": s["text"], "quote": s["text"], "kind": "stage" if s.get("kind") == "journey" else "other"}
             for i, s in enumerate(steps, start=1)]
-    return {"name": name or "New process", "summary": "Designed by the built-in rule readers - no AI model is set for this organization "
-                                                      "(Admin -> AI Settings), so each sentence was read on its own.",
+    return {"name": name or "New process", "summary": (f"{goal} " if goal else "") + "Designed by the built-in rule readers - no AI model is set "
+                                                      "for this organization (Admin -> AI Settings), so each sentence was read on its own.",
             "requirements": reqs, "placement": placement or {"mode": "new", "label": name or "New process"}, "record": None, "steps": [],
             "links": [], "pieces": [{"kind": s.get("kind") or "", "text": s["text"], "requirements": [f"R{i}"]} for i, s in enumerate(steps, start=1)],
             "fit": [], "gaps": [], "assumptions": [], "questions": [], "alternatives": []}

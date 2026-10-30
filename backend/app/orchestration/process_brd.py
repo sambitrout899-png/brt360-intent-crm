@@ -140,7 +140,14 @@ def to_request(text: str, processes: list[dict[str, Any]] | None = None) -> dict
     for heading in ("Approvals", "Automation", "Fields and screens", "Assignment", "Integrations and other needs"):
         parts += [s.rstrip(".") + "." for s in sections.get(heading, [])]
     if not parts:
-        raise BrdError("The template's Stages, Approvals, Automation, Fields, Assignment sections are all empty")
+        # a short BRD said in its name or goal ("Add two new fields to prospect page CP1 and CP2"): that is the requirement -
+        # the lines that ask for something the builder knows, else the name as it stands
+        from app.orchestration.process_builder import _recognised
+
+        said = [s for s in [name or "", *sections.get("Goal", [])] if s.strip()]
+        parts = [s.rstrip(".") + "." for s in said if _recognised(s)] or [s.rstrip(".") + "." for s in said[:1]]
+    if not parts:
+        raise BrdError("The BRD asks for nothing yet - fill in Stages, Approvals, Automation, Fields and screens or Assignment")
     placement = None
     where = " ".join(sections.get("Business function", [])).strip()
     if where:

@@ -149,6 +149,52 @@ def test_a_condition_in_an_automation_sentence_is_kept_and_holds_at_run_time(cli
     assert qualified("Small Private Co", "Private Limited") == "prospect"  # the condition held it back
 
 
+def test_without_a_model_a_template_brd_reads_only_its_requirement_sections(client):
+    """The user's BRD (on the template): its headings, name, business function and goal are no requirements -
+    they made nine 'couldn't tell' questions; only the automation line is one, and it is built with its condition."""
+    import base64
+
+    from test_process_to_map import _docx
+
+    doc = _docx(["Business Requirements - New Process",
+                 "Process name", "Convert Prospect to Account if the prospect Company type as “Public Limited”",
+                 "Business function", "B2B Sales to Order",
+                 "Goal", "Prospect auto conversion to Account.",
+                 "Stages", "Lead Approval",
+                 "Approvals", "Automation",
+                 "When a lead is approved, check the Prospect “Company type” and if it is Public Limited, check the Prospect to an Account",
+                 "Fields and screens", "Assignment", "Integrations and other needs"])
+    client.get("/api/admin/pages")  # Company type and the other standard fields
+    read = client.post("/api/process-builder/brd", json={"filename": "Process1.docx", "content_base64": base64.b64encode(doc).decode()}).json()
+    out = client.post(ARCH, json={"text": read["text"], "name": read["name"], "placement": read["placement"]}).json()
+    assert out["by"] == "rules" and [r["text"] for r in out["requirements"]] == [
+        "When a lead is approved, check the Prospect “Company type” and if it is Public Limited, check the Prospect to an Account"]
+    assert out["questions"] == [] and out["ready"], out["questions"]
+    flow = out["builder"]["components"][0]
+    assert flow["kind"] == "flow" and any("Company type is Public Limited" in line for line in flow["lines"]), flow
+    assert out["placement"]["label"] == "B2B Sales to Order" and "Prospect auto conversion" in out["summary"]
+
+
+def test_a_brd_said_only_in_its_name_is_still_designed_and_plural_fields_are_separate(client):
+    """The user's next BRD: 'Add two new fields to prospect page CP1 and CP2' as the process name, every requirement
+    section empty - it was refused; and a page planner made ONE field named 'Two new fields CP1 and CP2'."""
+    import base64
+
+    from test_process_to_map import _docx
+
+    doc = _docx(["Process name", "Add two new fields to prospect page CP1 and CP2", "Business function", "B2B Sales to Order",
+                 "Goal", "Two new fields to be added", "Stages", "Approvals", "Automation", "Fields and screens", "Assignment"])
+    client.get("/api/admin/pages")
+    read = client.post("/api/process-builder/brd", json={"filename": "Process1.docx", "content_base64": base64.b64encode(doc).decode()})
+    assert read.status_code == 200, read.text
+    read = read.json()
+    assert read["request"] == "Add two new fields to prospect page CP1 and CP2."
+    out = client.post(ARCH, json={"text": read["text"], "name": read["name"], "placement": read["placement"]}).json()
+    assert out["ready"] and not out["questions"], out["questions"]
+    page = out["builder"]["components"][0]
+    assert page["kind"] == "page" and page["lines"] == ["Add new field CP1 (text)", "Add new field CP2 (text)"]
+
+
 def test_the_brd_upload_hands_the_whole_document_to_the_architect(client):
     import base64
 
