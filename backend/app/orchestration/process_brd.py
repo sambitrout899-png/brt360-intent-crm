@@ -40,6 +40,7 @@ SECTIONS: list[tuple[str, str, str]] = [
      "Push approved orders to the ERP"),
 ]
 _HEADINGS = {h.lower(): h for h, _, _ in SECTIONS}
+_EXAMPLE_STAGES = [s.strip().lower() for h, _, ex in SECTIONS if h == "Stages" for s in ex.split("\n")]
 _HEADING = re.compile(r"^\s*(?:\d+[.)]\s*|#+\s*)?(?P<h>[A-Za-z][A-Za-z &/]+?)\s*:?\s*$")
 _GUIDANCE = re.compile(r"^\s*(?:guidance|e\.g\.|example)\s*[:.]", re.I)
 
@@ -106,7 +107,23 @@ def to_request(text: str, processes: list[dict[str, Any]] | None = None) -> dict
     a BRD. On the template (3 sections or more) the sections become the
     builder's sentences; otherwise the text goes over as it is."""
     sections = _sections(text)
-    if len(sections) < 3:
+    # the template's own examples are not requirements: dropped (and reported); a template left as it came is refused
+    # (the name and business function are the author's even when they match; stages only as the whole example list)
+    examples = {h: {line.strip().lower() for line in ex.split("\n")} for h, _, ex in SECTIONS if h not in ("Process name", "Business function")}
+
+    def example(h: str, s: str) -> bool:
+        if h == "Stages":
+            return [x.strip().lower() for x in sections[h]] == _EXAMPLE_STAGES
+        return s.strip().lower() in examples.get(h, set())
+
+    kept = {h: [s for s in lines if not example(h, s)] for h, lines in sections.items()}
+    dropped = [s for h, lines in sections.items() for s in lines if example(h, s)]
+    if len(sections) >= 3 and dropped and not any(kept.get(h) for h in ("Stages", "Approvals", "Automation", "Fields and screens", "Assignment",
+                                                                        "Integrations and other needs")):
+        raise BrdError("This is the BRD template with only its examples in it - write your own process into the sections (the examples are "
+                       "there to show the style) and upload it again")
+    sections = {h: lines for h, lines in kept.items() if lines or h in ("Process name", "Business function")} if dropped else sections
+    if len(sections) < 3 and not dropped:
         body = re.sub(r"\n{3,}", "\n\n", text).strip()
         if len(body) < 5:
             raise BrdError("The document has no text in it")
@@ -116,7 +133,9 @@ def to_request(text: str, processes: list[dict[str, Any]] | None = None) -> dict
     parts: list[str] = []
     stages = [s for s in sections.get("Stages", []) if s]
     if len(stages) >= 2:
-        parts.append(f"{name or 'New process'}: " + " -> ".join(stages))
+        # "<name> process: a -> b -> c" - the builder's stage tracker (process_journey.parse needs the word)
+        title = name or "New"
+        parts.append(f"{title}{'' if re.search(r'process|workflow|journey', title, re.I) else ' process'}: " + " -> ".join(stages))
     for heading in ("Approvals", "Automation", "Fields and screens", "Assignment", "Integrations and other needs"):
         parts += [s.rstrip(".") + "." for s in sections.get(heading, [])]
     if not parts:
@@ -129,7 +148,8 @@ def to_request(text: str, processes: list[dict[str, Any]] | None = None) -> dict
         placement = {"mode": "append", "process_key": key} if key and not re.match(r"^\s*new\b", where, re.I) else {"mode": "new", "label": name or where}
     request = "\n".join(parts)
     return {"request": request[:MAX_TEXT], "name": name, "placement": placement, "template": True,
-            "sections": {k: v for k, v in sections.items()}, "truncated": len(request) > MAX_TEXT}
+            "sections": {k: v for k, v in sections.items()}, "truncated": len(request) > MAX_TEXT,
+            "examples_dropped": dropped}
 
 
 # ---------------------------------------------------------------- the template

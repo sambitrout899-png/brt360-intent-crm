@@ -115,11 +115,21 @@ def _upload(client, filename, data):
 def test_the_brd_template_reads_back_into_the_builders_request(client):
     template = client.get("/api/process-builder/brd-template")
     assert template.status_code == 200 and template.content[:2] == b"PK"
-    read = _upload(client, "BRT360-process-BRD-template.docx", template.content).json()
-    assert read["template"] and read["name"] == "Enterprise deal desk"
-    assert read["placement"] == {"mode": "append", "process_key": "b2b_sto"}  # "B2B Sales to Order" on the map
-    assert "Enterprise deal desk: Qualified -> Commercial review -> Quote approved -> Proposal sent" in read["request"]
-    assert "Quotes with discount above 15% need approval" in read["request"] and "Guidance" not in read["request"]
+    # uploaded as it came, it holds only the examples - refused, it is no requirement
+    untouched = _upload(client, "BRT360-process-BRD-template.docx", template.content)
+    assert untouched.status_code == 422 and "only its examples" in untouched.json()["detail"]
+
+    filled = _upload(client, "deal-desk.docx", _docx([
+        "Process name", "Key account desk", "Business function", "B2B Sales to Order",
+        "Stages", "Qualified", "Commercial review", "Quote approved",
+        "Approvals", "Quotes with discount above 25% need approval from the Sales Director",
+        "Automation", "When a quote is approved, notify the account manager that the quote is cleared",  # an example - dropped
+    ])).json()
+    assert filled["template"] and filled["name"] == "Key account desk"
+    assert filled["placement"] == {"mode": "append", "process_key": "b2b_sto"}  # "B2B Sales to Order" on the map
+    assert "Key account desk process: Qualified -> Commercial review -> Quote approved" in filled["request"]
+    assert "Quotes with discount above 25% need approval" in filled["request"] and "notify the account manager" not in filled["request"]
+    assert filled["examples_dropped"] == ["When a quote is approved, notify the account manager that the quote is cleared"]
 
     own = _upload(client, "brd.docx", _docx(["Process name", "Field visit check", "Business function", "New process",
                                             "Approvals", "Orders need CPMO approval before they become activating"])).json()

@@ -950,7 +950,7 @@ def stage(db: Session, tenant_id: int, user_id: int | None, spec: dict[str, Any]
     builds = pic.setdefault("builds", [])
     overrides = pic.setdefault("processes", [])
     placement = dict(placement or {})
-    codes = process_builder.process_steps(blueprint)
+    codes = process_builder.process_steps(blueprint, None, db, tenant_id)
     if placement.get("mode") == "append":
         key = str(placement.get("process_key") or "")
         current_steps = next((p["steps"] for p in merged_processes(overrides) if p["key"] == key), None)
@@ -1197,7 +1197,7 @@ def activate(db: Session, tenant_id: int, version_id: int | None, user_id: int |
             key = (b.get("placement") or {}).get("process_key")
             for o in pic.get("processes") or []:  # the process's own flows join its steps now that they have numbers
                 if o.get("key") == key:
-                    o["steps"] = [*o["steps"], *[c for c in process_builder.process_steps(bp, made) if c not in o["steps"]]]
+                    o["steps"] = [*o["steps"], *[c for c in process_builder.process_steps(bp, made, db, tenant_id) if c not in o["steps"]]]
             built.append({"build": b, "blueprint": bp, "made": made, "impact": impact})
         if v is not None:
             from app.orchestration import change_control

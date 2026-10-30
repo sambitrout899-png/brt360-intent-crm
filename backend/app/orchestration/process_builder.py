@@ -1042,8 +1042,15 @@ def split(request: str) -> list[dict[str, str]]:
     from app.orchestration.process_journey import parse
     if parse(request):
         return [{"kind": "journey", "text": request}]
-    parts = [p.strip(" \t-•*") for p in _SPLIT.split(request.strip()) if p and p.strip(" \t-•*")]
-    return [{"kind": "", "text": p.rstrip(".")} for p in parts][:MAX_COMPONENTS]
+    # a line of stages inside a longer description ("Deal desk process: a -> b -> c") is a journey of its own -
+    # split on lines first, so the arrows' dashes are not taken for sentence breaks
+    out: list[dict[str, str]] = []
+    for line in request.strip().splitlines():
+        if parse(line.strip(" \t-•*")):
+            out.append({"kind": "journey", "text": line.strip(" \t-•*")})
+            continue
+        out += [{"kind": "", "text": p.strip(" \t-•*").rstrip(".")} for p in _SPLIT.split(line.strip()) if p and p.strip(" \t-•*")]
+    return out[:MAX_COMPONENTS]
 
 
 def design(db: Session, tenant_id: int, request: str, answers: dict[str, Any] | None = None, steps: list[dict[str, str]] | None = None,
@@ -1215,15 +1222,40 @@ def switch(db: Session, tenant_id: int, made: list[dict[str, Any]], on: bool) ->
     return changed
 
 
-def process_steps(blueprint: dict[str, Any], made: list[dict[str, Any]] | None = None) -> list[str]:
+# the step that makes a record - where a page change on it or an assignment rule for it is felt
+CREATES = {"party": "INT-15", "lead": "INT-46", "opportunity": "INT-17", "quote": "INT-05", "order": "INT-24"}
+
+
+def _entering(db: Session | None, tenant_id: int | None, entity_type: str | None, state: str | None) -> list[str]:
+    """The intents that move a record of this type into this state (its lifecycle's transitions)."""
+    if db is None or not entity_type or not state or entity_type not in lifecycle_service.ENTITY_MODELS:
+        return []
+    model = lifecycle_service.resolve_state_model(db, tenant_id, entity_type)
+    return list(dict.fromkeys(t.intent_type for t in model.transitions if t.to_state == state and t.intent_type))
+
+
+def process_steps(blueprint: dict[str, Any], made: list[dict[str, Any]] | None = None, db: Session | None = None,
+                  tenant_id: int | None = None) -> list[str]:
     """The function points a built process takes part in, for the Functional
-    Map: the actions its flows start on and run, then (once built) the
-    process's own flows people start by name."""
+    Map: the actions its flows start on and run; with db, also where each
+    other piece is felt - a stage-change automation at the step that moves
+    the record into that stage, an approval at the step it gates, a page
+    change or an assignment rule at the step that makes the record - then
+    (once built) the process's own flows people start by name."""
     codes: list[str] = []
     for c in blueprint.get("components", []):
+        spec = c["spec"]
+        if c["kind"] == "approval":
+            entity = spec.get("entity_type")
+            codes += _entering(db, tenant_id, entity, spec.get("trigger_state")) if spec.get("trigger_state") else \
+                _entering(db, tenant_id, entity, "pending_approval") or _entering(db, tenant_id, entity, "approved")
+        elif c["kind"] in ("page", "assignment") and spec.get("entity_type") in CREATES and db is not None:
+            codes.append(CREATES[spec["entity_type"]])
         if c["kind"] != "flow":
             continue
-        trigger = c["spec"].get("trigger") or {}
+        trigger = spec.get("trigger") or {}
+        if trigger.get("trigger_type") == "state_enter":
+            codes += _entering(db, tenant_id, trigger.get("entity_type"), trigger.get("trigger_state"))
         if trigger.get("trigger_intent_type"):
             codes.append(trigger["trigger_intent_type"])
         for n in (c["spec"].get("graph") or {}).get("nodes", []):
