@@ -123,12 +123,13 @@ def to_request(text: str, processes: list[dict[str, Any]] | None = None) -> dict
         raise BrdError("This is the BRD template with only its examples in it - write your own process into the sections (the examples are "
                        "there to show the style) and upload it again")
     sections = {h: lines for h, lines in kept.items() if lines or h in ("Process name", "Business function")} if dropped else sections
+    full = re.sub(r"\n{3,}", "\n\n", "\n".join(line for line in text.splitlines() if not _GUIDANCE.match(line.strip()))).strip()[:20000]
     if len(sections) < 3 and not dropped:
         body = re.sub(r"\n{3,}", "\n\n", text).strip()
         if len(body) < 5:
             raise BrdError("The document has no text in it")
         return {"request": body[:MAX_TEXT], "name": None, "placement": None, "template": False, "sections": {},
-                "truncated": len(body) > MAX_TEXT}
+                "truncated": len(body) > MAX_TEXT, "text": full}
     name = (sections.get("Process name") or [""])[0][:150] or None
     parts: list[str] = []
     stages = [s for s in sections.get("Stages", []) if s]
@@ -149,7 +150,9 @@ def to_request(text: str, processes: list[dict[str, Any]] | None = None) -> dict
     request = "\n".join(parts)
     return {"request": request[:MAX_TEXT], "name": name, "placement": placement, "template": True,
             "sections": {k: v for k, v in sections.items()}, "truncated": len(request) > MAX_TEXT,
-            "examples_dropped": dropped}
+            "examples_dropped": dropped,
+            # what the AI architect reads: the sections as written, without the template's examples and guidance
+            "text": "\n".join(f"{h}:\n" + "\n".join(lines) for h, lines in sections.items() if lines)}
 
 
 # ---------------------------------------------------------------- the template
@@ -165,13 +168,20 @@ def _para(text: str, style: str | None = None, italic: bool = False) -> str:
 def template_docx() -> bytes:
     """The BRD template as a Word document: one heading per section, a guidance
     line (dropped when it is read back) and an example to overwrite."""
-    body = [_para("Business Requirements - New Process", "Title"),
-            _para("Guidance: fill each section, one item per line. Delete the examples you don't need. Upload it in BRT 360: "
-                  "Intent Command Bar -> Build a process -> Upload a BRD.", italic=True)]
+    blocks = [("Title", "Business Requirements - New Process"),
+              ("Guidance", "Guidance: fill each section, one item per line. Replace the examples with your own - left as they are "
+                           "they are ignored. Free text works too: the AI architect reads any BRD. Upload it in BRT 360: Intent Command Bar "
+                           "-> Build a process -> Upload a BRD.")]
     for heading, guidance, example in SECTIONS:
-        body.append(_para(heading, "Heading1"))
-        body.append(_para(f"Guidance: {guidance}", italic=True))
-        body += [_para(line) for line in example.split("\n")]
+        blocks += [("Heading1", heading), ("Guidance", f"Guidance: {guidance}"), *[("", line) for line in example.split("\n")]]
+    return docx(blocks)
+
+
+def docx(blocks: list[tuple[str, str]]) -> bytes:
+    """A Word document from (style, text) paragraphs: "Title", "Heading1",
+    "Guidance" (grey italic) or "" (body)."""
+    body = [_para(text, "Heading1" if style == "Heading1" else "Title" if style == "Title" else None, italic=style == "Guidance")
+            for style, text in blocks if text is not None]
     document = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
                 '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>'
                 + "".join(body) + '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/></w:sectPr></w:body></w:document>')

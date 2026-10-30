@@ -4,6 +4,7 @@ import type { FunctionMap } from "../../api/functionMapTypes";
 import type { IntentDef, ProcessBlueprint, ProcessBuild, ProcessInput, ProcessPlacement, ProcessQuestion } from "../../api/types";
 import { notifyIntentExecuted } from "../../workspace";
 import AgentPanel from "./AgentPanel";
+import ArchitectPanel from "./ArchitectPanel";
 
 const EXAMPLES = [
   "Build a B2C process - customer -> identity verification -> raise order -> installation -> service activation on network -> connectivity testing -> acceptance -> start billing -> installed asset",
@@ -74,6 +75,8 @@ export default function ProcessBuilder({
   const [processes, setProcesses] = useState<{ key: string; label: string; steps: number; tenant: boolean }[]>([]);
   const [staged, setStaged] = useState<FunctionMap | null>(null);
   const [brdNote, setBrdNote] = useState("");
+  // the AI solution architect on a whole document (a BRD, or a long description)
+  const [architect, setArchitect] = useState<{ key: number; text: string; name: string | null; placement: ProcessPlacement | null } | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   useEffect(() => {
     processPlacements().then((p) => setProcesses(p.processes)).catch(() => setProcesses([]));
@@ -113,8 +116,14 @@ export default function ProcessBuilder({
     setRehearsal(null);
     setBuilt(null);
     setStaged(null);
+    setArchitect(null);
     setConsent(false);
     setError("");
+  }
+
+  function openArchitect(doc: string, name: string | null = null, where: ProcessPlacement | null = null) {
+    reset();
+    setArchitect({ key: Date.now(), text: doc, name, placement: where });
   }
 
   /** A BRD (Word or text) read into the request, then designed. */
@@ -125,15 +134,15 @@ export default function ProcessBuilder({
     try {
       const read = await processReadBrd(file);
       setText(read.request);
-      if (read.placement) setPlacement({ ...read.placement, label: read.placement.label ?? read.name });
-      else if (read.name) setPlacement({ mode: "new", label: read.name });
+      const where = read.placement ? { ...read.placement, label: read.placement.label ?? read.name } : read.name ? { mode: "new" as const, label: read.name } : null;
+      if (where) setPlacement(where);
       setBrdNote(
-        `${file.name}: ${read.template ? "read section by section from the BRT 360 template" : "read as text - your AI model splits it into pieces"}` +
-          (read.truncated ? " (long - only the first part was taken)" : ""),
+        `${file.name}: read end to end by the AI architect` +
+          (read.examples_dropped?.length ? ` · ${read.examples_dropped.length} template example line(s) ignored` : ""),
       );
-      reset();
       setBusy("");
-      await design(read.request);
+      // the whole document goes to the architect - not sentence by sentence
+      openArchitect(read.text || read.request, read.name, read.placement ? where : null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Couldn't read that document");
       setBusy("");
@@ -288,9 +297,18 @@ export default function ProcessBuilder({
             </button>
           ))}
           <button
+            type="button"
+            onClick={() => openArchitect(text.trim())}
+            disabled={text.trim().length < 20 || busy !== ""}
+            title="Reads the whole description, matches it to your setup and designs the process end to end - requirements, steps, hand-offs, configuration, gaps"
+            className="ml-auto rounded-lg border border-sky-500/50 px-4 py-2 text-sm font-semibold text-sky-200 hover:bg-sky-500/10 disabled:opacity-40"
+          >
+            🧠 Design with the AI architect
+          </button>
+          <button
             type="submit"
             disabled={text.trim().length < 5 || busy !== ""}
-            className="ml-auto rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-lg shadow-emerald-950/40 hover:bg-emerald-500 disabled:opacity-40"
+            className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-lg shadow-emerald-950/40 hover:bg-emerald-500 disabled:opacity-40"
           >
             {busy === "design" ? "Designing…" : blueprint ? "Design again" : "Design the process"}
           </button>
@@ -312,6 +330,10 @@ export default function ProcessBuilder({
       )}
 
       {error && <p className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">{error}</p>}
+
+      {architect && (
+        <ArchitectPanel key={architect.key} text={architect.text} name={architect.name} placement={architect.placement} onClose={() => setArchitect(null)} />
+      )}
 
       {/* ---------- a chain of things to do: the agent runs it ---------- */}
       {blueprint?.mode === "actions" && blueprint.actions && (

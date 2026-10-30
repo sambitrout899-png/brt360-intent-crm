@@ -19,6 +19,7 @@ import type {
   AgentRun,
   AgentStep,
   ProcessBlueprint,
+  ArchitectAnalysis,
   BrdRead,
   ProcessBuild,
   ProcessInput,
@@ -569,6 +570,39 @@ export async function processReadBrd(file: File): Promise<BrdRead> {
   let binary = "";
   for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
   return request<BrdRead>("/api/process-builder/brd", { method: "POST", body: JSON.stringify({ filename: file.name, content_base64: btoa(binary) }) });
+}
+
+/** The AI solution architect: a BRD read end to end into a verified design - nothing is saved. */
+export function processArchitect(body: {
+  text?: string;
+  name?: string | null;
+  placement?: ProcessPlacement | null;
+  decisions?: Record<string, string>;
+  answers?: Record<string, string>;
+  analysis?: ArchitectAnalysis | null;
+}): Promise<ArchitectAnalysis> {
+  return request<ArchitectAnalysis>("/api/process-builder/architect", { method: "POST", body: JSON.stringify(body) });
+}
+
+/** The design into a draft version of the Functional Map (in your workspace, when one is selected). */
+export function processArchitectImplement(analysis: ArchitectAnalysis, versionId?: number): Promise<FunctionMap> {
+  return request<FunctionMap>("/api/process-builder/architect/implement", { method: "POST", body: JSON.stringify({ analysis, version_id: versionId }) });
+}
+
+export async function downloadArchitectDocument(analysis: ArchitectAnalysis): Promise<void> {
+  const token = getAccessToken();
+  const res = await fetch(`${API_BASE}/api/process-builder/architect/document`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    body: JSON.stringify({ analysis }),
+  });
+  if (!res.ok) throw new Error(`${res.status}: ${await res.text().catch(() => "")}`);
+  const url = URL.createObjectURL(await res.blob());
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `solution-design-${(analysis.name || "process").replace(/[^\w-]+/g, "-").toLowerCase()}.docx`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 export async function downloadBrdTemplate(): Promise<void> {

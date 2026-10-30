@@ -128,6 +128,67 @@ def stage_process(payload: StageIn, db: Session = Depends(get_db), tenant_id: in
             raise HTTPException(409, str(exc)) from exc
 
 
+class ArchitectIn(BaseModel):
+    text: str = Field(default="", max_length=60000)
+    name: str | None = Field(default=None, max_length=150)
+    placement: Placement | None = None
+    # answers to the architect's own questions (a new design round) / to the builder's (checked again, no model call)
+    decisions: dict[str, str] = {}
+    answers: dict[str, Any] = {}
+    analysis: dict[str, Any] | None = None
+
+
+class ArchitectImplementIn(BaseModel):
+    analysis: dict[str, Any]
+    version_id: int | None = None
+
+
+@router.post("/architect")
+def architect(payload: ArchitectIn, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> dict:
+    """The AI solution architect: a BRD read end to end into a verified design
+    for this organization - requirements, fit-gap, steps, links, pieces,
+    assumptions, blocking questions. Nothing is saved. With an earlier
+    analysis and only the builder's questions answered, it is checked again
+    without a new model round."""
+    from app.orchestration import process_architect
+
+    placement = payload.placement.model_dump() if payload.placement else None
+    try:
+        if payload.analysis and not payload.decisions:
+            done = process_architect.verify(db, tenant_id, process_architect._clean(payload.analysis) | {
+                "questions": [q for q in payload.analysis.get("questions") or [] if not q.get("builder")],
+                **({"placement": placement} if placement else {})}, payload.answers)
+            return {**done, "by": payload.analysis.get("by"), "model": payload.analysis.get("model"), "text": payload.analysis.get("text")}
+        with llm.budget(110.0):  # inside nginx's 120 s
+            return process_architect.architect(db, tenant_id, payload.text or (payload.analysis or {}).get("text") or "", payload.name, placement,
+                                               payload.decisions, payload.answers)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@router.post("/architect/implement")
+def architect_implement(payload: ArchitectImplementIn, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id),
+                        user: User = Depends(get_current_user), ws: Workspace | None = Depends(current_workspace)) -> dict:
+    """The design into a draft version of the Functional Map (in the caller's workspace) - built when it goes live."""
+    from app.orchestration import function_map, process_architect
+
+    try:
+        return process_architect.implement(db, tenant_id, user.id, payload.analysis, ws, payload.version_id)
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except function_map.VersionError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.post("/architect/document")
+def architect_document(payload: ArchitectImplementIn) -> Response:
+    """The solution design as a Word document."""
+    from app.orchestration import process_architect
+
+    return Response(process_architect.document(payload.analysis), media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    headers={"Content-Disposition": 'attachment; filename="solution-design.docx"'})
+
+
 @router.get("/placements")
 def placements(db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> dict:
     """Where a new process can go: the map's business areas and its processes (to append to)."""

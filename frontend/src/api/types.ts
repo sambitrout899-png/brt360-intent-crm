@@ -256,6 +256,42 @@ export interface BrdRead {
   /** written on the BRT 360 template - its sections became the builder's sentences */
   template: boolean;
   truncated?: boolean;
+  /** the template's example lines left in the document - ignored */
+  examples_dropped?: string[];
+  /** the whole document, for the AI architect */
+  text?: string;
+}
+
+/** The AI solution architect's verified design (backend: orchestration/process_architect.py). */
+export interface ArchitectAnalysis {
+  name: string;
+  summary: string;
+  by: "ai" | "ai+review" | "rules";
+  model: string;
+  text?: string;
+  requirements: { id: string; text: string; quote: string; kind: string }[];
+  placement: { mode: "new" | "append"; label?: string; process_key?: string; why?: string };
+  record: string | null;
+  steps: { code: string; label: string; why: string; requirements: string[] }[];
+  links: { from: string; to: string; from_label: string; to_label: string; kind: "next" | "auto"; when: { field?: string; operator: string; value?: string } | null;
+    replaces_existing: boolean; why: string; requirements: string[] }[];
+  pieces: { kind: string; text: string; requirements: string[] }[];
+  fit: { requirement: string; status: "covered" | "configure" | "gap"; how: string }[];
+  gaps: { requirement: string; need: string; why: string; effort: string; workaround: string }[];
+  assumptions: { text: string; requirement: string }[];
+  questions: { id: string; prompt: string; options: string[]; values?: string[]; default: string | null; builder?: boolean }[];
+  alternatives: { option: string; why_not: string }[];
+  coverage: { requirement: string; text: string; by: string[] }[];
+  uncovered: string[];
+  notes: string[];
+  ready: boolean;
+  builder: {
+    steps: { kind: string; text: string }[];
+    answers: Record<string, string>;
+    components: { id: string; kind: string; engine: string; title: string; lines: string[]; warnings: string[] }[];
+    engineering: { need: string; text: string; effort: string; why: string; workaround: string }[];
+    graphs: Record<string, unknown>;
+  };
 }
 
 export interface ProcessComponent {
