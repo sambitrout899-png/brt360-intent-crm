@@ -116,7 +116,7 @@ def _feasible_by_map(db: Session, tenant_id: int, user: User, opp, actions: list
     steps = function_map.rewired_steps(db, tenant_id, "INT-18")
     if steps is None:
         return actions
-    codes = [c for c, _ in steps]
+    codes = [c for c, _why, _label in steps]
     out = [a for a in actions if a.get("intent") != "INT-05" or "INT-05" in codes]
     party = flow_engine.customer_of(db, "opportunity", opp)
     for code in codes:

@@ -724,7 +724,7 @@ export default function AdminFunctionMap({ onOpenFlowStudio, onOpenIntents }: { 
             {(versions?.versions ?? []).map((v) => (
               <option key={v.id} value={v.id}>
                 {v.label ?? `v${v.number}`} · {v.name} - {STATUS[v.status].label}
-                {v.locked_by ? ` · 🔒 ${v.locked_by.user}` : ""}
+                {v.workspace && v.status === "draft" ? ` · 🧪 ${v.workspace}` : v.locked_by ? ` · 🔒 ${v.locked_by.user}` : ""}
               </option>
             ))}
           </select>
@@ -774,7 +774,9 @@ export default function AdminFunctionMap({ onOpenFlowStudio, onOpenIntents }: { 
                 {version.label ?? `v${version.number}`} · {version.name}
               </span>{" "}
               - from {version.based_on}
-              {version.locked_by && ` · 🔒 being worked on by ${version.locked_by.user} - others revise or copy it`}
+              {version.workspace && version.status === "draft"
+                ? ` · 🧪 in the workspace “${version.workspace}” (${version.workspace_status}) - changed only there, live with its release`
+                : version.locked_by && ` · 🔒 being worked on by ${version.locked_by.user} - others revise or copy it`}
               {version.status === "draft" && `, saved ${ago(version.updated_at)}${dirty ? " · unsaved changes" : ""}. Nothing runs from a draft until it is activated.`}
               {version.status === "active" && ` - active since ${ago(version.activated_at)}. Read-only: to change it, make a new version from it.`}
               {version.status === "retired" && " - no longer in use; kept to activate again."}
@@ -800,13 +802,19 @@ export default function AdminFunctionMap({ onOpenFlowStudio, onOpenIntents }: { 
                     ▶ Simulate
                   </button>
                 )}
-                <button
-                  onClick={() => review(version.id)}
-                  disabled={busy}
-                  className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-500 disabled:opacity-40"
-                >
-                  {version.status === "retired" ? "Activate again…" : "Activate…"}
-                </button>
+                {version.workspace && version.status === "draft" && ["open", "submitted"].includes(version.workspace_status ?? "") ? (
+                  <span className="rounded-md border border-violet-500/40 px-2.5 py-1 text-[11px] text-violet-200" title="Submit the workspace; the root administrator releases it">
+                    🚀 Goes live with its release
+                  </span>
+                ) : (
+                  <button
+                    onClick={() => review(version.id)}
+                    disabled={busy}
+                    className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-500 disabled:opacity-40"
+                  >
+                    {version.status === "retired" ? "Activate again…" : "Activate…"}
+                  </button>
+                )}
               </>
             )}
           </>

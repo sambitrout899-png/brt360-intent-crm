@@ -29,6 +29,8 @@ class FunctionMapVersion(Base):
     # revisions of one version share its number: v3 (0), v3.1, v3.2 ... - Revise makes the next
     revision: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     parent_id: Mapped[int | None] = mapped_column(Integer, nullable=True)  # the revision it was revised from
+    # made in an administrator's workspace (change control): locked to it, and goes live with its release
+    workspace_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     name: Mapped[str] = mapped_column(String(150))
     notes: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(String(20), default="draft")

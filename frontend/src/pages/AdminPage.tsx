@@ -1411,7 +1411,12 @@ export default function AdminPage({ onAccessChanged }: { onAccessChanged?: () =>
           )}
           {section === "releases" && <AdminReleasesSection />}
           {section === "conflicts" && <AdminConflictsSection onOpenFlowStudio={() => setSection("flows")} />}
-          {section === "functionmap" && <AdminFunctionMap onOpenFlowStudio={() => setSection("flows")} onOpenIntents={() => setSection("intents")} />}
+          {section === "functionmap" && (
+            <>
+              <WorkspaceBar onOpenReleases={() => setSection("releases")} />
+              <AdminFunctionMap key={workspaceKey} onOpenFlowStudio={() => setSection("flows")} onOpenIntents={() => setSection("intents")} />
+            </>
+          )}
           {section === "pages" && <AdminPageDesignerSection />}
           {section === "bim" && <AdminBimSection />}
       {section === "ordermgmt" && <AdminOrderMgmtSection />}

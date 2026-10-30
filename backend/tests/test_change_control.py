@@ -130,6 +130,64 @@ def test_only_the_root_administrator_releases_and_a_release_rolls_back(client):
     assert _message(names["Welcome"]) == "live text" and "Released new flow" not in names and "Old flow" in names
 
 
+def _picture(client, vid, user, workspace=None):
+    shown = client.get(f"{MAP}/versions/{vid}", headers=_as(user, workspace)).json()
+    return {"nodes": [{k: n[k] for k in ("code", "label", "lane", "active", "x", "dy")} for n in shown["nodes"]],
+            "edges": [{k: e.get(k) for k in ("source", "target", "kind", "why")} for e in shown["edges"] if e["kind"] == "next"]}
+
+
+def test_map_versions_made_in_a_workspace_are_locked_hidden_and_released_with_it(client):
+    b = _admin(client, "Admin B")
+    ws = _workspace(client, b, "B - map rework")
+    made = client.post(f"{MAP}/versions", json={"source": "active", "name": "B's map"}, headers=_as(b, ws)).json()["version"]
+    vid = made["id"]
+    assert made["workspace"] == "B - map rework" and made["locked_by"]["workspace"] == "B - map rework"
+
+    # B works on it in the workspace; outside it, even B can't change it
+    draft = _picture(client, vid, b, ws)
+    for n in draft["nodes"]:
+        if n["code"] == "INT-03":
+            n["active"] = False
+    assert client.put(f"{MAP}/versions/{vid}", json=draft, headers=_as(b, ws)).status_code == 200
+    outside = client.put(f"{MAP}/versions/{vid}", json=draft, headers=_as(b))
+    assert outside.status_code == 409 and "select it" in outside.json()["detail"]
+
+    # to everyone else it is B's draft: not listed, not readable, not changeable, not revisable
+    assert vid not in [v["id"] for v in client.get(f"{MAP}/versions").json()["versions"]]
+    assert client.get(f"{MAP}/versions/{vid}").status_code == 404
+    assert client.post(f"{MAP}/versions/{vid}/revise").status_code == 404
+    assert client.put(f"{MAP}/versions/{vid}", json=draft).status_code == 409
+    # and it goes live only with the workspace's release - not by a direct activation
+    blocked = client.post(f"{MAP}/versions/{vid}/activate")
+    assert blocked.status_code == 409 and "release" in blocked.json()["detail"]
+
+    listed = next(w for w in client.get(f"{CHANGE}/workspaces").json() if w["id"] == ws)
+    assert [o["kind"] for o in listed["objects"]] == ["Map version"]
+    client.post(f"{CHANGE}/workspaces/{ws}/submit", headers=_as(b))
+    rel = client.post(f"{CHANGE}/releases", json={"name": "Map rework", "workspace_ids": [ws]}).json()
+    assert rel["map_version_id"] == vid  # carried by the workspace
+    assert client.post(f"{CHANGE}/releases/{rel['id']}/simulate").json()["ok"]
+    client.post(f"{CHANGE}/releases/{rel['id']}/deploy")
+    listed = client.get(f"{MAP}/versions").json()
+    assert listed["active_id"] == vid
+    assert not next(n for n in client.get(MAP).json()["nodes"] if n["code"] == "INT-03")["active"]
+
+    client.post(f"{CHANGE}/releases/{rel['id']}/rollback")  # the map before the release runs again
+    assert client.get(f"{MAP}/versions").json()["on_original"]
+    assert next(n for n in client.get(MAP).json()["nodes"] if n["code"] == "INT-03")["active"]
+
+
+def test_a_discarded_workspace_takes_its_map_versions_with_it(client):
+    b = _admin(client, "Admin B")
+    ws = _workspace(client, b, "B - throwaway")
+    vid = client.post(f"{MAP}/versions", json={"source": "original"}, headers=_as(b, ws)).json()["version"]["id"]
+    revised = client.post(f"{MAP}/versions/{vid}/revise", headers=_as(b, ws)).json()["version"]
+    assert revised["workspace_id"] == ws
+    client.post(f"{CHANGE}/workspaces/{ws}/discard", headers=_as(b))
+    assert client.get(f"{MAP}/versions/{vid}", headers=_as(b)).status_code == 404
+    assert client.get(f"{MAP}/versions/{revised['id']}", headers=_as(b)).status_code == 404
+
+
 def test_map_versions_revise_lock_and_only_the_root_administrator_activates(client):
     b = _admin(client, "Admin B")
     v1 = client.post(f"{MAP}/versions", json={"source": "active", "name": "Sales tweaks"}).json()["version"]

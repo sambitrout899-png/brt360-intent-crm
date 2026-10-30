@@ -214,7 +214,8 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
   if (workContext.positionId) headers["X-Position-Id"] = String(workContext.positionId);
   if (workContext.scope) headers["X-Data-Scope"] = workContext.scope;
-  if (workspaceId && path.startsWith("/api/admin/flows")) headers["X-BRT-Workspace"] = String(workspaceId);
+  // the editors that save into a workspace: Flow Studio, the Functional Map (and the Process Builder's draft versions)
+  if (workspaceId && /^\/api\/(admin\/flows|admin\/function-map|process-builder)/.test(path)) headers["X-BRT-Workspace"] = String(workspaceId);
   const res = await fetch(`${API_BASE}${path}`, {
     ...init,
     headers: { ...headers, ...(init?.headers as Record<string, string> | undefined) },

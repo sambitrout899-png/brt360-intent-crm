@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.auth import get_current_user, require_roles
@@ -472,14 +472,7 @@ def delete_custom_field(field_id: int, db: Session = Depends(get_db), tenant_id:
 # changed live - unless someone's workspace holds it.
 
 
-def workspace(x_brt_workspace: int | None = Header(default=None), db: Session = Depends(get_db),
-              tenant_id: int = Depends(get_current_tenant_id), user: User = Depends(get_current_user)) -> Workspace | None:
-    try:
-        return change_control.working(db, tenant_id, user, x_brt_workspace)
-    except LookupError as exc:
-        raise HTTPException(404, str(exc)) from exc
-    except change_control.ChangeError as exc:
-        raise HTTPException(409, str(exc)) from exc
+from app.experience.routes_change import current_workspace as workspace  # noqa: E402 - the X-BRT-Workspace dependency
 
 
 def _guard(fn, *args):

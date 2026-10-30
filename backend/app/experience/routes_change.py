@@ -7,17 +7,30 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.auth import get_current_user, require_roles
 from app.db import get_db
 from app.models.auth import User, UserRole
+from app.models.change_control import Workspace
 from app.orchestration import change_control
 from app.tenancy import get_current_tenant_id
 
 router = APIRouter(prefix="/api/admin/change", tags=["change-control"], dependencies=[Depends(require_roles(UserRole.admin))])
+
+
+def current_workspace(x_brt_workspace: int | None = Header(default=None), db: Session = Depends(get_db),
+                      tenant_id: int = Depends(get_current_tenant_id), user: User = Depends(get_current_user)) -> Workspace | None:
+    """The workspace a request works in (X-BRT-Workspace) - the caller's own and open - or None (live).
+    Flow Studio and the Functional Map save into it."""
+    try:
+        return change_control.working(db, tenant_id, user, x_brt_workspace)
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except change_control.ChangeError as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 class WorkspaceIn(BaseModel):

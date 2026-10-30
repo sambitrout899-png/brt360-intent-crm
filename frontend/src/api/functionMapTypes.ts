@@ -109,6 +109,10 @@ export interface MapVersion {
   /** "v3" or "v3.1" */
   label?: string;
   parent_id?: number | null;
+  /** made in an administrator's workspace - changed only there, live only with its release */
+  workspace_id?: number | null;
+  workspace?: string | null;
+  workspace_status?: string | null;
   /** the administrator working on this draft - nobody else changes it meanwhile */
   locked_by?: { user_id: number; user: string | null; workspace: string | null; since: string } | null;
   name: string;

@@ -293,13 +293,17 @@ def rewired(db: Session, tenant_id: int, code: str) -> bool:
     return {e["target"] for e in mine} != original
 
 
-def rewired_steps(db: Session, tenant_id: int, code: str) -> list[tuple[str, str]] | None:
+def rewired_steps(db: Session, tenant_id: int, code: str) -> list[tuple[str, str, str]] | None:
     """The map in use's next steps after `code` when it re-wired them (no
-    condition decides - those need the step's facts); None = BRT's built-in
-    suggestions stand. Customer 360 and a record's buttons follow these."""
+    condition decides - those need the step's facts), as (code, why, the
+    step's name); None = BRT's built-in suggestions stand. Customer 360 and a
+    record's buttons follow these."""
+    from app.intent_engine import intent_registry
+
     if not rewired(db, tenant_id, code):
         return None
-    return [(e["target"], e.get("why") or "") for e in _saved_from(db, tenant_id, code) or [] if not clean_when(e.get("when"))]
+    return [(e["target"], e.get("why") or "", intent_registry.label_of(db, tenant_id, e["target"]) or e["target"])
+            for e in _saved_from(db, tenant_id, code) or [] if not clean_when(e.get("when"))]
 
 
 def decides(db: Session, tenant_id: int, code: str) -> bool:
@@ -820,9 +824,13 @@ def _summary(db: Session, v) -> dict[str, Any]:
 
     from app.orchestration import change_control
 
+    from app.models.change_control import Workspace
+
     iso = lambda t: t.isoformat(timespec="seconds") if t else None  # noqa: E731
     revision = v.revision or 0
+    ws = db.get(Workspace, v.workspace_id) if v.workspace_id else None
     return {"id": v.id, "number": v.number, "revision": revision, "label": f"v{v.number}" + (f".{revision}" if revision else ""),
+            "workspace_id": v.workspace_id, "workspace": ws.name if ws else None, "workspace_status": ws.status if ws else None,
             "parent_id": v.parent_id, "locked_by": change_control.lock_out(db, change_control.lock_of(db, v.tenant_id, "map_version", str(v.id))),
             "name": v.name, "notes": v.notes or "", "status": v.status, "based_on": v.based_on,
             "created_at": iso(v.created_at), "created_by": who(v.created_by_id), "updated_at": iso(v.updated_at),
@@ -830,7 +838,9 @@ def _summary(db: Session, v) -> dict[str, Any]:
             "builds": [{"name": b.get("name"), "status": b.get("status")} for b in _read(v).get("builds") or [] if isinstance(b, dict)]}
 
 
-def _new(db: Session, tenant_id: int, user_id: int | None, name: str, based_on: str, picture: dict[str, Any], status: str = "draft"):
+def _new(db: Session, tenant_id: int, user_id: int | None, name: str, based_on: str, picture: dict[str, Any], status: str = "draft",
+         workspace=None):
+    """A new version; made in a workspace, it belongs to it and is locked to it."""
     from sqlalchemy import func
 
     from app.models.function_map import FunctionMapVersion
@@ -841,30 +851,44 @@ def _new(db: Session, tenant_id: int, user_id: int | None, name: str, based_on: 
     v = FunctionMapVersion(tenant_id=tenant_id, number=number, name=(name.strip() or f"Version {number}")[:150], notes="",
                            status=status, based_on=based_on, picture_json=json.dumps(picture), created_by_id=user_id,
                            created_at=now, updated_at=now, activated_at=now if status == "active" else None,
-                           activated_by_id=user_id if status == "active" else None)
+                           activated_by_id=user_id if status == "active" else None, workspace_id=workspace.id if workspace else None)
     db.add(v)
     db.flush()
+    if workspace is not None:
+        _claim(db, tenant_id, v, user_id, workspace)
     return v
 
 
-def versions(db: Session, tenant_id: int) -> dict[str, Any]:
+def _hidden(db: Session, v, viewer) -> bool:
+    """A draft in someone else's workspace is theirs - like a Flow Studio draft, not shown to others."""
+    from app.models.change_control import Workspace
+
+    if viewer is None or v.status != "draft" or not v.workspace_id:
+        return False
+    ws = db.get(Workspace, v.workspace_id)
+    return ws is not None and ws.status in ("open", "submitted") and ws.owner_id != viewer.id
+
+
+def versions(db: Session, tenant_id: int, viewer=None) -> dict[str, Any]:
     """Every version of this tenant's map, newest first, and which one runs
     (none = BRT's original). A map arranged before versions existed becomes
-    version 1, active."""
+    version 1, active. With a viewer, drafts in other administrators'
+    workspaces are left out."""
     from app.models.function_map import FunctionMapVersion
 
     rows = (db.query(FunctionMapVersion).filter(FunctionMapVersion.tenant_id == tenant_id)
-            .order_by(FunctionMapVersion.number.desc()).all())
+            .order_by(FunctionMapVersion.number.desc(), FunctionMapVersion.revision.desc()).all())
     if not rows and saved(db, tenant_id) is not None:
         mine = saved(db, tenant_id)
         rows = [_new(db, tenant_id, mine.get("user_id"), "Version 1 - the map in use before versions", "active map",
                      _picture_of(current(db, tenant_id)), status="active")]
         db.commit()
     active = next((v for v in rows if v.status == "active"), None)
-    return {"versions": [_summary(db, v) for v in rows], "active_id": active.id if active else None, "on_original": active is None}
+    return {"versions": [_summary(db, v) for v in rows if not _hidden(db, v, viewer)], "active_id": active.id if active else None,
+            "on_original": active is None}
 
 
-def create_version(db: Session, tenant_id: int, user_id: int | None, name: str, source: str | int) -> dict[str, Any]:
+def create_version(db: Session, tenant_id: int, user_id: int | None, name: str, source: str | int, workspace=None) -> dict[str, Any]:
     """A new draft: a copy of BRT's original ("original"), of the map in use
     ("active") or of another version (its id)."""
     # the processes a version built go with its copies - activating a copy keeps them running
@@ -881,7 +905,7 @@ def create_version(db: Session, tenant_id: int, user_id: int | None, name: str, 
         picture["builds"] = list(pic.get("builds") or [])
     else:
         raise VersionError("Copy from 'original', 'active' or a version")
-    v = _new(db, tenant_id, user_id, name, based_on, picture)
+    v = _new(db, tenant_id, user_id, name, based_on, picture, workspace=workspace)
     db.commit()
     return version_map(db, tenant_id, v.id)
 
@@ -897,7 +921,7 @@ def _slug(text: str) -> str:
 
 
 def stage(db: Session, tenant_id: int, user_id: int | None, spec: dict[str, Any], placement: dict[str, Any] | None = None,
-          version_id: int | None = None) -> dict[str, Any]:
+          version_id: int | None = None, workspace=None) -> dict[str, Any]:
     """A process designed in the Process Builder, put into a draft version of
     the map - nothing is built until that version is activated. spec: the
     builder's {request, steps, answers, graphs, name}. placement: {"mode":
@@ -918,9 +942,9 @@ def stage(db: Session, tenant_id: int, user_id: int | None, spec: dict[str, Any]
         v = _get(db, tenant_id, version_id)
         if v.status != "draft":
             raise VersionError(f"Version {v.number} is {v.status} - put the process into a draft version")
-        _claim(db, tenant_id, v, user_id)
+        _claim(db, tenant_id, v, user_id, workspace)
     else:
-        made = create_version(db, tenant_id, user_id, f"{blueprint['name']} - new process"[:150], "active")
+        made = create_version(db, tenant_id, user_id, f"{blueprint['name']} - new process"[:150], "active", workspace)
         v = _get(db, tenant_id, made["version"]["id"])
     pic = _read(v)
     builds = pic.setdefault("builds", [])
@@ -1012,22 +1036,31 @@ def version_map(db: Session, tenant_id: int, version_id: int) -> dict[str, Any]:
     return {**view, "version": _summary(db, v), "release_notes": notes}
 
 
-def _claim(db: Session, tenant_id: int, v, user_id: int | None) -> None:
+def _claim(db: Session, tenant_id: int, v, user_id: int | None, workspace=None) -> None:
     """A draft version is locked to the first administrator who changes it -
-    another one works on their own revision or copy (change_control)."""
+    and to their workspace, when they work in one; another one works on their
+    own revision or copy (change_control). A version made in a workspace is
+    changed only there."""
     from app.models.auth import User
+    from app.models.change_control import Workspace
     from app.orchestration import change_control
 
     user = db.get(User, user_id) if user_id else None
     if user is None:
         return
+    if v.workspace_id and (workspace is None or workspace.id != v.workspace_id):
+        home = db.get(Workspace, v.workspace_id)
+        if home is not None and home.status in ("open", "submitted"):
+            whose = "your" if home.owner_id == user.id else f"{change_control._name(db, home.owner_id)}'s"
+            raise VersionError(f"Map version {v.number} belongs to {whose} workspace “{home.name}” - "
+                               + ("select it to work on the version." if home.owner_id == user.id else "make a revision or a copy of it to work on."))
     try:
-        change_control.claim(db, tenant_id, "map_version", str(v.id), user, None, f"Map version {v.number}")
+        change_control.claim(db, tenant_id, "map_version", str(v.id), user, workspace, f"Map version {v.number}")
     except change_control.ChangeError as exc:
         raise VersionError(f"{exc} Make a revision or a copy of it to work on.") from exc
 
 
-def revise_version(db: Session, tenant_id: int, version_id: int, user_id: int | None) -> dict[str, Any]:
+def revise_version(db: Session, tenant_id: int, version_id: int, user_id: int | None, workspace=None) -> dict[str, Any]:
     """The next revision of a version (v3 -> v3.1 -> v3.2): a draft with its
     picture and processes, keeping its number - activating it supersedes the
     revision in use."""
@@ -1038,20 +1071,21 @@ def revise_version(db: Session, tenant_id: int, version_id: int, user_id: int | 
     src = _get(db, tenant_id, version_id)
     revision = (db.query(func.max(FunctionMapVersion.revision))
                 .filter(FunctionMapVersion.tenant_id == tenant_id, FunctionMapVersion.number == src.number).scalar() or 0) + 1
-    v = _new(db, tenant_id, user_id, src.name, f"revision of v{src.number}" + (f".{src.revision}" if src.revision else ""), _read(src))
+    v = _new(db, tenant_id, user_id, src.name, f"revision of v{src.number}" + (f".{src.revision}" if src.revision else ""), _read(src),
+             workspace=workspace)
     v.number, v.revision, v.parent_id = src.number, revision, src.id
     db.commit()
     return version_map(db, tenant_id, v.id)
 
 
-def save_version(db: Session, tenant_id: int, version_id: int, user_id: int | None, payload: dict[str, Any]) -> dict[str, Any]:
+def save_version(db: Session, tenant_id: int, version_id: int, user_id: int | None, payload: dict[str, Any], workspace=None) -> dict[str, Any]:
     """A draft's picture, name or notes - nothing changes in the engines."""
     from app.timeutils import utcnow
 
     v = _get(db, tenant_id, version_id)
     if v.status != "draft":
         raise VersionError(f"Version {v.number} is {v.status} - it can't be changed. Make a revision of it to work on.")
-    _claim(db, tenant_id, v, user_id)
+    _claim(db, tenant_id, v, user_id, workspace)
     if payload.get("name") is not None:
         v.name = str(payload["name"]).strip()[:150] or v.name
     if payload.get("notes") is not None:
@@ -1065,15 +1099,16 @@ def save_version(db: Session, tenant_id: int, version_id: int, user_id: int | No
     return version_map(db, tenant_id, v.id)
 
 
-def delete_version(db: Session, tenant_id: int, version_id: int, user_id: int | None = None) -> None:
+def delete_version(db: Session, tenant_id: int, version_id: int, user_id: int | None = None, workspace=None) -> None:
     from app.orchestration import change_control
 
     v = _get(db, tenant_id, version_id)
     if v.status == "active":
         raise VersionError("The active version can't be deleted - activate another version (or BRT's original) first.")
     lock = change_control.lock_of(db, tenant_id, "map_version", str(v.id))
-    if lock is not None and user_id is not None and lock.user_id != user_id:
-        raise VersionError(f"Map version {v.number} is being worked on by {change_control.lock_out(db, lock)['user']} - it can't be deleted now")
+    if lock is not None and user_id is not None and (lock.user_id != user_id or (lock.workspace_id and (workspace is None or workspace.id != lock.workspace_id))):
+        raise VersionError(f"Map version {v.number} is being worked on by {change_control.lock_out(db, lock)['user']}"
+                           + (f" in workspace “{change_control.lock_out(db, lock)['workspace']}”" if lock.workspace_id else "") + " - it can't be deleted from here")
     change_control.unlock(db, tenant_id, "map_version", str(v.id))
     db.delete(v)
     db.commit()

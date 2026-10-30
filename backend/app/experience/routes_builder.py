@@ -15,6 +15,8 @@ from sqlalchemy.orm import Session
 from app.auth import get_current_user, require_roles
 from app.crm_core import llm
 from app.db import get_db
+from app.experience.routes_change import current_workspace
+from app.models.change_control import Workspace
 from app.models.auth import User, UserRole
 from app.orchestration import process_builder
 from app.tenancy import get_current_tenant_id
@@ -83,7 +85,7 @@ def design_process(payload: DesignIn, db: Session = Depends(get_db), tenant_id: 
 
 @router.post("/build")
 def build_process(payload: BuildIn, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id),
-                  user: User = Depends(get_current_user)) -> dict:
+                  user: User = Depends(get_current_user), ws: Workspace | None = Depends(current_workspace)) -> dict:
     """rehearse: built and rolled back, to show exactly what would be created.
     simulate: the same, with every flow played through on a sample record.
     execute (the administrator's consent): through the Functional Map - a new
@@ -95,6 +97,9 @@ def build_process(payload: BuildIn, db: Session = Depends(get_db), tenant_id: in
 
         if not change_control.is_root(db, user):
             raise HTTPException(403, "Only the organization's root administrator activates a process - save it as a draft map version instead")
+        if ws is not None:
+            raise HTTPException(409, f"You are working in the workspace “{ws.name}” - save the process as a draft map version there; "
+                                     "it goes live with the workspace's release")
     with llm.budget(AI_SECONDS):
         steps, answers, graphs = _steps(payload), payload.answers, payload.graphs
         if not steps:
@@ -107,7 +112,7 @@ def build_process(payload: BuildIn, db: Session = Depends(get_db), tenant_id: in
 
 @router.post("/stage")
 def stage_process(payload: StageIn, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id),
-                  user: User = Depends(get_current_user)) -> dict:
+                  user: User = Depends(get_current_user), ws: Workspace | None = Depends(current_workspace)) -> dict:
     """Puts the designed process into a draft version of the Functional Map -
     nothing is built until that version is activated."""
     from app.orchestration import function_map
@@ -115,7 +120,8 @@ def stage_process(payload: StageIn, db: Session = Depends(get_db), tenant_id: in
     with llm.budget(AI_SECONDS):
         spec = {"request": payload.request.strip(), "steps": _steps(payload), "answers": payload.answers, "graphs": payload.graphs, "name": payload.name}
         try:
-            return function_map.stage(db, tenant_id, user.id, spec, payload.placement.model_dump() if payload.placement else None, payload.version_id)
+            return function_map.stage(db, tenant_id, user.id, spec, payload.placement.model_dump() if payload.placement else None,
+                                      payload.version_id, ws)
         except LookupError as exc:
             raise HTTPException(404, str(exc)) from exc
         except function_map.VersionError as exc:

@@ -169,12 +169,25 @@ def workspace_out(db: Session, ws: Workspace) -> dict[str, Any]:
     for r in sorted(revs, key=lambda r: r.id):
         latest[(r.object_type, r.object_key)] = r
     iso = lambda t: t.isoformat(timespec="seconds") if t else None  # noqa: E731
+    objects = [{"type": t, "key": k, "id": display_id(k), "kind": ADAPTERS[t].label if t in ADAPTERS else t,
+                "label": r.label, "revision": r.number, "change": "deleted" if json.loads(r.snapshot_json).get("deleted")
+                else "new" if r.base_json is None else "changed"} for (t, k), r in latest.items()]
+    # Functional Map versions made in the workspace (function_map: they are versions of their own)
+    objects += [{"type": "map_version", "key": str(v.id), "id": v.id, "kind": "Map version",
+                 "label": f"v{v.number}" + (f".{v.revision}" if v.revision else "") + f" · {v.name}", "revision": v.revision or 0,
+                 "change": "revision" if v.parent_id else "new"} for v in _map_versions(db, ws.id)]
     return {"id": ws.id, "name": ws.name, "description": ws.description, "status": ws.status, "owner_id": ws.owner_id,
             "owner": _name(db, ws.owner_id), "created_at": iso(ws.created_at), "updated_at": iso(ws.updated_at),
-            "submitted_at": iso(ws.submitted_at), "release_id": ws.release_id,
-            "objects": [{"type": t, "key": k, "id": display_id(k), "kind": ADAPTERS[t].label if t in ADAPTERS else t,
-                         "label": r.label, "revision": r.number, "change": "deleted" if json.loads(r.snapshot_json).get("deleted")
-                         else "new" if r.base_json is None else "changed"} for (t, k), r in latest.items()]}
+            "submitted_at": iso(ws.submitted_at), "release_id": ws.release_id, "objects": objects}
+
+
+def _map_versions(db: Session, workspace_id: int, drafts_only: bool = False) -> list:
+    from app.models.function_map import FunctionMapVersion
+
+    q = db.query(FunctionMapVersion).filter(FunctionMapVersion.workspace_id == workspace_id)
+    if drafts_only:
+        q = q.filter(FunctionMapVersion.status == "draft")
+    return q.order_by(FunctionMapVersion.id).all()
 
 
 def create_workspace(db: Session, tenant_id: int, user: User, name: str, description: str = "") -> dict[str, Any]:
@@ -234,6 +247,8 @@ def discard(db: Session, tenant_id: int, user: User, workspace_id: int) -> dict[
         raise ChangeError(f"It is already {ws.status}")
     db.query(ObjectRevision).filter(ObjectRevision.workspace_id == ws.id, ObjectRevision.status == "draft").update({"status": "discarded"})
     db.query(ObjectLock).filter(ObjectLock.workspace_id == ws.id).delete()
+    for v in _map_versions(db, ws.id, drafts_only=True):  # map versions made in it go with it
+        db.delete(v)
     ws.status, ws.updated_at = "discarded", utcnow()
     db.commit()
     return workspace_out(db, ws)
@@ -389,6 +404,15 @@ def create_release(db: Session, tenant_id: int, user: User, name: str, workspace
     not_ready = [w.name for w in wss if w.status != "submitted"]
     if not_ready:
         raise ChangeError(f"Only submitted workspaces go into a release - not yet: {', '.join(not_ready)}")
+    # a map version made in one of the workspaces goes live with the release - one map per release
+    carried = [v for w in wss for v in _map_versions(db, w.id, drafts_only=True)]
+    if len(carried) > 1:
+        raise ChangeError("These workspaces carry " + ", ".join(f"v{v.number}" + (f".{v.revision}" if v.revision else "") for v in carried)
+                          + " - only one Functional Map version can go live in a release")
+    if carried:
+        if map_version_id is not None and map_version_id != carried[0].id:
+            raise ChangeError(f"The workspaces already carry map version {carried[0].number} - a release activates one map version")
+        map_version_id = carried[0].id
     if not wss and map_version_id is None:
         raise ChangeError("A release needs at least one submitted workspace or a map version")
     if map_version_id is not None:
@@ -397,6 +421,9 @@ def create_release(db: Session, tenant_id: int, user: User, name: str, workspace
         v = function_map._get(db, tenant_id, map_version_id)
         if v.status == "active":
             raise ChangeError(f"Map version {v.number} is already active")
+        home = db.get(Workspace, v.workspace_id) if v.workspace_id else None
+        if home is not None and home.id not in [w.id for w in wss] and home.status in ("open", "submitted"):
+            raise ChangeError(f"Map version {v.number} is in the workspace “{home.name}” - it goes live with that workspace's release")
     number = (db.query(func.max(Release.number)).filter(Release.tenant_id == tenant_id).scalar() or 0) + 1
     rel = Release(tenant_id=tenant_id, number=number, name=(name.strip() or f"Release {number}")[:150], status="draft",
                   workspace_ids=[w.id for w in wss], map_version_id=map_version_id, created_by_id=user.id, created_at=utcnow(), undo_json="{}")

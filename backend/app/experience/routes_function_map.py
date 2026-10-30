@@ -1,7 +1,11 @@
 """Admin -> Functional Map (orchestration/function_map.py). BRT's original map
 and the map the tenant runs are read-only: a tenant changes its map only by
 making versions, working on drafts and activating one - activating first
-shows what it changes in the engines. Administrators only."""
+shows what it changes in the engines. Administrators only.
+
+In a workspace (X-BRT-Workspace, change control) the versions an
+administrator makes, revises or copies belong to it - locked to it, hidden
+from the others, and live only with the workspace's release."""
 
 from __future__ import annotations
 
@@ -13,7 +17,9 @@ from sqlalchemy.orm import Session
 
 from app.auth import get_current_user, require_roles
 from app.db import get_db
+from app.experience.routes_change import current_workspace
 from app.models.auth import User, UserRole
+from app.models.change_control import Workspace
 from app.orchestration import function_map
 from app.tenancy import get_current_tenant_id
 
@@ -49,46 +55,53 @@ def vanilla(db: Session = Depends(get_db), tenant_id: int = Depends(get_current_
 
 
 @router.get("")
-def mine(db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> dict[str, Any]:
+def mine(db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id), user: User = Depends(get_current_user)) -> dict[str, Any]:
     """The map this tenant runs: the engines as they run now - read-only."""
-    return {**function_map.current(db, tenant_id), **function_map.versions(db, tenant_id)}
+    return {**function_map.current(db, tenant_id), **function_map.versions(db, tenant_id, user)}
 
 
 @router.get("/versions")
-def list_versions(db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> dict[str, Any]:
-    return function_map.versions(db, tenant_id)
+def list_versions(db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id),
+                  user: User = Depends(get_current_user)) -> dict[str, Any]:
+    return function_map.versions(db, tenant_id, user)
 
 
 @router.post("/versions")
 def create_version(payload: VersionIn, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id),
-                   user: User = Depends(get_current_user)) -> dict[str, Any]:
+                   user: User = Depends(get_current_user), ws: Workspace | None = Depends(current_workspace)) -> dict[str, Any]:
     """A new draft, copied from BRT's original, the map in use or another version."""
-    return _run(function_map.create_version, db, tenant_id, user.id, payload.name, payload.source)
+    return _run(function_map.create_version, db, tenant_id, user.id, payload.name, payload.source, ws)
 
 
 @router.get("/versions/{version_id}")
-def get_version(version_id: int, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> dict[str, Any]:
+def get_version(version_id: int, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id),
+                user: User = Depends(get_current_user)) -> dict[str, Any]:
+    v = _run(function_map._get, db, tenant_id, version_id)
+    if function_map._hidden(db, v, user):
+        raise HTTPException(404, "That version is a draft in another administrator's workspace")
     return _run(function_map.version_map, db, tenant_id, version_id)
 
 
 @router.put("/versions/{version_id}")
 def save_version(version_id: int, payload: VersionUpdate, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id),
-                 user: User = Depends(get_current_user)) -> dict[str, Any]:
+                 user: User = Depends(get_current_user), ws: Workspace | None = Depends(current_workspace)) -> dict[str, Any]:
     """Saves a draft - nothing changes in the engines until it is activated."""
-    return _run(function_map.save_version, db, tenant_id, version_id, user.id, payload.model_dump())
+    return _run(function_map.save_version, db, tenant_id, version_id, user.id, payload.model_dump(), ws)
 
 
 @router.delete("/versions/{version_id}", status_code=204)
 def delete_version(version_id: int, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id),
-                   user: User = Depends(get_current_user)) -> None:
-    _run(function_map.delete_version, db, tenant_id, version_id, user.id)
+                   user: User = Depends(get_current_user), ws: Workspace | None = Depends(current_workspace)) -> None:
+    _run(function_map.delete_version, db, tenant_id, version_id, user.id, ws)
 
 
 @router.post("/versions/{version_id}/revise")
 def revise_version(version_id: int, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id),
-                   user: User = Depends(get_current_user)) -> dict[str, Any]:
+                   user: User = Depends(get_current_user), ws: Workspace | None = Depends(current_workspace)) -> dict[str, Any]:
     """The next revision of a version (v3 -> v3.1): a draft to work on, keeping its number."""
-    return _run(function_map.revise_version, db, tenant_id, version_id, user.id)
+    if function_map._hidden(db, _run(function_map._get, db, tenant_id, version_id), user):
+        raise HTTPException(404, "That version is a draft in another administrator's workspace")
+    return _run(function_map.revise_version, db, tenant_id, version_id, user.id, ws)
 
 
 def _root(db: Session, user: User) -> None:
@@ -120,8 +133,14 @@ def simulate_version(version_id: int, db: Session = Depends(get_db), tenant_id: 
 def activate_version(version_id: int, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id),
                      user: User = Depends(get_current_user)) -> dict[str, Any]:
     """Re-orchestrates the engines to this version; the one it replaces is retired.
-    Only the organization's root administrator activates."""
+    Only the organization's root administrator activates - and a version still
+    in a workspace goes live only with that workspace's release."""
     _root(db, user)
+    v = _run(function_map._get, db, tenant_id, version_id)
+    home = db.get(Workspace, v.workspace_id) if v.workspace_id else None
+    if home is not None and home.status in ("open", "submitted"):
+        raise HTTPException(409, f"Map version {v.number} is in the workspace “{home.name}” ({home.status}) - "
+                                 "it goes live with that workspace's release (Admin → Releases & Workspaces)")
     return _run(function_map.activate, db, tenant_id, version_id, user.id)
 
 
