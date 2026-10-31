@@ -154,7 +154,9 @@ def op_approve_order(
         raise ValueError(f"Order {order_id} has already been submitted for fulfillment (status={order.status.value})")
     if decision == "approve":
         # Provisioning needs the product's required technical attributes.
-        missing = product_config.order_missing_technical(db, tenant_id, order)
+        from app.crm_core import feasibility_service
+
+        missing = product_config.order_missing_technical(db, tenant_id, order, feasibility_service.order_overridden(db, tenant_id, order))
         if missing:
             raise ValueError("Set the technical attributes provisioning needs first - " + "; ".join(missing))
 

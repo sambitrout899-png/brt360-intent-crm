@@ -370,6 +370,9 @@ def presales_outcome(
                 result["inventory_held"] = [f"{r['type']} {r['identifier']}" for r in held["held"]]
                 result["served_from"] = held["location"]
         if override:
+            from app.crm_core import feasibility_service
+
+            feasibility_service.record_override(db, tenant_id, opportunity.id, reason)
             result.setdefault("inventory_override", {"reason": reason})
             note = f"Inventory check overridden by Presales: {reason}"
             config.feasibility_notes = f"{config.feasibility_notes}\n{note}" if config.feasibility_notes else note

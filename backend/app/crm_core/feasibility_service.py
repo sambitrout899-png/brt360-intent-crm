@@ -130,6 +130,45 @@ def run_assessment(db: Session, tenant_id: int, opportunity_id: int | None, loca
     return assessment
 
 
+OVERRIDE = "inventory_override"  # the check result Presales' manual override of the inventory check leaves
+
+
+def latest(db: Session, tenant_id: int, opportunity_id: int) -> FeasibilityAssessment | None:
+    return (db.query(FeasibilityAssessment).filter(FeasibilityAssessment.tenant_id == tenant_id,
+                                                   FeasibilityAssessment.opportunity_id == opportunity_id)
+            .order_by(FeasibilityAssessment.id.desc()).first())
+
+
+def record_override(db: Session, tenant_id: int, opportunity_id: int, reason: str) -> None:
+    """Presales passed feasibility over the inventory check: the network resources weren't held, so what
+    provisioning takes from Inventory is assigned at fulfilment (see inventory_overridden)."""
+    assessment = latest(db, tenant_id, opportunity_id)
+    if assessment is not None:
+        db.add(FeasibilityCheckResult(assessment_id=assessment.id, check_type_name="Inventory check overridden by Presales",
+                                      resource_type=OVERRIDE, outcome=FeasibilityOutcome.passed, detail=reason[:2000]))
+        db.flush()
+
+
+def inventory_overridden(db: Session, tenant_id: int, opportunity_id: int | None) -> bool:
+    """Whether the opportunity's last feasibility check passed on Presales' inventory override."""
+    assessment = latest(db, tenant_id, opportunity_id) if opportunity_id else None
+    if assessment is not None and any(r.resource_type == OVERRIDE for r in assessment.results):
+        return True
+    # overrides made before they were recorded as a check result left only the feasibility note
+    from app.models.crm import Opportunity
+
+    opp = db.get(Opportunity, opportunity_id) if opportunity_id else None
+    return bool(opp is not None and opp.config is not None and "Inventory check overridden by Presales" in (opp.config.feasibility_notes or ""))
+
+
+def order_overridden(db: Session, tenant_id: int, order) -> bool:
+    """Whether the deal an order came from passed feasibility on Presales' inventory override."""
+    from app.models.crm import Quote
+
+    quote = db.get(Quote, order.quote_id) if order.quote_id else None
+    return quote is not None and inventory_overridden(db, tenant_id, quote.opportunity_id)
+
+
 def _network_recorded(db: Session, tenant_id: int) -> bool:
     from app.crm_core import inventory_service
 

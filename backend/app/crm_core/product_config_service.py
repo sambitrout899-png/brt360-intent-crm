@@ -840,8 +840,11 @@ def order_item_attributes(db: Session, order_item_id: int | None) -> tuple[dict[
     return (loads(row.pricing_attributes_json), loads(row.technical_attributes_json)) if row else None
 
 
-def order_missing_by_product(db: Session, tenant_id: int, order) -> list[tuple[str, list[str]]]:
-    """(product, what it still lacks) for each of an order's products missing required technical attributes."""
+def order_missing_by_product(db: Session, tenant_id: int, order, overridden: bool = False) -> list[tuple[str, list[str]]]:
+    """(product, what it still lacks) for each of an order's products missing required technical attributes.
+    overridden: Presales passed the deal over the inventory check (feasibility_service.order_overridden), so
+    the attributes provisioning fills from Inventory (inventory references) are assigned at fulfilment - they
+    aren't asked for here."""
     from app.crm_core import instance_service
 
     out: list[tuple[str, list[str]]] = []
@@ -852,14 +855,17 @@ def order_missing_by_product(db: Session, tenant_id: int, order) -> list[tuple[s
             continue
         frozen = instance_service.design_for(db, tenant_id, "order", order.id, offering.name)
         missing = missing_technical(db, tenant_id, offering.name, attrs[0], attrs[1], frozen)
+        if overridden and missing:
+            references = [a["name"] for a in (frozen or schema(db, tenant_id, offering.name))["attributes"] if a.get("reference_type")]
+            missing = [m for m in missing if not any(m.startswith(f"{name} is required") for name in references)]
         if missing:
             out.append((offering.name, missing))
     return out
 
 
-def order_missing_technical(db: Session, tenant_id: int, order) -> list[str]:
+def order_missing_technical(db: Session, tenant_id: int, order, overridden: bool = False) -> list[str]:
     """Required technical attributes an order's products still lack."""
-    return [f"{name}: {m}" for name, missing in order_missing_by_product(db, tenant_id, order) for m in missing]
+    return [f"{name}: {m}" for name, missing in order_missing_by_product(db, tenant_id, order, overridden) for m in missing]
 
 
 # ---------------------------------------------------------------- pricelists

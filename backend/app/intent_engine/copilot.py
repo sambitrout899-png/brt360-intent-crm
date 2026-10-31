@@ -1169,11 +1169,12 @@ def recovery(db: Session, tenant_id: int, user: User, code: str | None, entities
     actions: list[tuple[str, str, dict[str, Any]]] = []
     if code == "INT-25" and (error or "").startswith("Set the technical attributes") and entities.get("order_id"):
         # approving needs the technical attributes provisioning uses - one action per product still missing some
-        from app.crm_core import product_config_service
+        from app.crm_core import feasibility_service, product_config_service
 
         order = db.get(Order, int(entities["order_id"]))
         if order is not None and order.tenant_id == tenant_id:
-            for product, missing in product_config_service.order_missing_by_product(db, tenant_id, order):
+            overridden = feasibility_service.order_overridden(db, tenant_id, order)
+            for product, missing in product_config_service.order_missing_by_product(db, tenant_id, order, overridden):
                 names = ", ".join(m.removesuffix(" is required") for m in missing)
                 actions.append(("INT-45", f"{product} still needs: {names}", {"order_id": order.id, "offering_name": product}))
     if code == "INT-18" and (error or "").startswith("Can't pass feasibility") and entities.get("opportunity_id"):

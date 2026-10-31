@@ -69,3 +69,41 @@ def test_existing_product_intents_follow_the_released_model(client):
     consumer = _run(client, "INT-41", name="Asha Home")["result"]["party_id"]
     order = _run(client, "INT-07", party_id=consumer, offering_name=BBI, pricing_attributes=GOOD)
     assert order["status"] == "failed" and "not eligible" in str(order)
+
+
+def _ordered(client, name, **feasibility):
+    """A Business Broadband deal through Presales (feasibility as given) to its order."""
+    _party, opp = _opportunity(client, name=name)
+    assert _run(client, "INT-37", opportunity_id=opp, offering_name=BBI, pricing_attributes=GOOD)["status"] == "executed"
+    _run(client, "INT-38", opportunity_id=opp, address="12 Ring Road")
+    assert _run(client, "INT-18", opportunity_id=opp, decision="feasible", **feasibility)["status"] == "executed"
+    quote_id = _run(client, "INT-05", opportunity_id=opp, offering_name=BBI)["result"]["quote_id"]
+    _run(client, "INT-06", quote_id=quote_id, decision="approve")
+    _run(client, "INT-39", quote_id=quote_id, po_number=f"PO-{name}")
+    _run(client, "INT-40", quote_id=quote_id)
+    db = client.TestSessionLocal()
+    try:
+        return db.query(Order).filter(Order.quote_id == quote_id).one().id
+    finally:
+        db.close()
+
+
+def test_inventory_override_leaves_inventory_references_to_fulfilment(client):
+    _setup(client)
+    _run(client, "INT-48", offering_name=BBI)
+
+    # the normal path: approval asks for every required technical attribute, inventory references included
+    plain = _ordered(client, "Normal Co")
+    blocked = _run(client, "INT-25", order_id=plain, decision="approve")
+    assert blocked["status"] == "failed" and "POP Location is required" in blocked["rationale"], blocked["rationale"]
+
+    # Presales overrode the inventory check: what provisioning takes from Inventory is assigned at fulfilment -
+    # approval still asks for what people fill in
+    overridden = _ordered(client, "Override Co", inventory_override=True, override_reason="Inventory down")
+    still = _run(client, "INT-25", order_id=overridden, decision="approve")
+    assert still["status"] == "failed" and "Use Existing Media is required" in still["rationale"], still["rationale"]
+    assert not any(ref in still["rationale"] for ref in ("POP Location", "Access Switch", "Access Port"))
+    assert "Use Existing Media" in still["next_actions"][0]["reason"]
+    assert _run(client, "INT-45", order_id=overridden, technical_attributes={"Use Existing Media": "No"})["status"] == "executed"
+    approved = _run(client, "INT-25", order_id=overridden, decision="approve")
+    assert approved["status"] == "executed", approved["rationale"]
