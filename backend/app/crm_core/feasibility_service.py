@@ -13,6 +13,7 @@ escalates - Jeopardy means "flag for a human," not auto-resolve.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -23,6 +24,7 @@ from app.models.feasibility import FeasibilityAssessment, FeasibilityCheckResult
 from app.models.sla import SlaClock
 from app.timeutils import utcnow
 
+logger = logging.getLogger(__name__)
 
 def run_assessment(db: Session, tenant_id: int, opportunity_id: int | None, locator: str, order_id: int | None = None) -> FeasibilityAssessment:
     """locator stands in for whatever a real check would key off - an
@@ -50,13 +52,26 @@ def run_assessment(db: Session, tenant_id: int, opportunity_id: int | None, loca
         # the site, and each resource the product needs there (what a reservation would give).
         from app.crm_core import inventory_service
 
-        view = inventory_service.opportunity_view(db, tenant_id, opportunity_id, locator)
+        try:
+            with db.begin_nested():
+                view = inventory_service.opportunity_view(db, tenant_id, opportunity_id, locator)
+        except Exception as exc:
+            # Inventory couldn't answer: undecided, not "not feasible" - Presales decides (and may override the inventory check)
+            if not isinstance(exc, ValueError):
+                logger.exception("Inventory check failed for opportunity %s", opportunity_id)
+            view = {"location": None, "checks": [], "holds": []}
+            any_pending = True
+            db.add(FeasibilityCheckResult(assessment_id=assessment.id, check_type_name="Network Inventory", resource_type="inventory",
+                                          outcome=FeasibilityOutcome.pending,
+                                          detail=f"Inventory couldn't be checked: {exc if isinstance(exc, ValueError) else 'it did not answer'}"
+                                                 " - Presales decides, and can override the inventory check"))
+        else:
+            db.add(FeasibilityCheckResult(assessment_id=assessment.id, check_type_name="Serving location", resource_type="location",
+                                          outcome=FeasibilityOutcome.passed if view["location"] else FeasibilityOutcome.failed,
+                                          detail=f"{view['location']} ({view['location_name']}) serves the site" if view["location"]
+                                          else f"No location in Inventory serves '{locator}'"))
+            any_failed = view["location"] is None
         held = {h["type_code"] for h in view["holds"]} | {h.get("resource_type") for h in view["holds"]}
-        db.add(FeasibilityCheckResult(assessment_id=assessment.id, check_type_name="Serving location", resource_type="location",
-                                      outcome=FeasibilityOutcome.passed if view["location"] else FeasibilityOutcome.failed,
-                                      detail=f"{view['location']} ({view['location_name']}) serves the site" if view["location"]
-                                      else f"No location in Inventory serves '{locator}'"))
-        any_failed = view["location"] is None
         for c in view["checks"]:
             ok = c["available"] is not False or c["resource_type"] in held
             any_failed = any_failed or not ok

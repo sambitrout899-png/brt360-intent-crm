@@ -30,6 +30,7 @@ original process unchanged.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Any
 
@@ -320,6 +321,15 @@ def presales_outcome(
     decision = str(entities.get("decision") or "").strip().lower().replace(" ", "_")
     outcome = {"feasible": "passed", "approve": "passed", "passed": "passed",
                "not_feasible": "failed", "infeasible": "failed", "reject": "failed", "failed": "failed"}.get(decision, assessment_outcome)
+    # Presales' manual override when Inventory is down or wrong: feasible without holding the network
+    override = str(entities.get("inventory_override") or "").strip().lower() in ("true", "1", "yes", "on")
+    reason = " ".join(str(entities.get("override_reason") or "").split())
+    if override:
+        if outcome == "failed" and decision:
+            raise ValueError("The inventory override passes feasibility - it can't go with 'not feasible'")
+        if not reason:
+            raise ValueError("Give the reason for overriding the inventory check")
+        outcome = "passed"
     config = process_service.opportunity_config(opportunity, create=True)
     if entities.get("notes"):
         config.feasibility_notes = entities["notes"]
@@ -344,11 +354,25 @@ def presales_outcome(
             # feasible means buildable: what the deal needs is held at the location serving the site
             # (what Presales already reserved is kept), and moves to the order created from the deal
             try:
-                held = inventory_service.hold_for_opportunity(db, tenant_id, opportunity.id, address=str(entities.get("address") or entities.get("site") or ""))
-            except ValueError as exc:
-                raise ValueError(f"Can't pass feasibility: {exc}") from exc
-            result["inventory_held"] = [f"{r['type']} {r['identifier']}" for r in held["held"]]
-            result["served_from"] = held["location"]
+                with db.begin_nested():  # all of it or nothing - an override keeps none of a half-made hold
+                    held = inventory_service.hold_for_opportunity(db, tenant_id, opportunity.id, address=str(entities.get("address") or entities.get("site") or ""))
+            except Exception as exc:
+                if not override:
+                    if not isinstance(exc, ValueError):
+                        raise
+                    raise ValueError(f"Can't pass feasibility: {exc} - if Inventory is down or wrong, "
+                                     "Presales can pass it with 'Override the inventory check' and a reason") from exc
+                if not isinstance(exc, ValueError):
+                    logging.getLogger(__name__).exception("Inventory hold failed for opportunity %s - overridden by Presales", opportunity.id)
+                result["inventory_override"] = {"reason": reason, "inventory_error": str(exc) if isinstance(exc, ValueError)
+                                                else "Inventory didn't answer"}
+            else:
+                result["inventory_held"] = [f"{r['type']} {r['identifier']}" for r in held["held"]]
+                result["served_from"] = held["location"]
+        if override:
+            result.setdefault("inventory_override", {"reason": reason})
+            note = f"Inventory check overridden by Presales: {reason}"
+            config.feasibility_notes = f"{config.feasibility_notes}\n{note}" if config.feasibility_notes else note
         request = gate(db, tenant_id, "opportunity", opportunity.id, "feasible", f"Feasibility sign-off for {opportunity.name}", actor(entities))
         if request is not None:
             result.update(waiting(request))

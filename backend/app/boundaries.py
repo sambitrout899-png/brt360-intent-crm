@@ -114,7 +114,7 @@ MODULES: tuple[Module, ...] = (
            uses=("crm", "telecom", "product", "c360", "metadata", "identity", "ai")),
     # Flow Studio: flows, processes, the function map, test runs.
     Module("flow", (
-        "orchestration.flow_*", "orchestration.process_*", "orchestration.function_map",
+        "orchestration.flow_*", "orchestration.process_*", "orchestration.function_map", "orchestration.use_cases", "models.use_cases",
         "crm_core.process_service", "crm_core.orchestration_mode_service", "crm_core.test_runner_service",
         "models.flows", "models.process", "models.orchestration_policy", "models.testing", "models.function_map",
         "models.change_control", "orchestration.change_control", "experience.routes_change",

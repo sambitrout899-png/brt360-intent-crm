@@ -1176,6 +1176,10 @@ def recovery(db: Session, tenant_id: int, user: User, code: str | None, entities
             for product, missing in product_config_service.order_missing_by_product(db, tenant_id, order):
                 names = ", ".join(m.removesuffix(" is required") for m in missing)
                 actions.append(("INT-45", f"{product} still needs: {names}", {"order_id": order.id, "offering_name": product}))
+    if code == "INT-18" and (error or "").startswith("Can't pass feasibility") and entities.get("opportunity_id"):
+        # Inventory couldn't hold what the deal needs: Presales can still pass it, with a reason
+        actions.append(("INT-18", "Inventory down or wrong? Pass feasibility with an inventory override and a reason",
+                        {"opportunity_id": entities["opportunity_id"], "decision": "feasible", "inventory_override": True}))
     out = []
     for next_code, why, prefill in actions:
         if intent_registry.availability(db, tenant_id, user, next_code):

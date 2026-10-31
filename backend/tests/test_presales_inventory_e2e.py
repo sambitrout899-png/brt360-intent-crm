@@ -178,6 +178,46 @@ def test_not_feasible_on_the_network(client):
     assert run(client, "INT-18", opportunity_id=short)["result"]["outcome"] == "failed"
 
 
+def test_presales_overrides_the_inventory_check(client, monkeypatch):
+    sample(client)
+    _launch(client, PRODUCT, price=3000)
+    _pattern_activating_after_the_field(client)
+    whitefield = "Plot 9, Whitefield, Bangalore 560066"  # no free port there: Inventory refuses the hold
+
+    opp_id = _deal_with_presales(client, "Override Co", site=whitefield)
+    blocked = run(client, "INT-18", opportunity_id=opp_id, decision="feasible")
+    assert blocked["status"] == "failed" and "Override the inventory check" in blocked["rationale"]
+    offered = blocked["next_actions"][0]  # the failed check offers the override, prefilled
+    assert offered["code"] == "INT-18" and offered["entities"] == {"opportunity_id": opp_id, "decision": "feasible", "inventory_override": True}
+
+    no_reason = run(client, "INT-18", **offered["entities"])
+    assert no_reason["status"] == "failed" and "reason for overriding" in no_reason["rationale"]
+    with_not_feasible = run(client, "INT-18", opportunity_id=opp_id, decision="not_feasible", inventory_override=True, override_reason="x")
+    assert with_not_feasible["status"] == "failed" and "can't go with 'not feasible'" in with_not_feasible["rationale"]
+
+    passed = run(client, "INT-18", **offered["entities"], override_reason="Inventory out of date - field team confirmed a free port")
+    assert passed["status"] == "executed" and passed["result"]["stage"] == "feasible", passed
+    override = passed["result"]["inventory_override"]
+    assert override["reason"].startswith("Inventory out of date") and "no free" in override["inventory_error"]
+    assert "inventory_held" not in passed["result"] and _held(client, opportunity_id=opp_id) == {}  # nothing half-held
+    assert "Inventory check overridden by Presales" in client.get(f"/api/opportunities/{opp_id}").json()["config"]["feasibility_notes"]
+    assert passed["next_actions"][0]["code"] == "INT-05"  # on to the quote
+
+    # Inventory down while checking: undecided (not "not feasible"), and the override still passes it
+    def down(*_a, **_k):
+        raise RuntimeError("connection refused")
+
+    monkeypatch.setattr(inv, "opportunity_view", down)
+    monkeypatch.setattr(inv, "hold_for_opportunity", down)
+    outage = _deal_with_presales(client, "Outage Co")
+    checked = run(client, "INT-18", opportunity_id=outage)
+    assert checked["status"] == "executed" and checked["result"]["outcome"] == "pending", checked
+    assert checked["result"]["stage"] == "in_feasibility" and "couldn't be checked" in checked["result"]["results"][0]["detail"]
+    forced = run(client, "INT-18", opportunity_id=outage, decision="feasible", inventory_override=True, override_reason="Inventory down")
+    assert forced["status"] == "executed" and forced["result"]["stage"] == "feasible", forced
+    assert forced["result"]["inventory_override"]["inventory_error"] == "Inventory didn't answer"
+
+
 def test_holds_go_back_when_the_deal_does(client):
     sample(client)
     _launch(client, PRODUCT, price=3000)
