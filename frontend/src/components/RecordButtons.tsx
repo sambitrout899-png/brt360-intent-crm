@@ -8,7 +8,8 @@ export function RecordButtonRow({ list, className, buttonClass }: { list: Record
   return (
     <div className={className ?? "flex flex-wrap gap-1.5"}>
       {list.map((b) => (
-        <button key={`${b.intent}-${b.label}`} type="button" onClick={() => runIntent(b.intent, b.entities)} className={buttonClass}>
+        <button key={`${b.intent}-${b.label}`} type="button" onClick={() => runIntent(b.intent, b.entities)} disabled={b.disabled}
+          title={b.reason} className={`${buttonClass} disabled:cursor-not-allowed disabled:opacity-40`}>
           {b.label}
         </button>
       ))}

@@ -1342,6 +1342,9 @@ export interface RecordButton {
   intent: string;
   entities: Record<string, unknown>;
   to_state?: string;
+  /** the deal has gone past this step (e.g. an order was created from the quote) - shown, but it can't be run */
+  disabled?: boolean;
+  reason?: string;
 }
 
 export interface TickerItem {

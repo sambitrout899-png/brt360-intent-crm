@@ -78,6 +78,9 @@ def build_int30_steps(db: Session, tenant_id: int, execution_id: int, entities: 
             raise ValueError(
                 f"Quote {quote.id} is still editable (state '{current}') - revise it in place (INT-19) or update it (INT-29)"
             )
+        over = lifecycle_service.taken_over(db, tenant_id, "quote", quote)
+        if over is not None:
+            raise ValueError(f"Quote {quote.id} can't be revised any more - {over[0]}; change the order instead")
         state["quote"] = quote
         return {"quote_id": quote.id, "state": current}
 

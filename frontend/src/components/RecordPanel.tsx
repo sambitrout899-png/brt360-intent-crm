@@ -423,9 +423,9 @@ export default function RecordPanel({
                             ? run(`${b.label} - ${record.entity_type} ${record.entity_id}`, "INT-31", b.entities)
                             : runIntent(b.intent, b.entities)
                         }
-                        disabled={busy}
-                        title={b.intent === "INT-31" ? "Moves the record to this state" : "Opens the guided form for this step"}
-                        className="rounded-md border border-sky-500/40 bg-sky-500/10 px-2.5 py-1 text-xs font-bold text-sky-400 hover:bg-sky-500/20 disabled:opacity-50"
+                        disabled={busy || b.disabled}
+                        title={b.reason ?? (b.intent === "INT-31" ? "Moves the record to this state" : "Opens the guided form for this step")}
+                        className="rounded-md border border-sky-500/40 bg-sky-500/10 px-2.5 py-1 text-xs font-bold text-sky-400 hover:bg-sky-500/20 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-sky-500/10"
                       >
                         {b.label}
                       </button>

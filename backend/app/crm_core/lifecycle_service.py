@@ -376,13 +376,41 @@ def _transition_applies(t: TransitionDef, current: str, model: ResolvedStateMode
     return t.from_state == current
 
 
+def taken_over(db: Session, tenant_id: int, entity_type: str, obj) -> tuple[str, frozenset[str]] | None:
+    """A record a later step of the deal has taken over: (why, the moves
+    still ahead of it). Its other moves are behind the deal - offered
+    disabled, and refused when asked for anyway."""
+    from app.models.crm import Opportunity, Quote
+    from app.models.orders import Order, OrderStatus
+
+    live = (Order.status.notin_((OrderStatus.cancelled, OrderStatus.rejected)),)
+    if entity_type == "quote":
+        order = db.query(Order.id).filter(Order.tenant_id == tenant_id, Order.quote_id == obj.id, *live).order_by(Order.id).first()
+        if order is not None:
+            return f"Order #{order.id} was created from this quote", frozenset()
+    elif entity_type == "opportunity":
+        order = (db.query(Order.id).join(Quote, Quote.id == Order.quote_id)
+                 .filter(Order.tenant_id == tenant_id, Quote.opportunity_id == obj.id, *live).order_by(Order.id).first())
+        if order is not None:
+            return f"Order #{order.id} was created from its quote", frozenset({"close_won"})
+    elif entity_type == "lead":
+        opp = db.query(Opportunity.id).filter(Opportunity.tenant_id == tenant_id, Opportunity.lead_id == obj.id).first()
+        if opp is not None:
+            return f"Opportunity #{opp.id} carries this lead on", frozenset()
+    return None
+
+
 def available_transitions(
-    db: Session, tenant_id: int, entity_type: str, obj, role: str | None, user_id: int | None = None
+    db: Session, tenant_id: int, entity_type: str, obj, role: str | None, user_id: int | None = None, include_passed: bool = False
 ) -> list[dict[str, Any]]:
+    """The moves open from the record's state. A move the deal has already
+    gone past (see taken_over) is left out - or, with include_passed, kept
+    with "passed": why."""
     model = resolve_state_model(db, tenant_id, entity_type)
     current = effective_state(db, tenant_id, entity_type, obj)
     base = built_in_status(db, entity_type, obj)
     app_roles = actor_app_roles(db, user_id)
+    over = taken_over(db, tenant_id, entity_type, obj)
     out = []
     for t in model.transitions:
         if not _transition_applies(t, current, model) or not t.allows_role(role, app_roles):
@@ -392,14 +420,12 @@ def available_transitions(
         # target is only reachable as "leave the custom sub-state".
         if entity_type == "party" and target.built_in and t.to_state != base:
             continue
-        out.append(
-            {
-                "action": t.action,
-                "to_state": t.to_state,
-                "to_label": target.label,
-                "intent_type": t.intent_type,
-            }
-        )
+        move = {"action": t.action, "to_state": t.to_state, "to_label": target.label, "intent_type": t.intent_type}
+        if over is not None and t.action not in over[1]:
+            if not include_passed:
+                continue
+            move["passed"] = over[0]
+        out.append(move)
     return out
 
 
@@ -427,6 +453,10 @@ def find_transition(
             f"No transition {action_norm or ''}{'->' + to_norm if to_norm else ''} from state '{current}' "
             f"in the {entity_type} state model (available: {allowed or 'none'})"
         )
+    over = taken_over(db, tenant_id, entity_type, obj)
+    if over is not None and not any(t.action in over[1] for t in candidates):
+        return None, f"{entity_type.capitalize()} {obj.id} can't '{candidates[0].action.replace('_', ' ')}' any more - {over[0]}"
+    candidates = [t for t in candidates if over is None or t.action in over[1]]
     app_roles = actor_app_roles(db, user_id)
     permitted = [t for t in candidates if t.allows_role(role, app_roles)]
     if not permitted:

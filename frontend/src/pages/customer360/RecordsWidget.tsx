@@ -20,11 +20,13 @@ function RecordLink({ entityType, id }: { entityType: EntityType; id: number }) 
   );
 }
 
-function Act({ label, onClick }: { label: string; onClick: () => void }) {
+function Act({ label, onClick, disabled, title }: { label: string; onClick: () => void; disabled?: boolean; title?: string }) {
   return (
     <button
       onClick={onClick}
-      className="rounded-md border px-2 py-0.5 text-[11px] font-bold transition hover:brightness-125"
+      disabled={disabled}
+      title={title}
+      className="rounded-md border px-2 py-0.5 text-[11px] font-bold transition hover:brightness-125 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:brightness-100"
       style={{ borderColor: "color-mix(in srgb, var(--c-accent) 45%, transparent)", color: "var(--c-accent)", background: "color-mix(in srgb, var(--c-accent) 10%, transparent)" }}
     >
       {label}
@@ -68,7 +70,7 @@ function Buttons({ list }: { list: RecordButton[] | undefined }) {
   return (
     <span className="ml-auto flex flex-wrap gap-1.5">
       {list.map((b) => (
-        <Act key={`${b.intent}-${b.label}`} label={b.label} onClick={() => runIntent(b.intent, b.entities)} />
+        <Act key={`${b.intent}-${b.label}`} label={b.label} onClick={() => runIntent(b.intent, b.entities)} disabled={b.disabled} title={b.reason} />
       ))}
     </span>
   );

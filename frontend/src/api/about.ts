@@ -48,7 +48,7 @@ export interface AboutRecord {
   related: AboutRelated[];
   sections: AboutSection[];
   timeline: { at: string; icon: string; title: string; detail: string; execution_id?: number }[];
-  actions: { intent: string; label: string; entities: Record<string, unknown> }[];
+  actions: { intent: string; label: string; entities: Record<string, unknown>; disabled?: boolean; reason?: string }[];
 }
 
 export function aboutRecord(entityType: EntityType, id: number): Promise<AboutRecord> {

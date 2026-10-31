@@ -44,6 +44,24 @@ def test_buttons_follow_the_state(client):
     # the record panel shows the very same buttons
     assert client.get(f"/api/records/quote/{quote}").json()["actions"] == approved
 
+    # an order is created from the quote: the steps the deal has passed are shown disabled, with the reason
+    run(client, "INT-39", quote_id=quote, po_number="PO-B1")
+    order = run(client, "INT-40", quote_id=quote)["result"]["order_id"]
+    after = client.get(f"/api/records/actions/party/{party}").json()
+    ordered = after[f"quote:{quote}"]
+    assert ordered and all(a.get("disabled") for a in ordered), ordered  # Revise -> Superseded among them
+    assert any(a["intent"] == "INT-30" and a["reason"] == f"Order #{order} was created from this quote" for a in ordered)
+    opp_buttons = {a["label"]: a for a in after[f"opportunity:{opp}"]}
+    assert not opp_buttons["Close won → Won"].get("disabled")  # what's still ahead stays enabled, and comes first
+    assert opp_buttons["Close lost → Lost"]["disabled"] and after[f"opportunity:{opp}"][0]["label"] == "Close won → Won"
+    # ... and asked for anyway, they are refused
+    revise = run(client, "INT-30", quote_id=quote, requested_discount_pct=1)
+    assert revise["status"] == "failed" and "can't be revised any more" in revise["rationale"]
+    lost = run(client, "INT-31", entity_type="opportunity", entity_id=opp, to_state="lost")
+    assert lost["status"] != "executed" and f"Order #{order} was created from its quote" in lost["rationale"], lost["rationale"]
+    won = run(client, "INT-31", entity_type="opportunity", entity_id=opp, to_state="won")
+    assert won["status"] == "executed", won
+
 
 def test_buttons_for_a_list_of_records(client):
     _launch(client)

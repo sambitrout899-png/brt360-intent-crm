@@ -177,12 +177,12 @@ export default function AboutRecordModal({ start, onClose }: { start: Ref; onClo
             <div className="mt-3 flex flex-wrap gap-2">
               {/* an approval decision is the approver's by position, whatever their roles (the server already checked) */}
               {data.actions.filter((a) => canRun(a.intent) || a.entities.decision !== undefined).slice(0, 6).map((a) => (
-                <button key={`${a.intent}-${a.label}`} type="button"
+                <button key={`${a.intent}-${a.label}`} type="button" disabled={a.disabled} title={a.reason}
                   onClick={() => {
                     onClose();
                     runIntent(a.intent, a.entities);
                   }}
-                  className="rounded-lg border border-sky-500/40 bg-sky-500/10 px-2.5 py-1 text-xs font-semibold text-sky-300 hover:bg-sky-500/20">
+                  className="rounded-lg border border-sky-500/40 bg-sky-500/10 px-2.5 py-1 text-xs font-semibold text-sky-300 hover:bg-sky-500/20 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-sky-500/10">
                   {a.label}
                 </button>
               ))}

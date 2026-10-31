@@ -152,15 +152,19 @@ def for_record(db: Session, tenant_id: int, user: User, entity_type: str, obj) -
     role = user.role.value
     actions: list[dict[str, Any]] = []
     key = f"{entity_type}_id"
-    for t in lifecycle_service.available_transitions(db, tenant_id, entity_type, obj, role, user.id):
+    for t in lifecycle_service.available_transitions(db, tenant_id, entity_type, obj, role, user.id, include_passed=True):
         if t["intent_type"]:
             extra = {"offering_name": obj.offering_name} if entity_type == "opportunity" and t["intent_type"] in ("INT-05", "INT-37") else {}
-            actions.append({"label": _label(t["action"], t["to_label"]), "intent": t["intent_type"], "to_state": t["to_state"],
-                            "entities": {key: obj.id, **extra, **_ACTION_ENTITIES.get(t["action"], {})}})
+            action = {"label": _label(t["action"], t["to_label"]), "intent": t["intent_type"], "to_state": t["to_state"],
+                      "entities": {key: obj.id, **extra, **_ACTION_ENTITIES.get(t["action"], {})}}
         else:
-            actions.append({"label": _label(t["action"], t["to_label"]), "intent": "INT-31", "to_state": t["to_state"],
-                            "entities": {"entity_type": entity_type, "entity_id": obj.id, "action": t["action"]}})
-    actions += _process_steps(db, entity_type, obj)
+            action = {"label": _label(t["action"], t["to_label"]), "intent": "INT-31", "to_state": t["to_state"],
+                      "entities": {"entity_type": entity_type, "entity_id": obj.id, "action": t["action"]}}
+        if t.get("passed"):  # the deal has gone past this move: shown, but it can't be run
+            action.update(disabled=True, reason=t["passed"])
+        actions.append(action)
+    over = lifecycle_service.taken_over(db, tenant_id, entity_type, obj)
+    actions += [{**s, "disabled": True, "reason": over[0]} if over else s for s in _process_steps(db, entity_type, obj)]
     if entity_type == "opportunity" and obj.stage.value == "feasible":
         actions = _feasible_by_map(db, tenant_id, user, obj, actions)
     if entity_type == "order" and obj.status.value == "activating" and role == "admin":
@@ -207,7 +211,7 @@ def for_record(db: Session, tenant_id: int, user: User, entity_type: str, obj) -
             continue
         seen.add(sig)
         out.append(a)
-    return out
+    return sorted(out, key=lambda a: bool(a.get("disabled")))  # what's ahead first, what the deal has passed after
 
 
 def for_party(db: Session, tenant_id: int, user: User, party_id: int, visible) -> dict[str, list[dict[str, Any]]]:
