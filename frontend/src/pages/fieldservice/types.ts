@@ -67,6 +67,7 @@ export interface FsActivity {
   work_order_id: number;
   brt_id: string | null;
   kind: string;
+  order_id?: number | null;
   ticket_id: number | null;
   party_id: number | null;
   party_name: string | null;

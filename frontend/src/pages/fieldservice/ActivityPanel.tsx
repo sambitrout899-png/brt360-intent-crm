@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { fsApi } from "../../api/client";
 import type { Candidate, FsActivity, Slot } from "./types";
+import NetworkAttributes from "./NetworkAttributes";
 import { BTN, BTN_DANGER, BTN_GO, BTN_PRIMARY, BTN_WARN, Chip, Field, INPUT, Notice, Panel, PriorityTag, StatusPill } from "./ui";
 import { CATEGORY_LABEL, fmtTime, fmtWhen, fromLocalInput, money, relative, toLocalInput, useAction } from "./style";
 
@@ -62,6 +63,10 @@ export default function ActivityPanel({ activityId, onChanged, onRequestIntent, 
             </button>
           )}
         </Panel>
+      )}
+
+      {a.order_id && a.category === "installation" && (
+        <NetworkAttributes workOrderId={a.work_order_id} editable={a.status !== "complete" && a.status !== "cancelled"} onSaved={after} />
       )}
 
       {schedulable && !fieldMode && <Scheduling a={a} act={act} />}

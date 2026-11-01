@@ -13,7 +13,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.access import check_party, require_page, visible_parties
-from app.auth import require_roles
+from app.auth import get_current_user, require_roles
 from app.crm_core import fs_inventory, fs_pm, fs_schedule, fs_service as fs
 from app.crm_core.access_service import Access
 from app.db import get_db
@@ -239,6 +239,35 @@ def swap_asset(activity_id: int, payload: Payload = Body(...), db: Session = Dep
 def complete(activity_id: int, payload: Payload = Body(default={}), db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)):
     return _do(db, lambda: (fs.complete(db, tenant_id, activity_id, str(payload.get("resolution_code") or ""), str(payload.get("notes") or ""),
                                         str(payload.get("signature") or "")), _act(db, tenant_id, activity_id))[1])
+
+
+NETWORK_AI_SECONDS = 60.0
+
+
+@router.get("/work-orders/{work_order_id}/network-attributes")
+def network_attributes(work_order_id: int, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)):
+    """The network attributes this order's installation needs, with the AI engine's defaults from the inventory
+    set-up for the product and access medium chosen on the quote (crm_core/network_guidance.py). Nothing is saved."""
+    from app.crm_core import llm, network_guidance
+
+    try:
+        with llm.budget(NETWORK_AI_SECONDS):
+            return network_guidance.propose(db, tenant_id, work_order_id)
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.post("/work-orders/{work_order_id}/network-attributes", dependencies=[_write])
+def save_network_attributes(work_order_id: int, payload: Payload = Body(...), db: Session = Depends(get_db),
+                            tenant_id: int = Depends(get_current_tenant_id), user: Any = Depends(get_current_user)):
+    """What the installation engineer confirmed - defaults kept or overridden - onto the order's technical attributes."""
+    from app.crm_core import network_guidance
+
+    products = payload.get("products") or []
+    if not isinstance(products, list):
+        raise HTTPException(400, "products is a list")
+    return _do(db, lambda: network_guidance.save(db, tenant_id, work_order_id, products, getattr(user, "name", "") or getattr(user, "email", "")))
 
 
 @router.post("/activities/{activity_id}/charges", dependencies=[_write])

@@ -199,6 +199,7 @@ class AttributeIn(BaseModel):
     default: str | None = None
     description: str | None = None
     price_impacts: list[dict[str, Any]] | None = None
+    capture_stage: str = "sales"  # sales | installation (network-level: set by the installation engineer)
 
 
 @admin_router.post("/{name}/attributes")
@@ -226,6 +227,47 @@ def delete_attribute(name: str, attribute: str, db: Session = Depends(get_db), t
         raise _bad(exc)
     db.commit()
     return {"change": changes[0], "tree": model.tree(db, tenant_id, root)}
+
+
+# ---------------------------------------------------------------- AI model guidance
+
+
+GUIDANCE_AI_SECONDS = 80.0
+
+
+@admin_router.post("/{name}/guidance")
+def model_guidance(name: str, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> dict[str, Any]:
+    """The AI engine's proposal for this product's pricing and service attributes - limited to what this product
+    type needs - and which existing ones are network-level (set at installation from Inventory). Nothing is saved."""
+    from app.crm_core import llm, model_guidance as guidance
+
+    root = _root(db, tenant_id, name)
+    try:
+        with llm.budget(GUIDANCE_AI_SECONDS):
+            return guidance.propose(db, tenant_id, root)
+    except ValueError as exc:
+        raise _bad(exc)
+
+
+class GuidanceApplyIn(BaseModel):
+    ops: list[dict[str, Any]] = Field(min_length=1)
+
+
+@admin_router.post("/{name}/guidance/apply")
+def apply_model_guidance(name: str, payload: GuidanceApplyIn, db: Session = Depends(get_db),
+                         tenant_id: int = Depends(get_current_tenant_id)) -> dict[str, Any]:
+    """The proposals the administrator kept, applied to the product's workspace (a live product keeps selling its
+    released version until a new one is released)."""
+    from app.crm_core import model_guidance as guidance
+
+    root = _root(db, tenant_id, name)
+    try:
+        result = guidance.apply(db, tenant_id, root, payload.ops)
+    except ValueError as exc:
+        db.rollback()
+        raise _bad(exc)
+    db.commit()
+    return {**result, "tree": model.tree(db, tenant_id, root)}
 
 
 # ---------------------------------------------------------------- import / export

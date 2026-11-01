@@ -24,6 +24,7 @@ import { INPUT_CLS } from "../components/intent/intentUi";
 import { ModelLifecycle, ProductClassesPanel } from "./AdminModelLifecycle";
 import InheritancePanel from "../components/products/InheritancePanel";
 import PriceFormulaBuilder from "../components/products/PriceFormulaBuilder";
+import ModelGuidancePanel from "../components/products/ModelGuidancePanel";
 import ProductPictureView from "../components/products/ProductPictureView";
 import { applyProductDesign, catalogProduct, planProductDesign, type ProductPicture } from "../api/client";
 import type { DesignPlan } from "../api/types";
@@ -68,7 +69,7 @@ function domainText(a: ModelAttribute) {
 type AttrDraft = {
   original?: string; name: string; component: string | null; affects_price: boolean; affects_provisioning: boolean; required: boolean;
   domain: "values" | "range" | "reference" | "text" | "yesno"; values: string; min: string; max: string; unit: string; reference_type: string;
-  default: string; description: string; impacts: string;
+  default: string; description: string; impacts: string; at_installation: boolean;
 };
 type CompDraft = {
   rename_from?: string; name: string; parent: string | null; description: string; mandatory: boolean; max_qty: string; charge_type: string; price: string;
@@ -76,13 +77,13 @@ type CompDraft = {
 };
 
 function attrDraft(a: ModelAttribute | null, component: string | null): AttrDraft {
-  if (!a) return { name: "", component, affects_price: false, affects_provisioning: true, required: false, domain: "values", values: "", min: "", max: "", unit: "", reference_type: "IP Address", default: "", description: "", impacts: "" };
+  if (!a) return { name: "", component, affects_price: false, affects_provisioning: true, required: false, domain: "values", values: "", min: "", max: "", unit: "", reference_type: "IP Address", default: "", description: "", impacts: "", at_installation: false };
   const yesno = a.values.length === 2 && a.values.join(",") === "Yes,No";
   return {
     original: a.name, name: a.name, component: a.component, affects_price: a.affects_price, affects_provisioning: a.affects_provisioning, required: a.required,
     domain: a.min !== null || a.max !== null ? "range" : a.reference_type ? "reference" : yesno ? "yesno" : a.values.length ? "values" : "text",
     values: a.values.join(", "), min: a.min?.toString() ?? "", max: a.max?.toString() ?? "", unit: a.unit ?? "", reference_type: a.reference_type ?? "IP Address",
-    default: a.default ?? "", description: a.description ?? "",
+    default: a.default ?? "", description: a.description ?? "", at_installation: a.capture_stage === "installation",
     impacts: a.price_impacts.map((i) => `${i.value}: ${i.type === "per_unit" ? `${i.amount} each` : `${i.amount >= 0 ? "+" : ""}${i.amount}${i.type === "percent" ? "%" : ""}`}`).join("; "),
   };
 }
@@ -110,6 +111,7 @@ function AttributeEditor({ draft, product, onDone, onCancel }: { draft: AttrDraf
         name: d.name.trim(), component: d.component, affects_price: d.affects_price, affects_provisioning: d.affects_provisioning, required: d.required,
         default: d.default || null, description: d.description || null, values: [], min: null, max: null, reference_type: null, unit: d.unit || null,
         price_impacts: d.affects_price ? parseImpacts(d.impacts) : [],
+        capture_stage: d.at_installation && !d.affects_price ? "installation" : "sales",
       };
       if (d.domain === "values") body.values = d.values.split(",").map((v) => v.trim()).filter(Boolean);
       if (d.domain === "yesno") body.values = ["Yes", "No"];
@@ -160,6 +162,9 @@ function AttributeEditor({ draft, product, onDone, onCancel }: { draft: AttrDraf
         </label>
         <label className="flex items-center gap-1.5">
           <input type="checkbox" checked={d.affects_provisioning} onChange={(e) => setD({ ...d, affects_provisioning: e.target.checked })} /> 🔧 Provisioning impact
+        </label>
+        <label className={`flex items-center gap-1.5 ${d.affects_price ? "opacity-40" : ""}`} title="Network-level: not asked on the quote or at order approval - the installation engineer sets it, prefilled from Inventory">
+          <input type="checkbox" disabled={d.affects_price} checked={d.at_installation && !d.affects_price} onChange={(e) => setD({ ...d, at_installation: e.target.checked })} /> 🛠 Set at installation
         </label>
       </div>
       {d.affects_price && (
@@ -257,6 +262,7 @@ function AttributeRow({ a, onEdit, onDelete }: { a: ModelAttribute; onEdit: () =
       <span className="ml-auto flex shrink-0 items-center gap-1 text-[10px]">
         {a.affects_price && <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 text-emerald-300" title="Pricing impact">💰 price{a.price_impacts.length ? ` (${a.price_impacts.length})` : ""}</span>}
         {a.affects_provisioning && <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-amber-300" title="Provisioning impact">🔧 provisioning</span>}
+        {a.capture_stage === "installation" && <span className="rounded bg-sky-500/15 px-1.5 py-0.5 text-sky-300" title="Set by the installation engineer, prefilled from Inventory">🛠 at installation</span>}
         <span className={`rounded px-1.5 py-0.5 ${a.required ? "bg-sky-500/15 text-sky-300" : "bg-slate-800 text-slate-400"}`}>{a.required ? "M" : "O"}</span>
         <button type="button" onClick={onDelete} className="px-1 text-slate-600 opacity-0 hover:text-red-400 group-hover:opacity-100" title="Remove">
           ×
@@ -282,6 +288,7 @@ export default function AdminProductModelSection() {
   const [busy, setBusy] = useState(false);
   const [ruleText, setRuleText] = useState<Record<string, string>>({});
   const [ruleCheck, setRuleCheck] = useState<Record<string, string>>({});
+  const [guidance, setGuidance] = useState(false);
 
   const loadList = useCallback(() => modelProducts().then(setList).catch((e) => setError(clean(e))), []);
   const open = useCallback((name: string) => {
@@ -567,6 +574,14 @@ export default function AdminProductModelSection() {
                 <span className="font-mono text-[10px] text-slate-500">{tree.brt_id}</span>
                 {status && <span className="text-xs text-emerald-400">{status}</span>}
                 <span className="ml-auto" />
+                <button
+                  type="button"
+                  onClick={() => (setGuidance((g) => !g), tab !== "structure" && setTab("structure"))}
+                  className={`rounded-lg px-3 py-1 text-xs font-semibold ${guidance ? "bg-fuchsia-500/20 text-fuchsia-200" : "border border-fuchsia-500/50 text-fuchsia-300"}`}
+                  title="The AI engine proposes the pricing and service attributes this product type needs"
+                >
+                  ✨ Guidance
+                </button>
                 {tree.status !== "active" && (
                   <button type="button" onClick={() => publishProduct(tree.name).then((t) => done(t, "Published - it can be sold now")).catch((e) => setError(clean(e)))} className="rounded-lg bg-emerald-600 px-3 py-1 text-xs font-semibold text-white">
                     Publish
@@ -587,6 +602,8 @@ export default function AdminProductModelSection() {
                   </button>
                 ))}
               </div>
+
+              {tab === "structure" && guidance && <ModelGuidancePanel key={tree.name} product={tree.name} onApplied={done} />}
 
               {tab === "structure" && (
                 <div className="space-y-2 rounded-xl border border-violet-500/30 bg-violet-500/5 p-3">

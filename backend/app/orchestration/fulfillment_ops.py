@@ -234,6 +234,13 @@ def op_close_work_order(db: Session, tenant_id: int, work_order_id: int) -> dict
         raise ValueError(f"Work order {work_order_id} not found")
     if work_order.kind == "tom":
         raise ValueError(f"Work order {work_order_id} belongs to a technical order (Fulfillment) - the engineer closes it in Field Service")
+    if work_order.kind == "installation":
+        from app.crm_core import network_guidance
+
+        missing = network_guidance.missing_for_work_order(db, tenant_id, work_order)
+        if missing:
+            raise ValueError("Set the network attributes the installation records first (Field Service -> the job -> Network attributes) - "
+                             + "; ".join(missing))
     work_order.status = "complete"
     db.flush()
     return {

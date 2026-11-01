@@ -1845,6 +1845,8 @@ export interface ModelAttribute {
   required: boolean;
   default: string | null;
   price_impacts: { value: string; type: "flat" | "percent" | "per_unit"; amount: number }[];
+  /** "installation" = network-level: set by the installation engineer, prefilled from Inventory */
+  capture_stage?: "sales" | "installation";
 }
 
 export interface ModelComponent {
@@ -1932,6 +1934,48 @@ export function saveModelAttribute(name: string, body: Record<string, unknown>):
 
 export function deleteModelAttribute(name: string, attribute: string): Promise<{ change: string; tree: ProductTree }> {
   return request(`/api/admin/product-model/${mp(name)}/attributes/${mp(attribute)}`, { method: "DELETE" });
+}
+
+/** AI model guidance (backend crm_core/model_guidance.py). */
+export interface GuidanceProposal {
+  id: number;
+  action: "add" | "update" | "keep" | "move_to_installation" | "remove";
+  name: string;
+  kind: "pricing" | "technical";
+  stage: "sales" | "installation";
+  group: "pricing" | "service" | "network";
+  op: Record<string, unknown> | null;
+  current: string | null;
+  change: string;
+  reason: string;
+  selected: boolean;
+}
+
+export interface ModelLiveState {
+  status: string;
+  released_version: number | null;
+  open_instances: number;
+  live: boolean;
+  note: string;
+}
+
+export interface ModelGuidance {
+  product: string;
+  product_type: string;
+  summary: string;
+  engine: string;
+  model: string;
+  live: ModelLiveState;
+  proposals: GuidanceProposal[];
+  notes: string[];
+}
+
+export function modelGuidance(name: string): Promise<ModelGuidance> {
+  return request(`/api/admin/product-model/${mp(name)}/guidance`, { method: "POST" });
+}
+
+export function applyModelGuidance(name: string, ops: Record<string, unknown>[]): Promise<{ applied: string[]; errors: string[]; live: ModelLiveState; tree: ProductTree }> {
+  return request(`/api/admin/product-model/${mp(name)}/guidance/apply`, { method: "POST", body: JSON.stringify({ ops }) });
 }
 
 export function importProducts(fileName: string, contentBase64: string, dryRun: boolean): Promise<{

@@ -76,7 +76,7 @@ MODULES: tuple[Module, ...] = (
     # Catalog, Product Modeller, configurator, pricing.
     Module("product", (
         "crm_core.catalog_service", "crm_core.product_*", "crm_core.configurator", "crm_core.price_formula",
-        "crm_core.model_lifecycle", "crm_core.instance_service", "models.catalog", "models.product_*",
+        "crm_core.model_lifecycle", "crm_core.model_guidance", "crm_core.instance_service", "models.catalog", "models.product_*",
         "experience.routes_catalog", "experience.routes_product_*", "experience.routes_configurator",
         "schemas.catalog", "orchestration.actions", "orchestration.actions_config",
         "orchestration.actions_configurator", "integration.tmf620_adapter", "services.product",
@@ -98,7 +98,7 @@ MODULES: tuple[Module, ...] = (
     Module("telecom", (
         "crm_core.order_service", "crm_core.om_service", "crm_core.b2c_order_service", "crm_core.abo_service",
         "crm_core.feasibility_service", "crm_core.ponr_service", "crm_core.fs_*", "crm_core.field_service",
-        "crm_core.inventory_*", "crm_core.sla_service", "crm_core.ticket_service", "crm_core.comm_*",
+        "crm_core.inventory_*", "crm_core.network_guidance", "crm_core.sla_service", "crm_core.ticket_service", "crm_core.comm_*",
         "models.orders", "models.order_mgmt", "models.fulfillment*", "models.inventory", "models.field_service",
         "models.abo", "models.feasibility", "models.ponr", "models.sla", "models.assurance", "models.comms",
         "experience.routes_order_mgmt", "experience.routes_fulfillment", "experience.routes_inventory*",

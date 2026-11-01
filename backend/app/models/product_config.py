@@ -36,6 +36,7 @@ ATTRIBUTE_KINDS = ("pricing", "technical")
 IMPACT_TYPES = ("flat", "percent", "per_unit")
 RULE_EFFECTS = ("required", "requires", "excludes")
 RULE_OPERATORS = ("eq", "ne", "gt", "gte", "lt", "lte", "any")
+CAPTURE_STAGES = ("sales", "installation")
 
 
 class OfferingAttribute(Base):
@@ -72,6 +73,10 @@ class OfferingAttribute(Base):
     reference_type: Mapped[str | None] = mapped_column(String(60), nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     unit: Mapped[str | None] = mapped_column(String(30), nullable=True)  # this product's unit (None = the attribute's)
+    # When its value is captured: "sales" (None - on the opportunity / quote) or "installation" (network-level:
+    # the installation engineer sets it during service provisioning, prefilled from Inventory - see
+    # crm_core/network_guidance.py; never asked for while selling or at order approval).
+    capture_stage: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
     definition: Mapped[ProductAttributeDefinition] = relationship()
     price_impacts: Mapped[list["AttributePriceImpact"]] = relationship(

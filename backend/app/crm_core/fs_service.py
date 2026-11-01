@@ -847,6 +847,7 @@ def activity_out(db: Session, act: FsActivity, full: bool = False) -> dict[str, 
         status = "unscheduled"
     out = {
         "id": act.id, "work_order_id": act.work_order_id, "brt_id": getattr(wo, "brt_id", None), "kind": wo.kind if wo else "field_dispatch",
+        "order_id": wo.order_id if wo else None,
         "ticket_id": act.ticket_id, "party_id": act.party_id, "party_name": party.name if party else None,
         "asset_id": act.asset_id, "asset_label": asset_label(db, asset) if asset else None, "subject": act.subject,
         "category": act.category, "priority": act.priority, "priority_label": PRIORITIES.get(act.priority, "Medium"),
@@ -1121,6 +1122,12 @@ def complete(db: Session, tenant_id: int, activity_id: int, resolution_code: str
     tech = assigned_technician(db, wo)
     if tech is None:
         raise ValueError("Assign an engineer first")
+    if wo.kind == "tom" and wo.order_id and act.category == "installation":
+        from app.crm_core import network_guidance
+
+        missing = network_guidance.missing_for_work_order(db, tenant_id, wo)
+        if missing:
+            raise ValueError("Set the network attributes first (Network attributes on this job) - " + "; ".join(missing))
     now = _when(at) or utcnow()
     _stop(_open_entry(db, act, "travel"), now)
     _stop(_open_entry(db, act, "work"), now)

@@ -28,6 +28,7 @@ from app.models.crm import Opportunity, Party, Quote
 from app.models.process import PriceList
 from app.models.product_config import (
     ATTRIBUTE_KINDS,
+    CAPTURE_STAGES,
     IMPACT_TYPES,
     RULE_EFFECTS,
     AttributePriceImpact,
@@ -103,7 +104,14 @@ def _attribute_out(row: OfferingAttribute, components: dict[int, dict[str, Any]]
         "visible_when": loads(row.visible_when_json) or None,
         "sequence": row.sequence,
         "price_impacts": [{"value": i.value, "type": i.impact_type, "amount": i.amount} for i in row.price_impacts],
+        "capture_stage": row.capture_stage or "sales",
     }
+
+
+def at_installation(attr: dict[str, Any] | None) -> bool:
+    """A network-level attribute: set by the installation engineer during service provisioning (prefilled from
+    Inventory), never asked for while selling or at order approval. Snapshots older than capture_stage are all sales."""
+    return bool(attr) and attr.get("capture_stage") == "installation"
 
 
 def components_of(db: Session, tenant_id: int, offering_name: str) -> list[dict[str, Any]]:
@@ -183,6 +191,8 @@ def _merge(parent: dict[str, Any], row: OfferingAttribute, child: dict[str, Any]
         if value not in (None, ""):
             out[field] = value
     out["kind"] = row.kind
+    if row.capture_stage:
+        out["capture_stage"] = row.capture_stage
     if row.affects_price is not None:
         out["affects_price"] = bool(row.affects_price)
     if row.affects_provisioning is not None:
@@ -535,7 +545,10 @@ def _compare(op: str, actual: Any, expected: Any) -> bool:
     return same if op == "eq" else (not same if op == "ne" else False)
 
 
-def validate(design: dict[str, Any], pricing: dict[str, Any], technical: dict[str, Any], require_technical: bool) -> list[str]:
+def validate(design: dict[str, Any], pricing: dict[str, Any], technical: dict[str, Any], require_technical: bool,
+             installation: bool = False) -> list[str]:
+    """installation=False (selling, order approval): network-level attributes (at_installation) are never required -
+    the installation engineer sets them. installation=True: they are, too."""
     errors: list[str] = []
     if not design["designed"]:
         return errors
@@ -544,6 +557,8 @@ def validate(design: dict[str, Any], pricing: dict[str, Any], technical: dict[st
         if not attr["required"] or not _visible(attr, chosen, design):
             continue
         if attr["kind"] == "technical" and not require_technical:
+            continue
+        if at_installation(attr) and not installation:
             continue
         if chosen.get(attr["name"]) in (None, ""):
             errors.append(f"{attr['name']} is required")
@@ -554,6 +569,8 @@ def validate(design: dict[str, Any], pricing: dict[str, Any], technical: dict[st
         target = _find(design["attributes"], rule["then_attribute"])
         if target is not None and target["kind"] == "technical" and not require_technical:
             continue
+        if at_installation(target) and not installation:
+            continue
         then = next((v for k, v in chosen.items() if _key(k) == _key(rule["then_attribute"])), None)
         why = rule["message"] or f"{rule['if_attribute']} {rule['if_value'] or ''}".strip()
         if rule["effect"] == "required" and then in (None, ""):
@@ -562,7 +579,7 @@ def validate(design: dict[str, Any], pricing: dict[str, Any], technical: dict[st
             errors.append(f"{rule['then_attribute']} must be {rule['then_value']} when {why}")
         elif rule["effect"] == "excludes" and then is not None and _key(then) == _key(rule["then_value"]):
             errors.append(f"{rule['then_attribute']} can't be {rule['then_value']} when {why}")
-    errors += constraint_errors(design, chosen, require_technical)
+    errors += constraint_errors(design, chosen, require_technical, installation)
     return errors
 
 
@@ -643,7 +660,7 @@ def _is_technical_only(design: dict[str, Any], name: str) -> bool:
     return attr is not None and attr["kind"] == "technical"
 
 
-def constraint_errors(design: dict[str, Any], chosen: dict[str, Any], require_technical: bool = True) -> list[str]:
+def constraint_errors(design: dict[str, Any], chosen: dict[str, Any], require_technical: bool = True, installation: bool = False) -> list[str]:
     errors: list[str] = resource_errors(design, chosen)
     for rule in design.get("constraints", []):
         if rule.get("resource") or rule.get("recommend") or rule.get("say"):
@@ -653,6 +670,8 @@ def constraint_errors(design: dict[str, Any], chosen: dict[str, Any], require_te
         for then in rule.get("then") or []:
             target = then.get("require") or then.get("exclude") or then.get("field")
             if not target or (not require_technical and _is_technical_only(design, target)):
+                continue
+            if not installation and at_installation(_find(design["attributes"], target)):
                 continue
             value = _value_of(design, chosen, target)
             if "require" in then and value in (None, "", 0):
@@ -788,6 +807,11 @@ def missing_technical(db: Session, tenant_id: int, offering_name: str, pricing: 
                       design: dict[str, Any] | None = None) -> list[str]:
     design = design or schema(db, tenant_id, offering_name)
     return [e for e in validate(design, pricing, technical, True) if e not in validate(design, pricing, technical, False)]
+
+
+def missing_at_installation(design: dict[str, Any], pricing: dict[str, Any], technical: dict[str, Any]) -> list[str]:
+    """What the installation engineer still has to set: required network-level attributes (and rules on them)."""
+    return [e for e in validate(design, pricing, technical, True, installation=True) if e not in validate(design, pricing, technical, True)]
 
 
 def technical_text(technical: dict[str, Any]) -> str:
@@ -1023,6 +1047,13 @@ def _upsert_attribute(db: Session, tenant_id: int, offering_name: str, op: dict[
             setattr(row, column, None if op[field] in (None, "") else float(op[field]))
     if "reference_type" in op:
         row.reference_type = op["reference_type"] or None
+    if "capture_stage" in op:
+        stage = str(op["capture_stage"] or "sales").lower()
+        if stage not in CAPTURE_STAGES:
+            raise ValueError(f"{name}: captured at {' or '.join(CAPTURE_STAGES)}")
+        if stage == "installation" and row.kind == "pricing":
+            raise ValueError(f"{name}: a pricing attribute is chosen while selling - it can't wait for installation")
+        row.capture_stage = None if stage == "sales" else stage
     if op.get("unit") and op["unit"] != definition.unit:
         row.unit = op["unit"]
     if "description" in op:
