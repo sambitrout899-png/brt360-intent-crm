@@ -68,7 +68,15 @@ def _audit_chain() -> None:
         audit_chain.extend(db)
 
 
+def _licensing() -> None:
+    # subscriptions whose trial / term ended or whose invoices are overdue change status (every 15 minutes)
+    from app.crm_core import subscription_service
+
+    subscription_service.run_due(SessionLocal)
+
+
 JOBS = (
+    ("Licensing", _licensing),
     ("Inventory scheduler", _inventory_sync),
     ("Inventory reservation expiry", _reservation_expiry),
     ("Training scheduler", _training),

@@ -47,7 +47,7 @@ MODULES: tuple[Module, ...] = (
         "capabilities", "boundaries", "licensing", "service", "ratelimit", "services", "",
         "data_intelligence.event_bus", "data_intelligence", "models.auth", "models.tenant",
         "schemas", "experience", "orchestration", "intent_engine", "crm_core", "integration",
-        "experience.routes_modules",
+        "experience.routes_modules", "crm_core.subscription_service", "models.subscriptions",
     )),
     # Wires everything together - the one place allowed to import it all
     # (app.models gathers every table for the migrations).
@@ -61,7 +61,7 @@ MODULES: tuple[Module, ...] = (
     Module("identity", (
         "access", "crm_core.identity_service", "crm_core.login_*", "crm_core.access_service", "crm_core.org_policy",
         "models.identity", "models.org", "experience.routes_auth", "experience.routes_org",
-        "experience.routes_tenants", "schemas.auth", "schemas.org", "orchestration.actions_identity",
+        "experience.routes_tenants", "experience.routes_licensing", "schemas.auth", "schemas.org", "orchestration.actions_identity",
     ), uses=("audit",)),
     # Page Designer, custom records and fields, the generic record APIs,
     # record lifecycles and approvals.

@@ -4,6 +4,7 @@ import { createTenant, listTenants, logout, updateTenant } from "../api/client";
 import { TENANT_VERTICALS } from "../api/types";
 import type { Tenant } from "../api/types";
 import { BrtLogo } from "../components/shell/BrtBrand";
+import PlatformLicensing from "../components/licensing/PlatformLicensing";
 
 const MAX_LOGO_KB = 512;
 const FIELD = "mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200";
@@ -168,6 +169,7 @@ export default function PlatformAdminPage({ onLoggedOut }: { onLoggedOut: () => 
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<number | null>(null);
   const [saved, setSaved] = useState("");
+  const [view, setView] = useState<"tenants" | "licensing">("tenants");
 
   function load() {
     listTenants().then(setTenants);
@@ -204,8 +206,8 @@ export default function PlatformAdminPage({ onLoggedOut }: { onLoggedOut: () => 
   }
 
   return (
-    <div className="min-h-screen bg-slate-950 px-6 py-10">
-      <div className="mx-auto max-w-4xl space-y-6">
+    <div className="min-h-screen bg-slate-950 px-4 py-10 sm:px-6">
+      <div className={`mx-auto space-y-6 ${view === "licensing" ? "max-w-7xl" : "max-w-4xl"}`}>
         <BrtLogo className="h-8" />
         <div className="flex items-center justify-between">
           <div>
@@ -226,6 +228,17 @@ export default function PlatformAdminPage({ onLoggedOut }: { onLoggedOut: () => 
           </button>
         </div>
 
+        <div className="inline-flex rounded-xl border border-slate-800 bg-slate-900/60 p-1">
+          {([["tenants", "🏢 Tenants"], ["licensing", "💳 Licensing & Billing"]] as const).map(([id, label]) => (
+            <button key={id} type="button" onClick={() => setView(id)}
+                    className={`rounded-lg px-4 py-1.5 text-sm font-semibold ${view === id ? "bg-sky-600 text-white" : "text-slate-400 hover:text-slate-200"}`}>
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {view === "licensing" ? <PlatformLicensing /> : (
+        <>
         {saved && <p className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">{saved}</p>}
         <div className="space-y-2">
           {tenants.map((t) => (
@@ -303,6 +316,8 @@ export default function PlatformAdminPage({ onLoggedOut }: { onLoggedOut: () => 
             Create Tenant
           </button>
         </div>
+        </>
+        )}
       </div>
     </div>
   );

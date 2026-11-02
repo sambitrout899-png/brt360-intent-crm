@@ -82,9 +82,10 @@ import AdminOrderMgmtSection from "./AdminOrderMgmtSection";
 import AdminFulfillmentSection from "./AdminFulfillmentSection";
 import AdminCommsSection from "./AdminCommsSection";
 import AdminProductModelSection from "./AdminProductModelSection";
+import AdminLicensesSection from "./AdminLicensesSection";
 import AttributeLibrary from "./AdminAttributeLibrary";
 
-type Section = "releases" | "functionmap" | "conflicts" | "org" | "access" | "intents" | "pages" | "bim" | "productmodel" | "lifecycle" | "assignment" | "customfields" | "recordtypes" | "flows" | "approvals" | "broadcasts" | "roles" | "pricelists" | "productconfig" | "sla" | "attributes" | "identity" | "ponr" | "feasibility" | "orchestration" | "ai" | "users" | "tests" | "ordermgmt" | "fulfillment" | "comms" | "quotedocs";
+type Section = "releases" | "functionmap" | "conflicts" | "org" | "access" | "intents" | "pages" | "bim" | "productmodel" | "lifecycle" | "assignment" | "customfields" | "recordtypes" | "flows" | "approvals" | "broadcasts" | "roles" | "pricelists" | "productconfig" | "sla" | "attributes" | "identity" | "ponr" | "feasibility" | "orchestration" | "ai" | "users" | "tests" | "ordermgmt" | "fulfillment" | "comms" | "quotedocs" | "licenses";
 
 const CLOCK_STATUS_STYLES: Record<string, string> = {
   running: "bg-sky-500/15 text-sky-400 border-sky-500/30",
@@ -1246,6 +1247,7 @@ const NAV: NavGroup[] = [
   {
     title: "Platform", icon: "🛠️", blurb: "AI, identity verification and quality.",
     items: [
+      { id: "licenses", label: "Licenses & Billing", icon: "💳", hint: "Your subscription, seats and who holds them, limits, invoices - ask for more", wide: "lg" },
       { id: "releases", label: "Releases & Workspaces", icon: "🚀", hint: "Admins' workspaces, locks, and the releases the root administrator deploys or rolls back", wide: "lg" },
       { id: "ai", label: "AI Settings", icon: "🤖", hint: "Which AI model the platform uses" },
       { id: "identity", label: "Identity Providers", icon: "🪪", hint: "KYC / ID verification services" },
@@ -1440,6 +1442,7 @@ export default function AdminPage({ onAccessChanged }: { onAccessChanged?: () =>
           {section === "orchestration" && <OrchestrationPoliciesSection />}
           {section === "ai" && <AdminAiSection />}
           {section === "users" && <UsersSection />}
+          {section === "licenses" && <AdminLicensesSection />}
           {section === "tests" && <TestSuiteSection />}
         </main>
       </div>

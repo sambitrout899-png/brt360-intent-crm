@@ -2290,6 +2290,15 @@ export function fsApi<T = unknown>(path: string, method: "GET" | "POST" | "PUT" 
   return apiCall<T>(`/api/field-service${path}`, method, body);
 }
 
+/** Licensing & billing - platform admin (/api/platform/licensing/*) and an organization's admin (/api/licensing/*).
+ *  See backend crm_core/subscription_service.py. */
+export function platformLicApi<T = unknown>(path: string, method: "GET" | "POST" | "PUT" | "DELETE" = "GET", body?: unknown): Promise<T> {
+  return apiCall<T>(`/api/platform/licensing${path}`, method, body);
+}
+export function licApi<T = unknown>(path = "", method: "GET" | "POST" | "PUT" | "DELETE" = "GET", body?: unknown): Promise<T> {
+  return apiCall<T>(`/api/licensing${path}`, method, body);
+}
+
 /** Network Inventory API (/api/inventory/*) - see backend crm_core/inventory_service.py. */
 export function invApi<T = unknown>(path: string, method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE" = "GET", body?: unknown): Promise<T> {
   return apiCall<T>(`/api/inventory${path}`, method, body);

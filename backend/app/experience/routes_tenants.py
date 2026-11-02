@@ -45,6 +45,12 @@ router = APIRouter(
 )
 
 
+def seed_if_gained(db: Session, tenant_id: int, change: dict | None) -> None:
+    """Telecom reference data the first time an organization gains Telecom CRM (from a licence change)."""
+    if change and "telecom_crm" in change["after"] and "telecom_crm" not in change["before"]:
+        seed_reference_data(db, tenant_id)
+
+
 @router.get("/tenants", response_model=list[TenantOut])
 def list_tenants(db: Session = Depends(get_db)) -> list[Tenant]:
     return db.query(Tenant).order_by(Tenant.name).all()

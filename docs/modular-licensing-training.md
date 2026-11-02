@@ -26,9 +26,42 @@ development entitlement; embedded Telecom actions still require Telecom CRM.
 
 Existing tenants with NULL entitlements retain their former Telecom and builder
 access. New tenants default to Telecom CRM only, unless another selection is
-made. Telecom reference data is seeded when Telecom is first activated. Licenses
-are organization-level feature entitlements; pricing, invoicing, seat quotas and
-commercial expiration dates are not implemented.
+made. Telecom reference data is seeded when Telecom is first activated.
+
+### Commercial licensing (subscriptions, seats, pricing, invoices)
+
+Platform Admin → **Licensing & Billing** (`app/models/subscriptions.py`,
+`app/crm_core/subscription_service.py`, `app/experience/routes_licensing.py`):
+
+- **Products & Pricing** - the catalog: Core platform, Core user licence, each
+  service, add-ons (AI credits, storage, sandbox, premier support). Each product
+  grants modules, is sold per user / per organization / per pack, has a list price
+  per unit per month in every platform currency, an annual-term discount,
+  quantity bounds, requirements and limits. **Editions** bundle products as the
+  starting point of a subscription. All prices are the platform admin's to set.
+- **Subscriptions** - per organization: edition, status, term, billing cycle,
+  currency, contract / line discounts, negotiated prices, tax, grace period,
+  auto-renewal, billing details; MRR, ARR, per-period and term value.
+- **Seats** - a per-user product's seats are assigned to users. Every active user
+  needs a Core user licence (a new user is refused when none is free; a
+  deactivated user's seats are released). A per-user service opens its module only
+  for users holding its seat (route checks, navigation, `/api/modules`); intents
+  and flows stay checked at organization level.
+- **Lifecycle** (scheduler, every 15 minutes): trial → expired; term end →
+  renewed (auto-renew) or past due → expired after the grace period; an overdue
+  invoice → past due → suspended after the grace period, active again once paid.
+  Trial, active and past due grant modules; the rest grant none - data is kept.
+- **Invoices** per billing period, numbered, with tax and bill-to details; mark
+  paid / void. **Requests** from an organization's admin (more seats, a product,
+  renewal) - approving adds them to the contract. Every change is in the history.
+
+The subscription writes the organization's module list (`tenants.licensed_modules`)
+whenever it changes, so enforcement is the per-request check described above. An
+organization **without** a subscription keeps its module list and behaves exactly
+as before. Its administrator sees everything (no internal notes) under Admin →
+Platform → **Licenses & Billing**, assigns seats there and asks for more.
+Payments are recorded by hand (no payment gateway); storage and API-call usage
+are shown as limits only (not metered yet).
 
 Server checks protect direct module APIs, intent availability, shared lookup/form
 APIs and flow actions. Navigation and admin sections reflect licenses, intersected

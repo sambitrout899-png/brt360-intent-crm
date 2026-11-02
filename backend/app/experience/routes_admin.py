@@ -809,6 +809,15 @@ def create_user(
         role=UserRole(payload.role),
     )
     db.add(user)
+    db.flush()
+    # a new user takes a Core user licence when the organization has a subscription (crm_core/subscription_service.py)
+    from app.crm_core import subscription_service
+
+    try:
+        subscription_service.on_user_created(db, user, "user created")
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(400, str(exc))
     db.commit()
     db.refresh(user)
     return user
@@ -820,6 +829,9 @@ def deactivate_user(user_id: int, db: Session = Depends(get_db), tenant_id: int 
     if user is None or user.tenant_id != tenant_id:
         raise HTTPException(404, "User not found")
     user.is_active = False
+    from app.crm_core import subscription_service
+
+    subscription_service.on_user_deactivated(db, user, "user deactivated")
     db.commit()
     db.refresh(user)
     return user

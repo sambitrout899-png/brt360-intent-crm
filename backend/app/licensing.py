@@ -43,8 +43,24 @@ def require_module(db, tenant_id, module):
         raise HTTPException(403, f'{MODULES[module]["label"]} is not licensed for this organization')
 
 
-def licensed_pages(db, user, pages):
+def user_enabled(db, user):
+    """The modules this user may use: the organization's, narrowed - when it has a subscription - to the
+    per-user services the user holds a seat of (crm_core/subscription_service.py)."""
     modules = enabled(db, user.tenant_id)
+    from app.crm_core import subscription_service
+
+    allowed = subscription_service.user_modules(db, user)
+    return modules if allowed is None else modules & allowed
+
+
+def require_user_module(db, user, module):
+    require_module(db, user.tenant_id, module)
+    if module not in user_enabled(db, user):
+        raise HTTPException(403, f'You have no {MODULES[module]["label"]} licence - ask your administrator to assign you one')
+
+
+def licensed_pages(db, user, pages):
+    modules = user_enabled(db, user)
     return [p for p in pages if (p not in TELECOM_PAGES or 'telecom_crm' in modules)
             and (not p.startswith('training') or 'training_management' in modules)
             and (p != 'records' or 'custom_development' in modules)]
@@ -94,7 +110,7 @@ def route_module(request):
 
 def license_guard(module):
     def check(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-        require_module(db, user.tenant_id, module)
+        require_user_module(db, user, module)
     return check
 
 

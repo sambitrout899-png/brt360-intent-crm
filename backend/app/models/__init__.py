@@ -146,10 +146,30 @@ from app.models.product_config import (
     QuoteTerms,
 )
 from app.models.sla import SlaClock, SlaClockStatus, SlaPolicy
+from app.models.subscriptions import (
+    LicenseEdition,
+    LicenseEvent,
+    LicenseInvoice,
+    LicenseProduct,
+    LicenseRequest,
+    LicensingSettings,
+    SubscriptionLine,
+    TenantSubscription,
+    UserLicense,
+)
 from app.models.tenant import Tenant, TenantVertical
 from app.models.testing import TestRun, TestRunStatus
 
 __all__ = [
+    "LicenseEdition",
+    "LicenseEvent",
+    "LicenseInvoice",
+    "LicenseProduct",
+    "LicenseRequest",
+    "LicensingSettings",
+    "SubscriptionLine",
+    "TenantSubscription",
+    "UserLicense",
     "AiSettings",
     "AnalyticsReport",
     "Tenant",
