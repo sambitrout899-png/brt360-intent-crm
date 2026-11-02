@@ -14,7 +14,7 @@ MODULES = {
     'custom_development': {'label': 'Custom Development', 'kind': 'primitive', 'description': 'Custom intents, fields and process building'},
 }
 LEGACY_MODULES = ['telecom_crm', 'flow_studio', 'page_designer', 'custom_development']
-TELECOM_PAGES = {'dashboard', 'mywork', 'customer', 'pipeline', 'orders', 'tickets', 'field', 'inventory', 'catalog', 'analytics'}
+TELECOM_PAGES = {'dashboard', 'mywork', 'customer', 'pipeline', 'orders', 'tickets', 'field', 'inventory', 'mobile', 'catalog', 'analytics'}
 
 
 def validate_modules(values):
@@ -80,7 +80,7 @@ def intent_module(code):
 # stay available. Authoring tools require their own entitlement.
 TELECOM_ROUTERS = {'routes_catalog', 'routes_crm', 'routes_records', 'routes_c360',
     'routes_product_config', 'routes_configurator', 'routes_product_model', 'routes_bim',
-    'routes_field_service', 'routes_order_mgmt', 'routes_comms', 'routes_inventory_sync', 'routes_fulfillment', 'routes_inventory', 'routes_analytics'}
+    'routes_field_service', 'routes_order_mgmt', 'routes_comms', 'routes_inventory_sync', 'routes_fulfillment', 'routes_inventory', 'routes_mobile', 'routes_analytics'}
 
 
 def route_module(request):

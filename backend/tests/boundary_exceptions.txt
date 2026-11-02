@@ -138,6 +138,7 @@ app.orchestration.actions_lifecycle -> crm
 app.orchestration.actions_lifecycle -> flow
 app.orchestration.actions_lifecycle -> intent
 app.orchestration.actions_lifecycle -> product
+app.orchestration.actions_mobile -> intent
 app.orchestration.actions_o2a -> flow
 app.orchestration.actions_o2a -> intent
 app.orchestration.actions_offering_order -> intent

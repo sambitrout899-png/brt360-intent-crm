@@ -39,7 +39,7 @@ from sqlalchemy.orm import Session
 from app.crm_core import access_service, lifecycle_service, record_service
 from app.crm_core.b2c_order_service import is_b2c
 from app.crm_core.access_service import Access
-from app.intent_engine import abo_intents, b2c_intents, classifier, comm_intents, config_intents, context_assembly, intent_registry, om_intents, fulfillment_intents, inventory_intents, quote_intents, reasoning, sto_intents, understanding
+from app.intent_engine import abo_intents, b2c_intents, classifier, comm_intents, config_intents, context_assembly, intent_registry, om_intents, fulfillment_intents, inventory_intents, mobile_intents, quote_intents, reasoning, sto_intents, understanding
 from app.models.assurance import TroubleTicket, WorkOrder
 from app.models.auth import User
 from app.models.catalog import OfferingStatus, ProductOffering
@@ -1076,6 +1076,7 @@ _NEXT.update({k: v for k, v in abo_intents.NEXT.items() if k not in _NEXT})
 _NEXT.update({k: v for k, v in quote_intents.NEXT.items() if k not in _NEXT})
 _NEXT.update({k: v for k, v in fulfillment_intents.NEXT.items() if k not in _NEXT})
 _NEXT.update({k: v for k, v in inventory_intents.NEXT.items() if k not in _NEXT})
+_NEXT.update({k: v for k, v in mobile_intents.NEXT.items() if k not in _NEXT})
 # what a B2C customer is offered instead of the lead path (b2c_order_service)
 _B2C_NEXT: dict[str, list[tuple[str, str]]] = {
     "INT-15": [("INT-104", "Place their order - no lead or quote for B2C"), ("INT-13", "Verify their identity")],

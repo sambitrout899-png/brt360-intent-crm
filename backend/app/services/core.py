@@ -27,6 +27,7 @@ def routers() -> list[APIRouter]:
         routes_inventory,
         routes_inventory_sync,
         routes_licensing,
+        routes_mobile,
         routes_modules,
         routes_order_mgmt,
         routes_org,
@@ -39,5 +40,5 @@ def routers() -> list[APIRouter]:
         routes_field_service.router, routes_order_mgmt.router, routes_order_mgmt.admin_router,
         routes_fulfillment.router, routes_fulfillment.admin_router, routes_inventory.router, routes_inventory.presales_router,
         routes_comms.router, routes_comms.admin_router, routes_analytics.router, routes_inventory_sync.router, routes_modules.router,
-        routes_licensing.platform_router, routes_licensing.router,
+        routes_licensing.platform_router, routes_licensing.router, routes_mobile.router,
     ]

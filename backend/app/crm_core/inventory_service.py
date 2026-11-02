@@ -916,6 +916,51 @@ def technical_action(db: Session, tenant_id: int, action: str, resources: list[s
     return {"resources": out, "unmanaged": unmanaged, "location": location.identifier if location else None}
 
 
+def assign_to_subscriber(db: Session, tenant_id: int, rtype: str, *, party_id: int | None, reference: str,
+                         identifier: str = "", source: str = "mobile") -> InvItem | None:
+    """A phone number (from a pool) or a SIM (from stock) for a mobile line - in use straight away
+    (comm_mobile.py). None when Inventory doesn't keep this resource type, or keeps no item with the
+    identifier given (a number outside every pool): the line keeps it on its own record then."""
+    if not managed(db, tenant_id, rtype):
+        return None
+    types = _types_for(db, tenant_id, rtype)
+    ctx = {"party_id": party_id, "reference": reference}
+    if identifier:
+        item = db.query(InvItem).filter(InvItem.tenant_id == tenant_id, InvItem.type_id.in_(types), InvItem.identifier == identifier,
+                                        InvItem.lifecycle != "retired").first()
+        if item is None:
+            return None
+        if item.lifecycle != "available":
+            raise ValueError(f"{identifier} is {item.lifecycle.replace('_', ' ')} in Inventory - pick another")
+        _hold(db, item, ctx, source)
+    else:
+        kind = db.get(InvItemType, types[0]).kind
+        item = (_allocate_logical if kind in ("logical", "service") else _reserve_physical)(db, tenant_id, rtype, None, ctx, source)
+    item.lifecycle, item.reserved_until = "in_use", None
+    _history(db, item, "lifecycle", {"from": "reserved", "to": "in_use", "note": "assigned to a mobile line"}, source, reference)
+    db.flush()
+    return item
+
+
+def release_from_subscriber(db: Session, tenant_id: int, rtype: str, identifier: str, source: str = "mobile", note: str = "") -> bool:
+    """A number or SIM a mobile line gave up: a number goes back to its pool, a SIM is retired
+    (lost, damaged or swapped - never handed out again). False when Inventory doesn't hold it."""
+    if not identifier:
+        return False
+    types = _types_for(db, tenant_id, rtype)
+    item = db.query(InvItem).filter(InvItem.tenant_id == tenant_id, InvItem.type_id.in_(types or [0]), InvItem.identifier == identifier,
+                                    InvItem.lifecycle.in_(("reserved", "in_use"))).first()
+    if item is None:
+        return False
+    before = item.lifecycle
+    item.lifecycle = "retired"
+    item.order_id = item.party_id = item.service_item_id = None
+    item.reserved_until, item.reference = None, ""
+    _history(db, item, "released", {"from": before, "note": note or "released by a mobile line"}, source)
+    db.flush()
+    return True
+
+
 def release_order(db: Session, tenant_id: int, order_id: Any, source: str = "manual", reference: str = "", actor_id: int | None = None,
                   note: str = "") -> list[dict[str, Any]]:
     """Everything an order holds goes back: equipment and ports become available, pool values return to their

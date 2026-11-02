@@ -192,6 +192,11 @@ from app.intent_engine.inventory_intents import TRAINING as _INVENTORY_TRAINING 
 
 _T = _T + _INVENTORY_TRAINING
 
+# Mobile subscribers (INT-129..148) - appended last, for the same reason.
+from app.intent_engine.mobile_intents import TRAINING as _MOBILE_TRAINING  # noqa: E402
+
+_T = _T + _MOBILE_TRAINING
+
 _INT_SLOTS = {"id", "id2", "price", "pct", "n"}
 
 

@@ -71,6 +71,13 @@ PROCESSES: list[dict[str, Any]] = [
     {"key": "accounts", "label": "Account Setup", "steps": ["INT-72", "INT-73", "INT-75", "INT-77", "INT-79", "INT-74", "INT-82", "INT-83", "INT-100", "INT-101"]},
     {"key": "billing", "label": "Bill to Cash", "steps": ["INT-84", "INT-90", "INT-85", "INT-86", "INT-87", "INT-88", "INT-89", "INT-91", "INT-92"]},
     {"key": "fraud", "label": "Fraud", "steps": ["INT-93", "INT-94", "INT-76"]},
+    # Mobile subscribers (comm_mobile.py) - an operator's, MVNO's or MVNE's prepaid and postpaid lines
+    {"key": "prepaid", "label": "Prepaid Mobile", "steps": ["INT-136", "INT-129", "INT-130", "INT-131", "INT-144", "INT-133", "INT-132", "INT-142",
+                                                            "INT-140", "INT-143"]},
+    {"key": "postpaid", "label": "Postpaid Mobile", "steps": ["INT-136", "INT-148", "INT-135", "INT-130", "INT-141", "INT-144", "INT-142", "INT-134",
+                                                              "INT-140", "INT-143"]},
+    {"key": "sim_lifecycle", "label": "SIM & Number Care", "steps": ["INT-13", "INT-137", "INT-138", "INT-139", "INT-107", "INT-143"]},
+    {"key": "wholesale", "label": "Wholesale & MVNO", "steps": ["INT-146", "INT-145", "INT-136", "INT-129", "INT-147"]},
     {"key": "product", "label": "Product Lifecycle", "steps": ["INT-01", "INT-42", "INT-43", "INT-48", "INT-02", "INT-03"]},
     {"key": "workspace", "label": "Workspace & Records", "steps": ["INT-33", "INT-34", "INT-103", "INT-29", "INT-31", "INT-32", "INT-36"]},
 ]

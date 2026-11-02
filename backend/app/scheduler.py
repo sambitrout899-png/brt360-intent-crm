@@ -1,4 +1,4 @@
-"""Background jobs: inventory sync, inventory reservation expiry, training
+"""Background jobs: inventory sync, inventory reservation expiry, mobile lines, training
 reminders, Flow Studio waits, notification delivery and the audit chain, every minute.
 
 Exactly one process may run them. Under gunicorn every worker runs the app's
@@ -75,8 +75,16 @@ def _licensing() -> None:
     subscription_service.run_due(SessionLocal)
 
 
+def _mobile() -> None:
+    # mobile lines: packs renew or expire, prepaid validity and grace, postpaid cycles, quarantined numbers (every 15 minutes)
+    from app.crm_core import comm_mobile
+
+    comm_mobile.run_due(SessionLocal)
+
+
 JOBS = (
     ("Licensing", _licensing),
+    ("Mobile subscribers", _mobile),
     ("Inventory scheduler", _inventory_sync),
     ("Inventory reservation expiry", _reservation_expiry),
     ("Training scheduler", _training),

@@ -2304,6 +2304,30 @@ export function invApi<T = unknown>(path: string, method: "GET" | "POST" | "PUT"
   return apiCall<T>(`/api/inventory${path}`, method, body);
 }
 
+/** Mobile subscribers API (/api/mobile/*) - see backend crm_core/comm_mobile.py. Lines change through intents INT-129..148. */
+export function mobileApi<T = unknown>(path: string, method: "GET" | "POST" | "PUT" = "GET", body?: unknown): Promise<T> {
+  return apiCall<T>(`/api/mobile${path}`, method, body);
+}
+
+/** A voucher batch's PINs as CSV - handed out once, then cleared on the server. */
+export async function mobileVoucherPins(batch: string): Promise<string> {
+  const token = getAccessToken();
+  const res = await fetch(`${API_BASE}/api/mobile/vouchers/batches/${encodeURIComponent(batch)}/pins`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    let detail = text;
+    try {
+      detail = JSON.parse(text).detail ?? text;
+    } catch {
+      /* plain text */
+    }
+    throw new Error(detail);
+  }
+  return text;
+}
+
 /** Order Management API (/api/order-management/*, admin setup under /api/admin/order-management/*). */
 export function omApi<T = unknown>(path: string, method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE" = "GET", body?: unknown, admin = false): Promise<T> {
   return apiCall<T>(`/api/${admin ? "admin/" : ""}order-management${path}`, method, body);

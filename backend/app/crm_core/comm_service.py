@@ -107,6 +107,58 @@ DEFAULTS: dict[str, Any] = {
         {"key": "switching", "question": "Are they unhappy with their current provider?", "weight": 10},
     ],
     "target_market_score": 60,
+    # mobile subscribers (comm_mobile.py): prepaid / postpaid lines, plans, packs, vouchers, partners
+    "mobile": {
+        "number_range": "9100000000-9199999999",  # numbers when Inventory keeps no phone-number pool
+        "imsi_prefix": "40499",  # MCC + MNC
+        "smdp_address": "smdp.example.net",  # eSIM activation codes point at it
+        "quarantine_days": 90,  # a number given up comes back after this
+        "prepaid_validity_days": 30,  # a recharge keeps the line valid this long (vouchers carry their own)
+        "grace_days": 15,  # after validity ends: incoming only, then suspended
+        "min_recharge": 10.0,
+        "max_recharge": 10000.0,
+        "low_balance_alert": 10.0,
+        "advance_amount": 10.0,  # emergency credit
+        "advance_fee": 2.0,
+        "advance_min_days": 30,  # on the network at least this long
+        "advance_validity_days": 3,
+        "transfer_max": 500.0,
+        "transfer_fee": 1.0,
+        "sim_swap_fee": 25.0,
+        "swap_cooldown_hours": 24,  # no international / premium / roaming right after a SIM swap
+        "number_change_fee": 50.0,
+        "postpaid_deposit": 0.0,  # asked for when a postpaid line is activated
+        "credit_limit_default": 2000.0,
+        "credit_limit_max": 50000.0,
+        "roaming_min_balance": 50.0,  # prepaid
+        "roaming_multiplier": 5.0,  # pay-as-you-go usage abroad costs this many times the home rate
+        "shared_max_members": 10,
+        "max_bulk_lines": 50,
+        "voucher_max_batch": 10000,
+        "plans": [
+            {"code": "PRE_BASIC", "name": "Prepaid Pay-as-you-go", "payment_type": "prepaid", "fee": 0.0, "validity_days": 30, "allowance": {}},
+            {"code": "PRE_SMART", "name": "Prepaid Smart 28", "payment_type": "prepaid", "fee": 299.0, "validity_days": 28,
+             "allowance": {"voice": 1000, "data": 30720, "sms": 300}},
+            {"code": "POST_399", "name": "Postpaid 399", "payment_type": "postpaid", "fee": 399.0, "validity_days": 30,
+             "allowance": {"voice": 3000, "data": 40960, "sms": 1000}},
+            {"code": "BIZ_599", "name": "Business Postpaid 599", "payment_type": "postpaid", "fee": 599.0, "validity_days": 30,
+             "allowance": {"voice": 5000, "data": 76800, "sms": 3000}},
+            {"code": "BIZ_SHARED", "name": "Business Shared Pool 1499", "payment_type": "postpaid", "fee": 1499.0, "validity_days": 30,
+             "allowance": {"voice": 10000, "data": 204800, "sms": 5000}, "shared": True},
+        ],
+        "packs": [
+            {"code": "DATA1", "name": "Data 1 GB - 1 day", "kind": "data", "price": 19.0, "validity_days": 1, "allowance": {"data": 1024}},
+            {"code": "DATA10", "name": "Data 10 GB - 28 days", "kind": "data", "price": 199.0, "validity_days": 28, "allowance": {"data": 10240}},
+            {"code": "VOICE100", "name": "100 minutes - 28 days", "kind": "voice", "price": 49.0, "validity_days": 28, "allowance": {"voice": 100}},
+            {"code": "SMS100", "name": "100 SMS - 28 days", "kind": "sms", "price": 19.0, "validity_days": 28, "allowance": {"sms": 100}},
+            {"code": "COMBO", "name": "Combo 300 min + 5 GB - 28 days", "kind": "combo", "price": 249.0, "validity_days": 28,
+             "allowance": {"voice": 300, "data": 5120, "sms": 100}},
+            {"code": "ROAM7", "name": "Roaming 7 days - 1 GB + 100 min", "kind": "roaming", "price": 599.0, "validity_days": 7,
+             "allowance": {"data": 1024, "voice": 100}, "roaming": True},
+            {"code": "TUNE", "name": "Caller tune", "kind": "vas", "price": 30.0, "validity_days": 30, "allowance": {}},
+            {"code": "VOICEMAIL", "name": "Voicemail", "kind": "vas", "price": 20.0, "validity_days": 30, "allowance": {}},
+        ],
+    },
     # agreements
     "agreement_sections": [
         "SERVICE AGREEMENT {agreement_number} (revision {revision})",

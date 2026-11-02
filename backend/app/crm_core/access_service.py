@@ -59,6 +59,7 @@ PAGES: list[tuple[str, str]] = [
     ("tickets", "Tickets"),
     ("field", "Field Service"),
     ("inventory", "Inventory"),
+    ("mobile", "Mobile Subscribers"),
     ("catalog", "Catalog"),
     ("analytics", "Analytics & Reports"),
     ("records", "Custom Records"),
@@ -180,6 +181,7 @@ def pages_for(db: Session, user: User, roles: list[AppRole] | None = None) -> li
     if user.role == UserRole.admin:
         granted.add("admin")  # an admin can never lock themselves out of setup
         granted.add("inventory")  # nor out of the network record they set up (types, pools, reconciliation)
+        granted.add("mobile")  # nor out of the mobile catalog, vouchers and partners they keep
         granted.add("analytics")  # nor out of reporting - other roles get it in Admin -> Roles
         granted.add("records")  # nor out of the record types they define
     return [k for k in PAGE_KEYS if k in granted]

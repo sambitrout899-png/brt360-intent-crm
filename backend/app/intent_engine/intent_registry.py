@@ -35,6 +35,8 @@ CATEGORIES: list[tuple[str, str]] = [
     ("orders", "Orders & Delivery"),
     ("service", "Service & Support"),
     ("billing", "Billing & Credit"),
+    ("mobile", "Mobile subscribers"),
+    ("wholesale", "Wholesale & partners"),
     ("products", "Products"),
     ("records", "Any record"),
     ("workspace", "Workspace setup"),
@@ -430,12 +432,22 @@ for _code, (_label, _desc, _cat, _icon, _target, _fields, _examples) in _invento
     BUILTIN[_code] = _B(_code, _label, _desc, _cat, _icon, _target, _fields, _examples)
 _FIELD_OVERRIDES.update(_inventory.OVERRIDES)
 
+# Mobile subscribers - prepaid, postpaid, SIM / number lifecycle, wholesale (INT-129..148) - see mobile_intents.py.
+from app.intent_engine import mobile_intents as _mobile  # noqa: E402
+
+_LIB.update({k: v for k, v in _mobile.LIB.items() if k not in _LIB})
+for _code, (_label, _desc, _cat, _icon, _target, _fields, _examples) in _mobile.SPECS.items():
+    BUILTIN[_code] = _B(_code, _label, _desc, _cat, _icon, _target, _fields, _examples)
+_FIELD_OVERRIDES.update(_mobile.OVERRIDES)
+
 # "At least one of" groups the form should explain (reasoning enforces them).
 ONE_OF: dict[str, list[list[str]]] = {
     "INT-12": [["ticket_id", "order_id"]],
     "INT-123": [["opportunity_id", "order_id"]],  # a deal (Presales' feasibility) or an order
     "INT-124": [["opportunity_id", "order_id"]],
     "INT-32": [["to_user", "to_position", "to_department"]],
+    "INT-129": [["amount", "voucher_pin"]],
+    "INT-135": [["credit_limit", "spend_alert_pct"]],
 }
 
 
@@ -593,7 +605,7 @@ def allowed_for(entry: dict[str, Any], user_role_ids: list[int], has_roles: bool
 
 
 # Change the workspace for the whole tenant - administrators only, whatever roles say.
-ADMIN_ONLY = {"INT-33", "INT-34", "INT-48", "INT-103", "INT-119", "INT-127", "INT-128"}
+ADMIN_ONLY = {"INT-33", "INT-34", "INT-48", "INT-103", "INT-119", "INT-127", "INT-128"} | _mobile.ADMIN_ONLY
 
 
 def _is_admin(user: User) -> bool:

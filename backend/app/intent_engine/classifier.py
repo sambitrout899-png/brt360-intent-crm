@@ -27,7 +27,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.intent_engine import abo_intents, b2c_intents, comm_intents, config_intents, om_intents, fulfillment_intents, inventory_intents, quote_intents, sto_intents, understanding
+from app.intent_engine import abo_intents, b2c_intents, comm_intents, config_intents, om_intents, fulfillment_intents, inventory_intents, mobile_intents, quote_intents, sto_intents, understanding
 
 SUPPORTED_INTENTS = (
     "INT-01", "INT-02", "INT-03",
@@ -47,7 +47,7 @@ SUPPORTED_INTENTS = (
     "INT-62", "INT-63", "INT-64", "INT-65", "INT-66", "INT-67", "INT-68", "INT-69", "INT-70", "INT-71",
     # Communications - see comm_intents.py; configuration - config_intents.py; B2C direct order - b2c_intents.py
 ) + comm_intents.CODES + config_intents.CODES + b2c_intents.CODES + sto_intents.CODES + abo_intents.CODES + quote_intents.CODES + fulfillment_intents.CODES \
-    + inventory_intents.CODES
+    + inventory_intents.CODES + mobile_intents.CODES
 
 _SYSTEM_PROMPT = """You are the NLU classifier for BRT 360, a telecom Intent CRM.
 
@@ -294,6 +294,7 @@ INTENT_LABELS.update(abo_intents.LABELS)
 INTENT_LABELS.update(quote_intents.LABELS)
 INTENT_LABELS.update(fulfillment_intents.LABELS)
 INTENT_LABELS.update(inventory_intents.LABELS)
+INTENT_LABELS.update(mobile_intents.LABELS)
 
 # The Sales-to-Order / B2C steps added after the intent model was trained
 # (INT-35..41). They are recognised by these phrase rules before any model
@@ -302,7 +303,8 @@ INTENT_LABELS.update(inventory_intents.LABELS)
 # retrained on the exported examples may return these codes too.
 NEW_PROCESS_INTENTS = ("INT-35", "INT-36", "INT-37", "INT-38", "INT-39", "INT-40", "INT-41", "INT-42", "INT-43", "INT-44", "INT-45", "INT-46",
                        "INT-47", "INT-48", "INT-49", "INT-50") + om_intents.CODES + comm_intents.CODES + config_intents.CODES + b2c_intents.CODES \
-    + sto_intents.CODES + abo_intents.CODES + quote_intents.CODES + fulfillment_intents.CODES + inventory_intents.CODES
+    + sto_intents.CODES + abo_intents.CODES + quote_intents.CODES + fulfillment_intents.CODES + inventory_intents.CODES \
+    + mobile_intents.CODES
 # Each pattern needs its words together ("attach the PO", "send ... to
 # Presales") so a sentence about something else that merely mentions a PO
 # or an account is never taken for one of these steps.
@@ -349,6 +351,8 @@ _PROCESS_RULES = quote_intents.RULES + _PROCESS_RULES
 _PROCESS_RULES = fulfillment_intents.RULES + _PROCESS_RULES
 # Inventory - "free ports at BLR-EX-01", "what is affected if OLT-01 goes down", "create a VLAN pool 100-999".
 _PROCESS_RULES = inventory_intents.RULES + _PROCESS_RULES
+# Mobile lines - "recharge 9100000001 with 199", "turn on roaming for ...", "swap the SIM of ..." - most need a mobile number in the sentence.
+_PROCESS_RULES = mobile_intents.RULES + _PROCESS_RULES
 _ENTITY_OF_ID = {"party_id": "party", "lead_id": "lead", "opportunity_id": "opportunity", "quote_id": "quote", "order_id": "order"}
 
 
@@ -368,11 +372,11 @@ def _process_step(text: str, context: dict[str, Any] | None) -> ClassificationRe
 
     if code in om_intents.CODES or code in comm_intents.CODES or code in config_intents.CODES or code in b2c_intents.CODES \
             or code in sto_intents.CODES or code in abo_intents.CODES or code in quote_intents.CODES or code in fulfillment_intents.CODES \
-            or code in inventory_intents.CODES:
+            or code in inventory_intents.CODES or code in mobile_intents.CODES:
         mod = (om_intents if code in om_intents.CODES else comm_intents if code in comm_intents.CODES
                else config_intents if code in config_intents.CODES else sto_intents if code in sto_intents.CODES
                else abo_intents if code in abo_intents.CODES else quote_intents if code in quote_intents.CODES else fulfillment_intents if code in fulfillment_intents.CODES
-               else inventory_intents if code in inventory_intents.CODES else b2c_intents)
+               else inventory_intents if code in inventory_intents.CODES else mobile_intents if code in mobile_intents.CODES else b2c_intents)
         entities.update(mod.extract(code, text, fields, loose))
         required = mod.REQUIRED[code]
         if context and context.get("entity_id"):
