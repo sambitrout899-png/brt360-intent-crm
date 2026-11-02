@@ -16,8 +16,22 @@ bulk order, INT-150 Bulk order status), `app/experience/routes_bulk_orders.py` (
 | Mobile lines | INT-41 / INT-15 (new customer) -> INT-136 Activate mobile lines | `offering_name` + `party_id` or `customer_name` |
 | Asset changes | INT-107 Change an asset -> INT-117 (a change pattern) or INT-108 Confirm order fulfillment | `asset_id`, `asset_operation` |
 
-Download each process's CSV template on the page (or `GET /api/bulk-orders/processes`). "Every row gets" sets values all
-rows share (e.g. `order_channel=store; products=Home Fiber 100`); attribute columns take `name=value; ...`.
+## Uploading a CSV file
+
+**Bulk Orders -> Upload a bulk order (CSV)**: pick the process, download its template if you need one, then drop the file
+(or choose it). Every row is checked straight away - nothing runs yet - and the preview shows how many rows are ready,
+why the others can't run, columns the process needs that the file lacks, and columns it doesn't use. Then **Create and
+start**, or **Save as draft** and start it later. Rows that can't run stay on the request as invalid; the rest go ahead.
+
+- Files saved from Excel are fine: UTF-8 (with or without the byte-order mark) or Windows-1252; comma, semicolon, tab or
+  pipe separated. Spreadsheet files (.xlsx) are refused - save as CSV. Up to 5 MB and 5,000 rows.
+- Headers are matched ignoring case, spaces and punctuation, and common names are understood (Customer -> customer_name,
+  Product -> products, Plan -> offering_name, Address -> installation_address, E-mail -> email, Qty -> quantity ...).
+- "Every row gets" sets values all rows share (e.g. `order_channel=store; products=Home Fiber 100`) - a column the file
+  lacks can be given there. Attribute columns take `name=value; ...`.
+- API: `POST /api/bulk-orders/preview?process=...` and `POST /api/bulk-orders/upload?process=...&name=&file_name=&defaults=
+  &auto_approve=&send_to_fulfillment=&start=` with the file as the request body (`Content-Type: text/csv`). Templates:
+  `GET /api/bulk-orders/processes`.
 
 ## How rows run
 

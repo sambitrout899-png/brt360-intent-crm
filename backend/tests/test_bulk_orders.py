@@ -129,6 +129,48 @@ def test_mobile_lines_and_asset_changes_in_bulk(client):
         db.close()
 
 
+def upload(client, path, content: bytes, **params):
+    return client.post(f"/api/bulk-orders{path}", params=params, content=content, headers={"Content-Type": "text/csv"})
+
+
+def test_a_bulk_order_is_uploaded_as_a_csv_file_previewed_first(client):
+    assert client.post("/api/mobile/sample-catalog").status_code == 200
+    party = run(client, "INT-41", name="Excel Owner")["result"]["party_id"]
+    # what Excel saves in many locales: a byte-order mark, semicolons, Windows-1252 accents, friendly headers
+    excel = ("\ufeffCustomer;E-mail;Plan;SIM type;Notes\r\n"
+             "José Álvarez;jose@example.com;Prepaid Pay-as-you-go;esim;vip\r\n"
+             f";;Prepaid Pay-as-you-go;esim;existing\r\n"
+             "Zoë Brandt;zoe@example.com;;esim;\r\n").encode("utf-8")
+    seen = upload(client, "/preview", excel, process="mobile_lines")
+    assert seen.status_code == 200, seen.text
+    p = seen.json()
+    assert p["rows"] == 3 and p["valid"] == 1 and p["invalid"] == 2
+    assert p["renamed"] == {"Customer": "customer_name", "E-mail": "email", "Plan": "offering_name"} and p["unknown_columns"] == ["Notes"]
+    assert p["shown"][0]["data"]["customer_name"] == "José Álvarez" and "party_id" in p["shown"][1]["message"]
+    assert "offering_name" in p["shown"][2]["message"]
+    # the same file in Windows-1252 reads the same
+    assert upload(client, "/preview", excel.decode("utf-8").lstrip("\ufeff").encode("cp1252"), process="mobile_lines").json()["valid"] == 1
+    # a column the process needs that the file lacks - unless every row gets it
+    no_plan = b"customer_name,sim_type\nAnu,esim\n"
+    assert upload(client, "/preview", no_plan, process="mobile_lines").json()["missing_required_columns"] == ["offering_name"]
+    shared = upload(client, "/preview", no_plan, process="mobile_lines", defaults="offering_name=Prepaid Pay-as-you-go").json()
+    assert shared["missing_required_columns"] == [] and shared["valid"] == 1
+    # what isn't a CSV is refused before anything happens
+    assert "empty" in upload(client, "/preview", b"", process="mobile_lines").json()["detail"]
+    assert "spreadsheet" in upload(client, "/preview", b"PK\x03\x04\x00\x00binary", process="mobile_lines").json()["detail"]
+    assert upload(client, "/preview", b"customer_name\n", process="mobile_lines").status_code == 400  # a header, no rows
+
+    # upload as a draft, start it later; the file's name names the request
+    made = upload(client, "/upload", f"party_id,offering_name,sim_type\n{party},Prepaid Pay-as-you-go,esim\n".encode(), process="mobile_lines",
+                  file_name="C:\\Users\\me\\October lines.csv", start="false")
+    assert made.status_code == 200, made.text
+    draft = made.json()
+    assert draft["status"] == "draft" and draft["name"] == "October lines.csv" and draft["rows"] == 1
+    assert process(client, draft["id"])["status"] == "draft"  # nothing runs until it is started
+    assert client.post(f"/api/bulk-orders/{draft['id']}/start").json()["status"] == "running"
+    assert process(client, draft["id"])["completed"] == 1
+
+
 def test_start_and_follow_a_bulk_order_in_plain_english(client):
     assert client.post("/api/mobile/sample-catalog").status_code == 200
     started = client.post("/api/intents", json={"text": "Start a bulk order of mobile lines\ncustomer_name,offering_name,sim_type\n"

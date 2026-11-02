@@ -124,11 +124,84 @@ def clean_row(process: str, raw: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+MAX_FILE_BYTES = 5 * 1024 * 1024
+# what people call a column -> the column (a header is matched ignoring case, spaces and punctuation)
+ALIASES = {"customer": "customer_name", "name": "customer_name", "customer_id": "party_id", "account_id": "party_id", "party": "party_id",
+           "product": "products", "offering": "offering_name", "plan": "offering_name", "address": "installation_address",
+           "site_address": "installation_address", "channel": "order_channel", "operation": "asset_operation", "asset": "asset_id",
+           "quote": "quote_id", "quote_number": "quote_id", "mobile": "msisdn", "number": "msisdn", "sim": "iccid", "lines": "quantity",
+           "qty": "quantity", "user": "user_name", "users": "user_name", "partner": "wholesale_partner", "mail": "email", "e_mail": "email",
+           "mobile_number": "phone", "phone_number": "phone", "recharge": "initial_recharge", "options": "pricing_attributes"}
+
+
+def decode_file(raw: bytes) -> str:
+    """An uploaded CSV file's text: UTF-8 (with or without the byte-order mark Excel adds), else Windows-1252."""
+    if not raw or not raw.strip():
+        raise ValueError("The file is empty")
+    if len(raw) > MAX_FILE_BYTES:
+        raise ValueError(f"The file is {len(raw) / 1024 / 1024:.1f} MB - at most {MAX_FILE_BYTES // 1024 // 1024} MB")
+    if b"\x00" in raw[:4096]:
+        raise ValueError("That isn't a CSV file (it looks like a spreadsheet or binary file) - save it as CSV first")
+    for encoding in ("utf-8-sig", "cp1252"):
+        try:
+            return raw.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    raise ValueError("The file's characters can't be read - save it as CSV UTF-8")
+
+
+def _column(process: str, header: str) -> str:
+    key = _key(header)
+    return ALIASES.get(key, key) if ALIASES.get(key, key) in {c for c, _, _ in PROCESS_INFO[process]["columns"]} else key
+
+
 def parse_csv(text: str) -> list[dict[str, Any]]:
-    reader = csv.DictReader(io.StringIO(text.lstrip("﻿")))
-    if not reader.fieldnames:
+    """Rows of a CSV - comma, semicolon (Excel in many locales), tab or pipe separated, header first."""
+    text = text.lstrip("﻿")
+    try:
+        dialect = csv.Sniffer().sniff(text[:4096], delimiters=",;\t|")
+    except csv.Error:
+        dialect = csv.excel
+    reader = csv.DictReader(io.StringIO(text), dialect=dialect)
+    if not reader.fieldnames or not any(str(f or "").strip() for f in reader.fieldnames):
         raise ValueError("The CSV has no header row")
-    return [dict(r) for r in reader if any(str(v or "").strip() for v in r.values())]
+    return [{k: v for k, v in r.items() if k is not None} for r in reader if any(str(v or "").strip() for k, v in r.items() if k is not None)]
+
+
+def _rows_for(process: str, text: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """The file's rows with their columns named as the process names them - and what its header says."""
+    raw = parse_csv(text)
+    headers = list(raw[0].keys()) if raw else list(csv.DictReader(io.StringIO(text.lstrip("﻿"))).fieldnames or [])
+    known = {c for c, _, _ in PROCESS_INFO[process]["columns"]}
+    mapped = {h: _column(process, h) for h in headers}
+    report = {"columns": [mapped[h] for h in headers if mapped[h] in known],
+              "unknown_columns": [h for h in headers if mapped[h] not in known and str(h).strip()],
+              "renamed": {h: mapped[h] for h in headers if mapped[h] in known and _key(h) != mapped[h]}}
+    return [{mapped[k]: v for k, v in r.items()} for r in raw], report
+
+
+def preview(db: Session, tenant_id: int, process: str, text: str, defaults: dict[str, Any] | None = None, limit: int = 500) -> dict[str, Any]:
+    """What a file would make, row by row, before anything runs: its columns, the rows it can run and why the others can't."""
+    if process not in PROCESSES:
+        raise ValueError(f"Process: {', '.join(PROCESSES)}")
+    rows, report = _rows_for(process, text)
+    if not rows:
+        raise ValueError("The file has a header but no rows")
+    if len(rows) > MAX_ROWS:
+        raise ValueError(f"The file has {len(rows)} rows - at most {MAX_ROWS} per bulk order")
+    shared = clean_row(process, dict(defaults or {}))
+    required = [c for c, r, _ in PROCESS_INFO[process]["columns"] if r]
+    out, valid = [], 0
+    for n, raw in enumerate(rows, 1):
+        data = {**shared, **clean_row(process, raw)}
+        why = validate_row(db, tenant_id, process, data)
+        valid += not why
+        if n <= limit:
+            out.append({"row_no": n, "data": data, "valid": not why, "message": why})
+    return {**report, "process": process, "process_label": PROCESS_INFO[process]["label"], "rows": len(rows), "valid": valid,
+            "invalid": len(rows) - valid, "shown": out,
+            "missing_required_columns": [c for c in required if c not in report["columns"] and c not in shared
+                                         and not (c == "products" and "products" in shared)]}
 
 
 def validate_row(db: Session, tenant_id: int, process: str, data: dict[str, Any]) -> str:
@@ -168,7 +241,7 @@ def create(db: Session, tenant_id: int, user, access, data: dict[str, Any]) -> B
         raise ValueError(f"Process: {', '.join(PROCESSES)}")
     raw_rows = list(data.get("rows") or [])
     if data.get("csv"):
-        raw_rows += parse_csv(str(data["csv"]))
+        raw_rows += _rows_for(process, str(data["csv"]))[0]
     if not raw_rows:
         raise ValueError("No rows - give rows or a CSV")
     if len(raw_rows) > MAX_ROWS:

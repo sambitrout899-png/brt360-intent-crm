@@ -4,6 +4,8 @@ moving requests needs an admin or agent. Rows run as the person who submitted th
   GET  /api/bulk-orders/processes        the processes, their columns and CSV headers (templates)
   GET  /api/bulk-orders                  requests, newest first
   POST /api/bulk-orders                  create (and start): {process, name, rows | csv, defaults, auto_approve, send_to_fulfillment, start}
+  POST /api/bulk-orders/preview          an uploaded CSV file (the request body, text/csv): its rows checked, nothing created
+  POST /api/bulk-orders/upload           an uploaded CSV file -> a bulk order (?process=&name=&file_name=&defaults=&auto_approve=&start=)
   GET  /api/bulk-orders/{id}             a request with its rows (?stage=)
   POST /api/bulk-orders/{id}/process     move it along now (place up to `limit` rows, follow the rest)
   POST /api/bulk-orders/{id}/start | /retry | /cancel
@@ -14,7 +16,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from fastapi.responses import PlainTextResponse
 from sqlalchemy.orm import Session
 
@@ -55,6 +57,48 @@ def listing(db: Session = Depends(get_db), tenant_id: int = Depends(get_current_
 def create(data: Payload = Body(...), db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id),
            user: User = Depends(get_current_user), access: Access = Depends(get_access)) -> Payload:
     made = _do(db, lambda: bulk.create(db, tenant_id, user, access, data))
+    return bulk.detail(db, made, limit=200)
+
+
+async def _file_text(request: Request) -> str:
+    """The uploaded CSV file - sent as the request body (Content-Type text/csv or application/octet-stream),
+    or {"csv": "..."} as JSON."""
+    raw = await request.body()
+    if "json" in (request.headers.get("content-type") or ""):
+        import json
+
+        try:
+            return str(json.loads(raw or b"{}").get("csv") or "")
+        except ValueError as exc:
+            raise HTTPException(400, "Send the CSV file, or JSON {\"csv\": ...}") from exc
+    try:
+        return bulk.decode_file(raw)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.post("/preview", dependencies=[_write])
+async def preview(request: Request, process: str, defaults: str = "", db: Session = Depends(get_db),
+                  tenant_id: int = Depends(get_current_tenant_id)) -> Payload:
+    """What an uploaded CSV file would make - row by row, before anything runs."""
+    text = await _file_text(request)
+    try:
+        return bulk.preview(db, tenant_id, process, text, bulk._pairs(defaults))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.post("/upload", dependencies=[_write])
+async def upload(request: Request, process: str, name: str = "", file_name: str = "", defaults: str = "", auto_approve: bool = True,
+                 send_to_fulfillment: bool = True, start: bool = True, db: Session = Depends(get_db),
+                 tenant_id: int = Depends(get_current_tenant_id), user: User = Depends(get_current_user),
+                 access: Access = Depends(get_access)) -> Payload:
+    """A bulk order request from an uploaded CSV file - created, and started unless start=false (a draft to start later)."""
+    text = await _file_text(request)
+    title = name or (f"{file_name.rsplit('/', 1)[-1].rsplit(chr(92), 1)[-1]}" if file_name else "")
+    made = _do(db, lambda: bulk.create(db, tenant_id, user, access, {
+        "process": process, "name": title[:200], "csv": text, "defaults": bulk._pairs(defaults), "auto_approve": auto_approve,
+        "send_to_fulfillment": send_to_fulfillment, "start": start, "source": "csv"}))
     return bulk.detail(db, made, limit=200)
 
 

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { bulkApi, bulkResultsCsv } from "../api/client";
+import { bulkApi, bulkResultsCsv, bulkSendFile } from "../api/client";
 import { useIntentRefresh } from "../workspace";
 import { BTN, BTN_DANGER, BTN_PRIMARY, CARD, Chip, Empty, Field, INPUT, Notice, Panel, Section, Stat } from "./fieldservice/ui";
 
@@ -97,7 +97,7 @@ export default function BulkOrdersPage() {
           <h1 className="text-xl font-bold text-slate-100">Bulk Orders</h1>
           <p className="text-sm text-slate-400">Many orders at once - each row runs the full single-order process to fulfilment, installed services and billing.</p>
         </div>
-        <button type="button" className={BTN_PRIMARY} onClick={() => { setCreating(true); setOpen(null); }}>📚 New bulk order</button>
+        <button type="button" className={BTN_PRIMARY} onClick={() => { setCreating(true); setOpen(null); }}>📤 Upload a bulk order (CSV)</button>
       </div>
       <Notice text={error} onClose={() => setError(null)} />
       <Notice text={note} tone="emerald" onClose={() => setNote(null)} />
@@ -134,6 +134,8 @@ export default function BulkOrdersPage() {
           <div className="space-y-4">
             <Panel title={`${open.number} · ${open.process_label}`} action={
               <div className="flex flex-wrap gap-2">
+                {open.status === "draft" && <button type="button" className={BTN_PRIMARY} disabled={busy}
+                  onClick={() => act("/start", () => `${open.number} started`)}>Start</button>}
                 {open.status === "running" && <button type="button" className={BTN_PRIMARY} disabled={busy}
                   onClick={() => act("/process", (r) => `Placed ${r.placed_now} row(s), followed ${r.followed_now}`)}>Process now</button>}
                 {open.failed > 0 && <button type="button" className={BTN} disabled={busy} onClick={() => act("/retry", (r) => `${r.requeued} row(s) queued again`)}>Retry failed</button>}
@@ -192,39 +194,77 @@ export default function BulkOrdersPage() {
   );
 }
 
-/* ---------------------------------------------------------------- new request */
+/* ---------------------------------------------------------------- new request: upload a CSV file */
+
+type Preview = {
+  process_label: string; rows: number; valid: number; invalid: number; columns: string[]; unknown_columns: string[];
+  renamed: Record<string, string>; missing_required_columns: string[];
+  shown: { row_no: number; data: Record<string, unknown>; valid: boolean; message: string }[];
+};
 
 function NewBulk({ processes, onCancel, onCreated, onError }: { processes: ProcessInfo[]; onCancel: () => void;
   onCreated: (d: Detail) => void; onError: (s: string | null) => void }) {
   const [process, setProcess] = useState("b2c_new_connect");
   const [name, setName] = useState("");
-  const [csv, setCsv] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  const [pasted, setPasted] = useState("");
+  const [showPaste, setShowPaste] = useState(false);
   const [defaults, setDefaults] = useState("");
   const [autoApprove, setAutoApprove] = useState(true);
   const [sendToFulfillment, setSendToFulfillment] = useState(true);
+  const [preview, setPreview] = useState<Preview | null>(null);
+  const [dragging, setDragging] = useState(false);
   const [busy, setBusy] = useState(false);
   const info = processes.find((p) => p.process === process);
-  const submit = () => {
-    const pairs: Record<string, string> = {};
-    for (const part of defaults.split(/[;\n]/)) {
-      const [k, ...v] = part.split("=");
-      if (k.trim() && v.length) pairs[k.trim()] = v.join("=").trim();
+  const source = (): Blob | null => file ?? (pasted.trim() ? new Blob([pasted], { type: "text/csv" }) : null);
+
+  // every change to the file, the process or the shared values re-checks the rows
+  useEffect(() => {
+    const body = file ?? (pasted.trim() ? new Blob([pasted], { type: "text/csv" }) : null);
+    if (!body) {
+      setPreview(null);
+      return;
     }
+    let live = true;
+    const t = window.setTimeout(() => {
+      bulkSendFile<Preview>("/preview", body, { process, defaults })
+        .then((p) => { if (live) setPreview(p); })
+        .catch((e) => { if (live) { setPreview(null); onError(errorText(e, "Could not read the file")); } });
+    }, file ? 0 : 500);
+    return () => { live = false; window.clearTimeout(t); };
+  }, [file, pasted, process, defaults, onError]);
+
+  const pick = (f: File | undefined) => {
+    if (!f) return;
+    if (!/\.(csv|txt)$/i.test(f.name) && f.type && !/csv|text\/plain|excel/.test(f.type)) {
+      onError(`${f.name} isn't a CSV file - in Excel use File -> Save As -> CSV`);
+      return;
+    }
+    onError(null);
+    setFile(f);
+    setPasted("");
+    if (!name) setName(f.name.replace(/\.[^.]+$/, ""));
+  };
+  const submit = (start: boolean) => {
+    const body = source();
+    if (!body) return;
     setBusy(true);
-    bulkApi<Detail>("", "POST", { process, name, csv, defaults: pairs, auto_approve: autoApprove, send_to_fulfillment: sendToFulfillment, start: true })
+    bulkSendFile<Detail>("/upload", body, { process, name, file_name: file?.name ?? "", defaults, auto_approve: autoApprove,
+      send_to_fulfillment: sendToFulfillment, start })
       .then(onCreated)
       .catch((e) => onError(errorText(e, "Could not create the bulk order")))
       .finally(() => setBusy(false));
   };
+  const blocked = !preview || preview.valid === 0 || preview.missing_required_columns.length > 0;
   return (
-    <Panel title="New bulk order" action={<button type="button" className={BTN} onClick={onCancel}>Close</button>}>
+    <Panel title="New bulk order - upload a CSV file" action={<button type="button" className={BTN} onClick={onCancel}>Close</button>}>
       <div className="grid gap-3 md:grid-cols-2">
         <Field label="Process">
           <select className={INPUT} value={process} onChange={(e) => setProcess(e.target.value)}>
             {processes.map((p) => <option key={p.process} value={p.process}>{p.label}</option>)}
           </select>
         </Field>
-        <Field label="Name"><input className={INPUT} value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. October campus connects" /></Field>
+        <Field label="Name"><input className={INPUT} value={name} onChange={(e) => setName(e.target.value)} placeholder="Defaults to the file's name" /></Field>
       </div>
       {info && (
         <div className="mt-3 rounded-lg border border-slate-800 p-3 text-xs text-slate-400">
@@ -232,15 +272,34 @@ function NewBulk({ processes, onCancel, onCreated, onError }: { processes: Proce
           <div className="flex flex-wrap gap-x-4 gap-y-1">
             {info.columns.map((c) => <span key={c.name} title={c.help}><b className={c.required ? "text-slate-100" : ""}>{c.name}</b>{c.required ? "*" : ""}</span>)}
           </div>
-          <button type="button" className={`${BTN} mt-2`} onClick={() => download(`${info.process}-template.csv`, `${info.csv_header}\n`)}>Download template</button>
+          <button type="button" className={`${BTN} mt-2`} onClick={() => download(`${info.process}-template.csv`, `${info.csv_header}\n`)}>Download the CSV template</button>
         </div>
       )}
-      <Field label="Rows (CSV with a header line)" className="mt-3">
-        <textarea className={`${INPUT} h-48 font-mono text-xs`} value={csv} onChange={(e) => setCsv(e.target.value)} spellCheck={false}
-          placeholder={info ? `${info.csv_header}\n...` : ""} />
-      </Field>
-      <input type="file" accept=".csv,text/csv" className="mt-2 text-xs text-slate-400" aria-label="Upload a CSV"
-        onChange={(e) => { const f = e.target.files?.[0]; if (f) f.text().then(setCsv); }} />
+
+      <label
+        onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={(e) => { e.preventDefault(); setDragging(false); pick(e.dataTransfer.files?.[0]); }}
+        className={`mt-3 flex cursor-pointer flex-col items-center justify-center gap-1 rounded-xl border-2 border-dashed p-6 text-center transition ${
+          dragging ? "border-sky-400 bg-sky-500/10" : "border-slate-700 hover:border-slate-500"}`}>
+        <span className="text-2xl" aria-hidden="true">📄</span>
+        {file ? (
+          <span className="text-sm text-slate-200">{file.name} <span className="text-slate-500">({(file.size / 1024).toFixed(1)} KB)</span></span>
+        ) : (
+          <span className="text-sm text-slate-300">Drop a CSV file here, or <span className="text-sky-300 underline">choose a file</span></span>
+        )}
+        <span className="text-xs text-slate-500">CSV with a header row · comma, semicolon or tab separated · up to 5 MB / 5,000 rows</span>
+        <input type="file" accept=".csv,text/csv,.txt" className="hidden" onChange={(e) => { pick(e.target.files?.[0]); e.target.value = ""; }} />
+      </label>
+      <div className="mt-2 flex flex-wrap gap-3 text-xs">
+        {file && <button type="button" className="text-slate-400 underline" onClick={() => setFile(null)}>Remove the file</button>}
+        <button type="button" className="text-slate-400 underline" onClick={() => setShowPaste((v) => !v)}>{showPaste ? "Hide" : "Or paste the rows instead"}</button>
+      </div>
+      {showPaste && (
+        <textarea className={`${INPUT} mt-2 h-40 font-mono text-xs`} value={pasted} spellCheck={false} disabled={!!file}
+          onChange={(e) => setPasted(e.target.value)} placeholder={info ? `${info.csv_header}\n...` : ""} />
+      )}
+
       <Field label="Every row gets (name=value; ...)" className="mt-3">
         <input className={INPUT} value={defaults} onChange={(e) => setDefaults(e.target.value)} placeholder="order_channel=store; products=Home Fiber 100" />
       </Field>
@@ -248,8 +307,51 @@ function NewBulk({ processes, onCancel, onCreated, onError }: { processes: Proce
         <label className="flex items-center gap-2"><input type="checkbox" checked={autoApprove} onChange={(e) => setAutoApprove(e.target.checked)} /> Approve each order along the way</label>
         <label className="flex items-center gap-2"><input type="checkbox" checked={sendToFulfillment} onChange={(e) => setSendToFulfillment(e.target.checked)} /> Send orders to Fulfillment</label>
       </div>
-      <div className="mt-4 flex gap-2">
-        <button type="button" className={BTN_PRIMARY} disabled={busy || !csv.trim()} onClick={submit}>{busy ? "Creating…" : "Create and start"}</button>
+
+      {preview && (
+        <div className="mt-4 space-y-2">
+          <div className="flex flex-wrap gap-2">
+            <Chip>{preview.rows} row(s)</Chip>
+            <Chip tone="emerald">{preview.valid} ready</Chip>
+            {preview.invalid > 0 && <Chip tone="red">{preview.invalid} can't run</Chip>}
+          </div>
+          {preview.missing_required_columns.length > 0 && (
+            <Notice tone="red" text={`The file has no ${preview.missing_required_columns.join(", ")} column - add it, or give it under "Every row gets"`} />
+          )}
+          {preview.unknown_columns.length > 0 && (
+            <Notice tone="amber" text={`Columns not used by ${preview.process_label}: ${preview.unknown_columns.join(", ")}`} />
+          )}
+          {Object.keys(preview.renamed).length > 0 && (
+            <p className="text-xs text-slate-500">Read as: {Object.entries(preview.renamed).map(([from, to]) => `${from} → ${to}`).join(", ")}</p>
+          )}
+          <div className="max-h-72 overflow-auto rounded-lg border border-slate-800">
+            <table className="w-full text-xs">
+              <thead className="sticky top-0 bg-slate-900 text-left text-[11px] uppercase text-slate-500">
+                <tr><th className="px-2 py-1">#</th><th>Row</th><th>Check</th></tr>
+              </thead>
+              <tbody>
+                {preview.shown.map((r) => (
+                  <tr key={r.row_no} className="border-t border-slate-800 align-top">
+                    <td className="px-2 py-1 text-slate-500">{r.row_no}</td>
+                    <td className="max-w-[460px] truncate text-slate-300" title={JSON.stringify(r.data)}>
+                      {Object.entries(r.data).map(([k, v]) => `${k}: ${typeof v === "object" ? JSON.stringify(v) : String(v)}`).join(" · ")}
+                    </td>
+                    <td className={r.valid ? "text-emerald-300" : "text-red-300"}>{r.valid ? "ready" : r.message}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {preview.rows > preview.shown.length && <p className="text-xs text-slate-500">Showing the first {preview.shown.length} rows.</p>}
+          {preview.invalid > 0 && preview.valid > 0 && <p className="text-xs text-slate-400">Rows that can't run are kept on the request as invalid - the others go ahead.</p>}
+        </div>
+      )}
+
+      <div className="mt-4 flex flex-wrap gap-2">
+        <button type="button" className={BTN_PRIMARY} disabled={busy || blocked} onClick={() => submit(true)}>
+          {busy ? "Uploading…" : `Create and start${preview ? ` (${preview.valid} order${preview.valid === 1 ? "" : "s"})` : ""}`}
+        </button>
+        <button type="button" className={BTN} disabled={busy || blocked} onClick={() => submit(false)}>Save as draft</button>
       </div>
     </Panel>
   );

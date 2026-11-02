@@ -2314,6 +2314,31 @@ export function bulkApi<T = unknown>(path = "", method: "GET" | "POST" = "GET", 
   return apiCall<T>(`/api/bulk-orders${path}`, method, body);
 }
 
+/** Send a CSV file (or pasted CSV text) to /api/bulk-orders/preview or /upload - the file is the request body. */
+export async function bulkSendFile<T>(path: "/preview" | "/upload", file: Blob, params: Record<string, string | boolean>): Promise<T> {
+  const token = getAccessToken();
+  const query = new URLSearchParams(Object.entries(params).map(([k, v]) => [k, String(v)]));
+  const res = await fetch(`${API_BASE}/api/bulk-orders${path}?${query}`, {
+    method: "POST",
+    body: file,
+    headers: { "Content-Type": "text/csv", ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(workContext.positionId ? { "X-Position-Id": String(workContext.positionId) } : {}),
+      ...(workContext.scope ? { "X-Data-Scope": workContext.scope } : {}) },
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    let detail = text;
+    try {
+      const parsed = JSON.parse(text).detail;
+      detail = typeof parsed === "string" ? parsed : JSON.stringify(parsed);
+    } catch {
+      /* plain text */
+    }
+    throw new Error(detail || `Upload failed (${res.status})`);
+  }
+  return JSON.parse(text) as T;
+}
+
 /** A bulk order's results as CSV. */
 export async function bulkResultsCsv(id: number): Promise<string> {
   const token = getAccessToken();
