@@ -107,7 +107,7 @@ DEFAULTS: dict[str, Any] = {
         {"key": "switching", "question": "Are they unhappy with their current provider?", "weight": 10},
     ],
     "target_market_score": 60,
-    # mobile subscribers (comm_mobile.py): prepaid / postpaid lines, plans, packs, vouchers, partners
+    # mobile subscribers (comm_mobile.py): the operating policy for prepaid / postpaid lines, vouchers and partners
     "mobile": {
         "number_range": "9100000000-9199999999",  # numbers when Inventory keeps no phone-number pool
         "imsi_prefix": "40499",  # MCC + MNC
@@ -135,29 +135,7 @@ DEFAULTS: dict[str, Any] = {
         "shared_max_members": 10,
         "max_bulk_lines": 50,
         "voucher_max_batch": 10000,
-        "plans": [
-            {"code": "PRE_BASIC", "name": "Prepaid Pay-as-you-go", "payment_type": "prepaid", "fee": 0.0, "validity_days": 30, "allowance": {}},
-            {"code": "PRE_SMART", "name": "Prepaid Smart 28", "payment_type": "prepaid", "fee": 299.0, "validity_days": 28,
-             "allowance": {"voice": 1000, "data": 30720, "sms": 300}},
-            {"code": "POST_399", "name": "Postpaid 399", "payment_type": "postpaid", "fee": 399.0, "validity_days": 30,
-             "allowance": {"voice": 3000, "data": 40960, "sms": 1000}},
-            {"code": "BIZ_599", "name": "Business Postpaid 599", "payment_type": "postpaid", "fee": 599.0, "validity_days": 30,
-             "allowance": {"voice": 5000, "data": 76800, "sms": 3000}},
-            {"code": "BIZ_SHARED", "name": "Business Shared Pool 1499", "payment_type": "postpaid", "fee": 1499.0, "validity_days": 30,
-             "allowance": {"voice": 10000, "data": 204800, "sms": 5000}, "shared": True},
-        ],
-        "packs": [
-            {"code": "DATA1", "name": "Data 1 GB - 1 day", "kind": "data", "price": 19.0, "validity_days": 1, "allowance": {"data": 1024}},
-            {"code": "DATA10", "name": "Data 10 GB - 28 days", "kind": "data", "price": 199.0, "validity_days": 28, "allowance": {"data": 10240}},
-            {"code": "VOICE100", "name": "100 minutes - 28 days", "kind": "voice", "price": 49.0, "validity_days": 28, "allowance": {"voice": 100}},
-            {"code": "SMS100", "name": "100 SMS - 28 days", "kind": "sms", "price": 19.0, "validity_days": 28, "allowance": {"sms": 100}},
-            {"code": "COMBO", "name": "Combo 300 min + 5 GB - 28 days", "kind": "combo", "price": 249.0, "validity_days": 28,
-             "allowance": {"voice": 300, "data": 5120, "sms": 100}},
-            {"code": "ROAM7", "name": "Roaming 7 days - 1 GB + 100 min", "kind": "roaming", "price": 599.0, "validity_days": 7,
-             "allowance": {"data": 1024, "voice": 100}, "roaming": True},
-            {"code": "TUNE", "name": "Caller tune", "kind": "vas", "price": 30.0, "validity_days": 30, "allowance": {}},
-            {"code": "VOICEMAIL", "name": "Voicemail", "kind": "vas", "price": 20.0, "validity_days": 30, "allowance": {}},
-        ],
+        # plans and packs are catalog products (Product Modeller, product lines mobile / mobile_addon / mobile_vas / roaming)
     },
     # agreements
     "agreement_sections": [

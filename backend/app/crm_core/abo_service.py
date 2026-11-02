@@ -140,6 +140,8 @@ def assetize(db, order, item):
                          version=asset.version, snapshot_json=asset.instance_json))
     item.status = "completed"
     db.flush()
+    from app.crm_core import comm_mobile
+    comm_mobile.on_asset_installed(db, order, item, asset, data)  # a mobile plan's asset gets its line(s)
     return asset
 
 
@@ -771,6 +773,8 @@ def complete(db, order):
             _replace_asset(db, order, asset, data, change.base_version + 1, change.operation)
         else:
             _update_asset(db, order, change, asset, data)
+        from app.crm_core import comm_mobile
+        comm_mobile.on_asset_changed(db, order, change, asset, data)  # the asset's mobile line(s) follow the change
         from app.timeutils import utcnow
         change.status, change.completed_at = "completed", utcnow()
         db.flush()  # (one open change per asset) the next one queued behind this becomes the open one

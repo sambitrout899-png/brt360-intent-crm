@@ -49,10 +49,11 @@ SPECS: dict[str, tuple[str, str, str, str, str | None, list[str], list[str]]] = 
     "INT-135": ("Set a spend limit", "A postpaid line's credit limit and the % of it that raises a spend alert - past the limit, "
                 "outgoing use is barred until the next cycle (bill-shock control).", "mobile", "🛑", None,
                 ["msisdn", "credit_limit", "spend_alert_pct"], ["Set the credit limit of 9100000001 to 3000 with an alert at 75%"]),
-    "INT-136": ("Activate mobile lines", "New prepaid or postpaid lines for a customer - one, or an SME's lines in one go - with numbers "
-                "(a golden number if asked), physical SIMs or eSIMs, the plan, the first recharge or the deposit and credit limit.",
+    "INT-136": ("Activate mobile lines", "Sell new prepaid or postpaid lines on a catalog plan - one, or an SME's lines in one go: each "
+                "is an order line, configured from the plan's product model and priced from the customer's pricelist, fulfilled and "
+                "installed as an asset - with numbers (a golden number if asked), SIMs or eSIMs, the first recharge or the deposit and limit.",
                 "mobile", "📱", "party",
-                ["party_id", "plan", "payment_type", "quantity", "msisdn", "iccid", "sim_type", "user_name", "wholesale_partner",
+                ["party_id", "offering_name", "pricing_attributes", "quantity", "msisdn", "iccid", "sim_type", "user_name", "wholesale_partner",
                  "initial_recharge", "payment_method", "deposit", "credit_limit"],
                 ["Activate 5 postpaid lines on BIZ_599 for customer 7 as eSIMs", "Activate a prepaid line on PRE_SMART for customer 7 with a recharge of 299"]),
     "INT-137": ("Swap a SIM", "A new SIM (or an eSIM) for a lost, stolen, damaged or upgraded one - identity checked first; "
@@ -106,8 +107,9 @@ LIB: dict[str, dict[str, Any]] = {
     "new_msisdn": {"label": "New number", "help": "Blank = the next free number; or a chosen (golden) number"},
     "voucher_pin": {"label": "Voucher PIN", "help": "Instead of an amount - the PIN scratched off the voucher"},
     "dealer": {"label": "Dealer", "help": "The partner that sold the recharge or holds the vouchers - their commission"},
-    "pack": {"label": "Pack", "placeholder": "e.g. DATA10, ROAM7, TUNE", "help": "A pack's code or name - Mobile -> Catalog"},
-    "plan": {"label": "Plan", "placeholder": "e.g. PRE_SMART, POST_399, BIZ_599", "help": "A plan's code or name - Mobile -> Catalog"},
+    "pack": {"label": "Pack", "type": "picklist", "source": "@offerings",
+             "help": "A catalog product on the mobile_addon, mobile_vas or roaming product line (Product Modeller)"},
+    "plan": {"label": "Plan", "type": "picklist", "source": "@offerings", "help": "A catalog product on the mobile product line (Product Modeller)"},
     "auto_renew": {"label": "Renew automatically", "type": "boolean", "default": False},
     "to_payment_type": {"label": "Switch to", "type": "picklist", "values": ["postpaid", "prepaid"]},
     "credit_limit": {"label": "Credit limit", "type": "money", "help": "Postpaid: outgoing use stops when the cycle's spend reaches it (0 = none)"},
@@ -152,13 +154,15 @@ OVERRIDES: dict[tuple[str, str], dict[str, Any]] = {
     ("INT-132", "amount"): {"help": "Within the transfer limit; the fee comes on top"},
     ("INT-134", "plan"): {"label": "New plan", "help": "Blank = the first plan of that payment type"},
     ("INT-136", "party_id"): {"label": "Customer"},
+    ("INT-136", "offering_name"): {"label": "Plan", "help": "A catalog product on the mobile product line - its attributes (payment type, "
+                                   "allowances, validity, SIM type) are what the line gets"},
+    ("INT-136", "pricing_attributes"): {"label": "Plan options", "help": "The choices its product model offers, e.g. Data allowance"},
     ("INT-136", "msisdn"): {"label": "Numbers", "type": "list", "help": "Blank = the next free numbers; or chosen (golden) numbers"},
     ("INT-136", "quantity"): {"label": "How many lines", "help": "An SME's lines in one go"},
-    ("INT-136", "payment_type"): {"help": "Blank = the plan's"},
     ("INT-136", "payment_method"): {"label": "First recharge / deposit paid by", "values": _PAY, "default": "cash"},
-    ("INT-136", "initial_recharge"): {"show_when": {"field": "payment_type", "in": ["", "prepaid"]}},
-    ("INT-136", "deposit"): {"show_when": {"field": "payment_type", "in": ["", "postpaid"]}},
-    ("INT-136", "credit_limit"): {"show_when": {"field": "payment_type", "in": ["", "postpaid"]}},
+    ("INT-136", "initial_recharge"): {"help": "Prepaid plans: at least the plan's price"},
+    ("INT-136", "deposit"): {"help": "Postpaid plans"},
+    ("INT-136", "credit_limit"): {"help": "Postpaid plans - blank = the default limit"},
     ("INT-137", "reason"): {"type": "picklist", "values": ["lost", "stolen", "damaged", "upgrade", "esim"], "default": "damaged"},
     ("INT-139", "action"): {"label": "Bar or unbar", "values": ["bar", "unbar"], "default": "bar"},
     ("INT-140", "action"): {"label": "Roaming", "values": ["on", "off"], "default": "on"},
@@ -180,7 +184,7 @@ OVERRIDES: dict[tuple[str, str], dict[str, Any]] = {
 }
 REQUIRED: dict[str, list[str]] = {
     "INT-129": ["msisdn"], "INT-130": ["msisdn", "pack"], "INT-131": ["msisdn"], "INT-132": ["msisdn", "to_msisdn", "amount"],
-    "INT-133": ["msisdn"], "INT-134": ["msisdn"], "INT-135": ["msisdn"], "INT-136": ["party_id", "plan"], "INT-137": ["msisdn"],
+    "INT-133": ["msisdn"], "INT-134": ["msisdn"], "INT-135": ["msisdn"], "INT-136": ["party_id", "offering_name"], "INT-137": ["msisdn"],
     "INT-138": ["msisdn"], "INT-139": ["msisdn", "barring"], "INT-140": ["msisdn"], "INT-141": ["msisdn", "member_msisdn"],
     "INT-142": ["msisdn", "plan"], "INT-143": ["msisdn", "action"], "INT-144": ["msisdn", "event_type", "quantity"],
     "INT-145": ["count", "face_value"], "INT-146": ["wholesale_partner"], "INT-147": ["wholesale_partner"], "INT-148": ["msisdn"],
@@ -281,6 +285,16 @@ def _code_after(text: str, words: str) -> str | None:
     return None
 
 
+def _plan_name(text: str) -> str | None:
+    """A plan named in the sentence: a quoted name, a code (BIZ_599), or the words after on / to - "on Business 599 for
+    customer 7", "to the Prepaid Smart plan"."""
+    if m := re.search(r"['\"“]([^'\"”]+)['\"”]", text):
+        return m.group(1).strip()
+    if m := re.search(r"\b(?:on|onto|to)\s+(?:the\s+)?([A-Z][\w+-]*(?:\s+[A-Z0-9][\w+-]*){0,4}?)(?:\s+plan)?(?=\s+(?:for|with|as|plan)\b|\s*[,.]|\s*$)", text):
+        return m.group(1).strip()
+    return _code_after(text, "plan|tariff")
+
+
 def _reason(text: str) -> str | None:
     if m := re.search(r"(?:\bbecause\b|\breason\s*[:=-]?|\s[-–—]\s)\s*(.+)$", text, re.I):
         return m.group(1).strip(" .")[:300]
@@ -367,8 +381,8 @@ def extract(code: str, text: str, fields: dict[str, Any], loose: dict[str, Any])
             e["quantity"] = int(m.group(1))
         if "payment_type" not in e and (m := re.search(r"\b(pre|post)-?\s?paid\b", text, re.I)):
             e["payment_type"] = f"{m.group(1).lower()}paid"
-        if "plan" not in e and (p := _code_after(text, "plan|tariff")):
-            e["plan"] = p
+        if "offering_name" not in e and (p := _plan_name(text)):
+            e["offering_name"] = p
         if "sim_type" not in e:
             e["sim_type"] = "esim" if re.search(r"\besims?\b", lowered) else "physical"
         if "iccid" not in e and (found := re.findall(r"\b(89\d{16,20})\b", text)):
@@ -435,7 +449,7 @@ def extract(code: str, text: str, fields: dict[str, Any], loose: dict[str, Any])
         if "action" not in e:
             e["action"] = "remove" if re.search(r"\b(?:remove|drop|take\s+off|leave)\w*\b", lowered) else "add"
     elif code == "INT-142":
-        if "plan" not in e and (p := _code_after(text, "plan|tariff")):
+        if "plan" not in e and (p := _plan_name(text)):
             e["plan"] = p
     elif code == "INT-143":
         if "action" not in e:
@@ -535,9 +549,9 @@ TRAINING: list[tuple[str, list[tuple[str, dict[str, Any]]]]] = [
     ("INT-135", [(f"Set the credit limit of {_TRAIN} to {{price}} with an alert at {{pct}}%",
                   {"msisdn": _TRAIN, "credit_limit": "{price}", "spend_alert_pct": "{pct}"})]),
     ("INT-136", [("Activate {n} postpaid lines on BIZ_599 for customer {id} as eSIMs",
-                  {"party_id": "{id}", "quantity": "{n}", "payment_type": "postpaid", "plan": "BIZ_599", "sim_type": "esim"}),
-                 ("activate a prepaid line on PRE_SMART for customer {id} with a recharge of 299",
-                  {"party_id": "{id}", "payment_type": "prepaid", "plan": "PRE_SMART", "initial_recharge": 299})]),
+                  {"party_id": "{id}", "quantity": "{n}", "offering_name": "BIZ_599", "sim_type": "esim"}),
+                 ("activate a prepaid line on Prepaid Smart for customer {id} with a recharge of 299",
+                  {"party_id": "{id}", "offering_name": "Prepaid Smart", "initial_recharge": 299})]),
     ("INT-137", [(f"Swap the SIM of {_TRAIN} to an eSIM - phone lost, identity verified",
                   {"msisdn": _TRAIN, "sim_type": "esim", "reason": "lost", "identity_verified": True})]),
     ("INT-138", [(f"Change the number of {_TRAIN} to 9100009999", {"msisdn": _TRAIN, "new_msisdn": "9100009999"})]),
@@ -570,7 +584,7 @@ RESULTS: dict[str, dict[str, list[str]]] = {
     "INT-133": {"msisdn": [], "credited": [], "owed": [], "balance": []},
     "INT-134": {"msisdn": [], "payment_type": ["prepaid", "postpaid"], "plan": [], "carried_over": []},
     "INT-135": {"msisdn": [], "credit_limit": [], "spend_alert_pct": [], "barred": ["true", "false"]},
-    "INT-136": {"party_id": [], "count": [], "msisdn": [], "line_id": [], "payment_type": ["prepaid", "postpaid"], "plan": []},
+    "INT-136": {"party_id": [], "count": [], "msisdn": [], "line_id": [], "payment_type": ["prepaid", "postpaid"], "plan": [], "monthly_price": []},
     "INT-137": {"msisdn": [], "iccid": [], "sim_type": ["physical", "esim"], "cooldown_until": []},
     "INT-138": {"msisdn": [], "old_msisdn": [], "quarantined_until": []},
     "INT-139": {"msisdn": [], "action": ["bar", "unbar"], "barring": []},

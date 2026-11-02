@@ -39,7 +39,10 @@ ATOMIC_PRODUCTS = [
     ("Fiber500", "connectivity"),
     ("Fiber1000", "connectivity"),
     ("VOIP", "voip"),
-    ("MobileLine", "mobile"),
+    ("MobileLine", "mobile"),  # a mobile plan (comm_mobile.profile)
+    ("MobileData", "mobile_addon"),  # data / voice / SMS packs and bolt-ons
+    ("MobileVAS", "mobile_vas"),  # value-added services: caller tune, voicemail ...
+    ("MobileRoaming", "roaming"),  # roaming packs
     ("StaticIP", "addon"),
     ("CloudBackup", "addon"),
     ("SecuritySuite", "addon"),
@@ -50,7 +53,12 @@ COMPATIBILITY_RULES = [
     ("connectivity", "voip", 1),
     ("connectivity", "mobile", 3),
     ("connectivity", "addon", 5),
+    # what can be bought on a mobile plan
+    ("mobile", "mobile_addon", 10),
+    ("mobile", "mobile_vas", 10),
+    ("mobile", "roaming", 3),
 ]
+MOBILE_RULE_LINES = {"mobile_addon", "mobile_vas", "roaming"}
 
 TERRITORY_RULES = [
     # region, owner_name
@@ -82,8 +90,11 @@ def seed_reference_data(db, tenant_id: int) -> None:
         if name not in existing:
             db.add(ProductSpecification(tenant_id=tenant_id, name=name, product_line=line, is_atomic=True))
 
-    if db.query(BundleCompatibilityRule).filter(BundleCompatibilityRule.tenant_id == tenant_id).count() == 0:
-        for primary, addon, max_addons in COMPATIBILITY_RULES:
+    have = {(r.primary_product_line, r.addon_product_line) for r in
+            db.query(BundleCompatibilityRule).filter(BundleCompatibilityRule.tenant_id == tenant_id).all()}
+    for primary, addon, max_addons in COMPATIBILITY_RULES:
+        # a tenant's own rules stay as they are; the mobile pack rules arrive for tenants seeded before them
+        if (not have or (primary == "mobile" and addon in MOBILE_RULE_LINES)) and (primary, addon) not in have:
             db.add(
                 BundleCompatibilityRule(
                     tenant_id=tenant_id, primary_product_line=primary, addon_product_line=addon, max_addons=max_addons

@@ -256,8 +256,10 @@ def unbilled(db: Session, tenant_id: int, party_id: int) -> dict[str, Any]:
     today = min(_today(), end)
     months = _months_between(start, today) if today >= start else 0.0
     recurring = []
+    from app.crm_core import comm_mobile
+
     for o in cs.live_orders(db, tenant_id, party_id):
-        if o.status != OrderStatus.suspended and o.monthly_price:
+        if o.status != OrderStatus.suspended and o.monthly_price and not comm_mobile.wallet_paid(db, o):
             recurring.append({"order_id": o.id, "description": _service_name(db, o), "amount": _r(o.monthly_price * months)})
     ledger = [{"id": a.id, "description": a.reason, "amount": _r(a.amount)} for a in _open_ledger(db, tenant_id, party_id)]
     usage = _rated_usage(db, tenant_id, party_id, _usage(db, tenant_id, party_id, start, end, unbilled_only=True), today)
@@ -345,9 +347,11 @@ def bill_run(db: Session, tenant_id: int, party_id: int, period_end: Any = None)
         raise ValueError(f"{party.name} is billed up to {start - dt.timedelta(days=1)} - nothing to bill before {start}")
     months = _months_between(start, end)
     lines: list[dict[str, Any]] = []
-    # 1. recurring charges for live services (suspended services are not charged)
+    # 1. recurring charges for live services (suspended services are not charged; prepaid mobile lines pay from their wallets)
+    from app.crm_core import comm_mobile
+
     for o in cs.live_orders(db, tenant_id, party.id):
-        if o.status == OrderStatus.suspended or not o.monthly_price:
+        if o.status == OrderStatus.suspended or not o.monthly_price or comm_mobile.wallet_paid(db, o):
             continue
         since = max(start, o.created_at.date())
         if since > end:

@@ -68,6 +68,17 @@ NETWORK-LEVEL attributes (VLAN, ports, interfaces, IP addresses/blocks, OLT/ONT/
 elements, BTS/sector/frequency, serial numbers, routing identifiers) do NOT belong in the selling model: they are filled
 in at installation from the network inventory. Never "add" one; for an existing one answer "move_to_installation".
 
+MOBILE products (product line "mobile" = a plan; "mobile_addon" = a data / voice / SMS pack or bolt-on; "mobile_vas" = a
+value-added service such as caller tune or voicemail; "roaming" = a roaming pack) are run by the mobile engine, which reads
+these attribute names - use them exactly when they apply:
+- "Payment type" (technical enum Prepaid / Postpaid; plans only),
+- "Validity" (technical number, unit days - how long the plan or pack lasts before it renews or ends),
+- "Data allowance" (e.g. 10 GB, 50 GB, Unlimited), "Voice minutes" (e.g. 300, 1000, Unlimited), "SMS" (e.g. 100, Unlimited) -
+  pricing enums with price impacts when the customer chooses between sizes, else technical with the one value as default,
+- "SIM type" (technical enum Physical SIM / eSIM; plans only), "Shared allowance" (technical boolean - a business pool other
+  lines can join), "Roaming" (technical boolean - a pack whose allowance is used abroad).
+MSISDN, ICCID and IMSI are network-level: assigned at activation from the number pool and SIM stock - never in the selling model.
+
 For every attribute in current_design answer exactly one action: "keep" (fine as it is), "update" (give the full
 improved spec), "move_to_installation" (network-level) or "remove" (doesn't belong to this product type at all).
 New attributes: action "add". Prefer an attribute_library name when it is the same concept. 4-8 pricing+service

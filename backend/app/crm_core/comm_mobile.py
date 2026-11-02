@@ -1,14 +1,20 @@
 """Mobile subscribers - prepaid and postpaid lines for operators, MVNOs and MVNEs
-(models/mobile.py). The tenant's plans, packs and policy are its communications
-settings, key "mobile" (comm_service.DEFAULTS).
+(models/mobile.py), built into the platform's product, sales and order model:
 
-  lines        activate one or many (an SME's 20 lines at once): number from the partner's
-               range, Inventory's phone-number pool or the tenant's range; SIM from Inventory's
-               stock, given, or an eSIM; plan; prepaid wallet or postpaid credit limit and
-               deposit. Suspend, resume, terminate (the number is quarantined, then reused).
+  products     plans and packs are catalog products - the product line says what they are
+               (mobile = plan; mobile_addon / mobile_vas / roaming = bought on a plan), their
+               product model's attributes, as configured when sold, say what they give
+               (profile()). The operating policy is the communications settings, key "mobile".
+  lines        sold on orders (INT-136, B2C direct orders, B2B quotes) and installed as assets:
+               abo_service.assetize brings the line to life on its asset (on_asset_installed);
+               change orders on the asset - product change, suspend, resume, terminate, port-in,
+               account transfer - move it (on_asset_changed). Number from the order's Inventory
+               reservation, the partner's range, the phone-number pool or the tenant's range; SIM
+               likewise, or given, or an eSIM. Terminated numbers are quarantined, then reused.
   prepaid      recharge (card / cash / UPI / voucher PIN), validity and grace, emergency credit
                recovered from the next recharge, balance transfer, low balance
-  postpaid     charges post to the billing account so the bill run bills them; credit limit and
+  postpaid     a plan sold on an order is billed on its asset by the bill run; packs, fees and
+               usage post to the billing account so the bill run bills them; credit limit and
                spend alert (bill shock); security deposit; prepaid <-> postpaid migration
   packs        data / voice / SMS / combo / roaming packs and value-added services, auto-renewal;
                the plan's own allowance is a pack too; a shared plan's members draw on its packs
@@ -75,55 +81,245 @@ def settings(db: Session, tenant_id: int) -> dict[str, Any]:
 # ------------------------------------------------------------------ catalog
 
 
-def _find(rows: list[dict[str, Any]], ref: Any, what: str) -> dict[str, Any]:
-    key = cs._key(ref)
-    if not key:
-        raise ValueError(f"Which {what}?")
-    for row in rows:
-        if key in (cs._key(row.get("code")), cs._key(row.get("name"))):
-            return row
-    like = [row for row in rows if key in cs._key(row.get("name")) or key in cs._key(row.get("code"))]
-    if len(like) == 1:
-        return like[0]
-    names = ", ".join(f"{r['name']} ({r['code']})" for r in (like or rows)[:8])
-    raise ValueError(f"No {what} '{ref}'" + (" - did you mean one of" if like else " - the tenant sells") + f": {names}")
+# What the Product Modeller says a mobile product gives. A plan or pack is an ordinary catalog product:
+# its product line (catalog specifications) says it is mobile, and its attributes - as configured when it
+# was sold, else their defaults - say what it gives. These names are read (any spelling / case):
+_ATTR = {
+    "payment_type": ("paymenttype", "billingtype", "prepaidpostpaid", "payment"),
+    "validity": ("validity", "validitydays", "validityperiod", "duration"),
+    "data": ("dataallowance", "data", "datalimit", "internet", "databundle"),
+    "voice": ("voiceminutes", "voice", "minutes", "voiceallowance", "calls"),
+    "sms": ("sms", "smsallowance", "messages", "texts"),
+    "roaming": ("roaming", "roamingpack", "useabroad"),
+    "shared": ("sharedallowance", "shared", "datapool", "pool", "sharedpool"),
+    "sim_type": ("simtype", "sim"),
+}
+UNLIMITED = 10_000_000.0
 
 
-def plan_of(db: Session, tenant_id: int, ref: Any) -> dict[str, Any]:
-    return _find(settings(db, tenant_id)["plans"], ref, "plan")
+def _picks(definition: dict[str, Any] | None, configuration: dict[str, Any] | None) -> dict[str, Any]:
+    """{normalised attribute name: value} - what was configured, else the attribute's default."""
+    out: dict[str, Any] = {}
+    for attr in (definition or {}).get("attributes", []):
+        if attr.get("default") not in (None, ""):
+            out[cs._key(attr["name"])] = attr["default"]
+    for part in ("technical", "pricing"):
+        for k, v in ((configuration or {}).get(part) or {}).items():
+            if v not in (None, ""):
+                out[cs._key(k)] = v
+    return out
 
 
-def pack_of(db: Session, tenant_id: int, ref: Any) -> dict[str, Any]:
-    return _find(settings(db, tenant_id)["packs"], ref, "pack")
+def _pick(picks: dict[str, Any], what: str) -> Any:
+    return next((picks[k] for k in _ATTR[what] if k in picks), None)
 
 
-def check_catalog(data: dict[str, Any]) -> None:
-    """The plans and packs an administrator saves (Mobile -> Catalog)."""
-    for key, what in (("plans", "plan"), ("packs", "pack")):
-        rows = data.get(key)
-        if rows is None:
+def _amount(value: Any, unit: str) -> float:
+    """'10 GB' -> 10240 (MB), 'Unlimited' -> UNLIMITED, '300' -> 300."""
+    text = str(value or "").strip().lower()
+    if not text or text in ("0", "none", "no", "false"):
+        return 0.0
+    if "unlimited" in text:
+        return UNLIMITED
+    m = re.search(r"(\d+(?:\.\d+)?)\s*(tb|gb|mb|kb|hours?|hrs?|min\w*)?", text)
+    if not m:
+        return 0.0
+    n, u = float(m.group(1)), (m.group(2) or "")
+    if unit == "data":
+        return n * 1024 * 1024 if u == "tb" else n * 1024 if u == "gb" else n / 1024 if u == "kb" else n
+    if unit == "voice" and u.startswith("h"):
+        return n * 60
+    return n
+
+
+def _days(value: Any, default: int) -> int:
+    text = str(value or "").strip().lower()
+    m = re.search(r"(\d+)\s*(day|week|month|year)?", text)
+    if not m:
+        return default
+    n, u = int(m.group(1)), m.group(2) or "day"
+    return max(1, n * {"day": 1, "week": 7, "month": 30, "year": 365}[u])
+
+
+def offering_of(db: Session, tenant_id: int, name: Any):
+    from app.crm_core import product_model_service as pm
+    from app.models.catalog import ProductOffering
+
+    text = str(name or "").strip()
+    if not text:
+        return None
+    found = pm.offering_of(db, tenant_id, text)
+    if found is None:  # a retired product a line was sold on still describes the line
+        found = (db.query(ProductOffering).filter(ProductOffering.tenant_id == tenant_id, ProductOffering.name.ilike(text))
+                 .order_by(ProductOffering.version.desc()).first())
+    return found
+
+
+def product_kind(db: Session, tenant_id: int, offering) -> str | None:
+    """'plan' / 'pack' / 'vas' / 'roaming' for a mobile product (its product lines), else None."""
+    from app.models.catalog import ProductSpecification
+    from app.models.mobile import MOBILE_PRODUCT_LINES
+
+    if offering is None:
+        return None
+    names = [n.strip() for n in (offering.composition or "").split(",") if n.strip()]
+    lines = {s.product_line for s in db.query(ProductSpecification).filter(ProductSpecification.tenant_id == tenant_id,
+                                                                            ProductSpecification.name.in_(names or [""]))}
+    if "mobile" in lines:
+        return "plan"
+    return next((MOBILE_PRODUCT_LINES[l] for l in ("roaming", "mobile_vas", "mobile_addon") if l in lines), None)
+
+
+def profile(db: Session, tenant_id: int, offering_name: Any, configuration: dict[str, Any] | None = None,
+            definition: dict[str, Any] | None = None, party: Party | None = None) -> dict[str, Any] | None:
+    """What a mobile plan or pack gives - from the product's model (its frozen definition when given) and the
+    configuration it was sold with. None when it isn't a mobile product. With the customer, its price is the
+    customer's pricelist price."""
+    from app.crm_core import product_config_service as pc
+
+    offering = offering_of(db, tenant_id, offering_name)
+    kind = product_kind(db, tenant_id, offering)
+    if kind is None:
+        return None
+    definition = definition or pc.schema(db, tenant_id, offering.name)
+    picks = _picks(definition, configuration)
+    allowance = {k: _amount(_pick(picks, k), k) for k in EVENT_TYPES}
+    allowance = {k: v for k, v in allowance.items() if v > 0}
+    paid = str(_pick(picks, "payment_type") or "").lower()
+    price = offering.price
+    if party is not None:
+        price = pc.base_price(db, tenant_id, pc.price_list_for(db, tenant_id, party), offering)[0]
+    if configuration and (configuration.get("price") or {}).get("configured") is not None:
+        price = float(configuration["price"]["configured"])
+    roaming = kind == "roaming" or cs._bool(_pick(picks, "roaming"))
+    return {
+        "code": offering.name, "name": offering.name, "offering_id": offering.id, "kind": kind if kind != "roaming" else "roaming",
+        "payment_type": ("prepaid" if "pre" in paid else "postpaid") if kind == "plan" else None,
+        "validity_days": _days(_pick(picks, "validity"), 30 if kind == "plan" else 28),
+        "allowance": allowance, "unlimited": [k for k, v in allowance.items() if v >= UNLIMITED],
+        "roaming": roaming, "shared": kind == "plan" and cs._bool(_pick(picks, "shared")),
+        "sim_type": "esim" if "esim" in cs._key(_pick(picks, "sim_type")) else "physical",
+        "price": round(float(price or 0), 2), "fee": round(float(price or 0), 2), "model_version": definition.get("version"),
+        "status": getattr(offering.status, "value", offering.status), "segment": offering.segment,
+    }
+
+
+def plan_of(db: Session, tenant_id: int, ref: Any, party: Party | None = None, configuration: dict[str, Any] | None = None) -> dict[str, Any]:
+    p = profile(db, tenant_id, ref, configuration, party=party)
+    if p is None or p["kind"] != "plan":
+        raise ValueError(f"'{ref}' is not a mobile plan in the catalog - a plan is a product on the 'mobile' product line "
+                         f"(Product Modeller); plans on sale: {', '.join(r['name'] for r in catalog(db, tenant_id)['plans'][:8]) or 'none yet'}")
+    return p
+
+
+def pack_of(db: Session, tenant_id: int, ref: Any, party: Party | None = None, plan: str | None = None) -> dict[str, Any]:
+    """A pack / bolt-on / value-added service from the catalog - active, eligible for the customer and
+    allowed on the line's plan by the catalog's compatibility rules."""
+    from app.crm_core import product_model_service as pm
+    from app.models.catalog import BundleCompatibilityRule
+
+    p = profile(db, tenant_id, ref, party=party)
+    if p is None or p["kind"] == "plan":
+        raise ValueError(f"'{ref}' is not a mobile pack in the catalog - packs are products on the mobile_addon, mobile_vas or roaming "
+                         f"product line; on sale: {', '.join(r['name'] for r in catalog(db, tenant_id)['packs'][:8]) or 'none yet'}")
+    if p["status"] != "active":
+        raise ValueError(f"{p['name']} is not on sale ({p['status']})")
+    if party is not None:
+        errors = pm.customer_rule_errors(db, tenant_id, p["name"], party, [plan] if plan else [])
+        if errors:
+            raise ValueError("; ".join(errors))
+    rules = db.query(BundleCompatibilityRule).filter(BundleCompatibilityRule.tenant_id == tenant_id, BundleCompatibilityRule.primary_product_line == "mobile").all()
+    line_of_kind = {"pack": "mobile_addon", "vas": "mobile_vas", "roaming": "roaming"}[p["kind"]]
+    if rules and line_of_kind not in {r.addon_product_line for r in rules}:
+        raise ValueError(f"The catalog's compatibility rules don't allow {line_of_kind} products on a mobile plan")
+    return p
+
+
+def _t(name: str, default: Any, values: list[str] | None = None, data_type: str | None = None, unit: str | None = None) -> dict[str, Any]:
+    """A characteristic of the product: one allowed value (so a product change never carries another plan's value over)."""
+    if values is None and data_type is None:
+        values = [str(default)]
+    return {"op": "upsert_attribute", "name": name, "kind": "technical", "data_type": data_type or ("enum" if values else "string"),
+            "values": values or [], "default": str(default), "unit": unit}
+
+
+# name, segment, specification (its product line), monthly list price, attributes (product model)
+SAMPLE_CATALOG: list[tuple[str, str, str, float, list[dict[str, Any]]]] = [
+    ("Prepaid Pay-as-you-go", "B2C", "MobileLine", 0.0,
+     [_t("Payment type", "Prepaid"), _t("Validity", 30, data_type="number", unit="days"),
+      _t("SIM type", "Physical SIM", ["Physical SIM", "eSIM"])]),
+    ("Prepaid Smart 28", "B2C", "MobileLine", 299.0,
+     [_t("Payment type", "Prepaid"), _t("Validity", 28, data_type="number", unit="days"),
+      _t("Data allowance", "30 GB"), _t("Voice minutes", "1000"), _t("SMS", "300"), _t("SIM type", "Physical SIM", ["Physical SIM", "eSIM"])]),
+    ("Postpaid 399", "B2C", "MobileLine", 399.0,
+     [_t("Payment type", "Postpaid"), _t("Validity", 30, data_type="number", unit="days"),
+      {"op": "upsert_attribute", "name": "Data allowance", "kind": "pricing", "data_type": "enum", "values": ["40 GB", "75 GB", "Unlimited"],
+       "default": "40 GB", "price_impacts": [{"value": "75 GB", "type": "flat", "amount": 150}, {"value": "Unlimited", "type": "flat", "amount": 300}]},
+      _t("Voice minutes", "3000"), _t("SMS", "1000"), _t("SIM type", "Physical SIM", ["Physical SIM", "eSIM"])]),
+    ("Business Postpaid 599", "B2B", "MobileLine", 599.0,
+     [_t("Payment type", "Postpaid"), _t("Validity", 30, data_type="number", unit="days"),
+      _t("Data allowance", "75 GB"), _t("Voice minutes", "5000"), _t("SMS", "3000"), _t("SIM type", "eSIM", ["Physical SIM", "eSIM"])]),
+    ("Business Shared Pool 1499", "B2B", "MobileLine", 1499.0,
+     [_t("Payment type", "Postpaid"), _t("Validity", 30, data_type="number", unit="days"),
+      _t("Data allowance", "200 GB"), _t("Voice minutes", "10000"), _t("SMS", "5000"), _t("Shared allowance", "true", data_type="boolean"),
+      _t("SIM type", "eSIM", ["Physical SIM", "eSIM"])]),
+    ("Data 1 GB Day Pass", "", "MobileData", 19.0, [_t("Validity", 1, data_type="number", unit="days"), _t("Data allowance", "1 GB")]),
+    ("Data 10 GB Booster", "", "MobileData", 199.0, [_t("Validity", 28, data_type="number", unit="days"), _t("Data allowance", "10 GB")]),
+    ("Voice 100 Minutes", "", "MobileData", 49.0, [_t("Validity", 28, data_type="number", unit="days"), _t("Voice minutes", "100")]),
+    ("Roaming 7 Days", "", "MobileRoaming", 599.0,
+     [_t("Validity", 7, data_type="number", unit="days"), _t("Data allowance", "1 GB"), _t("Voice minutes", "100"), _t("Roaming", "true", data_type="boolean")]),
+    ("Caller Tune", "", "MobileVAS", 30.0, [_t("Validity", 30, data_type="number", unit="days")]),
+]
+
+
+def sample_catalog(db: Session, tenant_id: int) -> dict[str, Any]:
+    """Typical mobile plans and packs as catalog products with their product models (Product Modeller) -
+    a starting point to edit; products that exist already are left alone. Prices are placeholders."""
+    from app.crm_core import product_config_service as pc
+    from app.integration import tmf620_adapter
+    from app.models.catalog import BundleCompatibilityRule, BundleEligibilityRule, ProductSpecification
+
+    # the mobile product lines and what can be bought on a plan (seed.py gives them to new tenants too)
+    have = {s.name for s in db.query(ProductSpecification).filter(ProductSpecification.tenant_id == tenant_id)}
+    for spec_name, line in (("MobileLine", "mobile"), ("MobileData", "mobile_addon"), ("MobileVAS", "mobile_vas"), ("MobileRoaming", "roaming")):
+        if spec_name not in have:
+            db.add(ProductSpecification(tenant_id=tenant_id, name=spec_name, product_line=line, is_atomic=True))
+    rules = {(r.primary_product_line, r.addon_product_line) for r in db.query(BundleCompatibilityRule).filter(BundleCompatibilityRule.tenant_id == tenant_id)}
+    for addon, most in (("mobile_addon", 10), ("mobile_vas", 10), ("roaming", 3)):
+        if ("mobile", addon) not in rules:
+            db.add(BundleCompatibilityRule(tenant_id=tenant_id, primary_product_line="mobile", addon_product_line=addon, max_addons=most))
+    db.flush()
+    made, kept = [], []
+    for name, segment, spec, price, attrs in SAMPLE_CATALOG:
+        if offering_of(db, tenant_id, name) is not None:
+            kept.append(name)
             continue
-        if not isinstance(rows, list):
-            raise ValueError(f"{key} must be a list")
-        codes = set()
-        for row in rows:
-            if not isinstance(row, dict) or not str(row.get("code") or "").strip() or not str(row.get("name") or "").strip():
-                raise ValueError(f"Every {what} needs a code and a name")
-            code = cs._key(row["code"])
-            if code in codes:
-                raise ValueError(f"Two {key} use the code {row['code']}")
-            codes.add(code)
-            price = row.get("fee" if key == "plans" else "price", 0)
-            if not isinstance(price, (int, float)) or price < 0:
-                raise ValueError(f"{row['name']}: the price must be a number, 0 or more")
-            if int(row.get("validity_days") or 0) < 1:
-                raise ValueError(f"{row['name']}: validity_days must be at least 1")
-            allowance = row.get("allowance") or {}
-            if not isinstance(allowance, dict) or any(k not in EVENT_TYPES or not isinstance(v, (int, float)) or v < 0 for k, v in allowance.items()):
-                raise ValueError(f"{row['name']}: allowance is {{voice: minutes, sms: messages, data: MB}}")
-            if key == "plans" and row.get("payment_type") not in ("prepaid", "postpaid"):
-                raise ValueError(f"{row['name']}: payment_type is prepaid or postpaid")
+        o = tmf620_adapter.create_offering_version(db, tenant_id=tenant_id, name=name, segment=segment, composition=spec, list_price=price,
+                                           price_floor=0.0, discount_ceiling_pct=20.0)
+        for seg, channel in ((segment, "B2B" if segment == "B2B" else "B2C"),) if segment else (("B2C", "B2C"), ("B2B", "B2B")):
+            db.add(BundleEligibilityRule(product_offering_id=o.id, segment=seg, channel=channel, region="ALL"))
+        tmf620_adapter.publish_offering(db, o.id)
+        pc.apply_design(db, tenant_id, name, attrs)
+        made.append(name)
+    db.flush()
+    return {"created": made, "kept": kept, **catalog(db, tenant_id)}
 
+
+def catalog(db: Session, tenant_id: int) -> dict[str, Any]:
+    """The mobile plans and packs on sale - catalog products, as the Product Modeller designs them."""
+    from app.models.catalog import OfferingStatus, ProductOffering
+
+    plans, packs = [], []
+    seen: set[str] = set()
+    for o in (db.query(ProductOffering).filter(ProductOffering.tenant_id == tenant_id, ProductOffering.status == OfferingStatus.active)
+              .order_by(ProductOffering.name, ProductOffering.version.desc())):
+        if o.name.lower() in seen:
+            continue
+        seen.add(o.name.lower())
+        p = profile(db, tenant_id, o.name)
+        if p is not None:
+            (plans if p["kind"] == "plan" else packs).append(p)
+    return {"plans": plans, "packs": packs}
 
 # ------------------------------------------------------------------ lines
 
@@ -245,6 +441,8 @@ def line_out(db: Session, line: MbLine, full: bool = False) -> dict[str, Any]:
         "cycle_spend": _r(line.cycle_spend), "deposit": _r(line.deposit), "group_head_id": line.group_head_id,
         "partner": partner.name if partner else None, "partner_id": line.partner_id, "activated_at": line.activated_at,
         "terminated_at": line.terminated_at, "swap_cooldown_until": line.swap_cooldown_until,
+        "order_id": line.order_id, "order_item_id": line.order_item_id, "asset_id": line.asset_id, "plan_charge": line.plan_charge,
+        "plan_profile": line.plan_profile,
     }
     if full:
         packs = _active_packs(db, line)
@@ -298,7 +496,7 @@ def lines(db: Session, tenant_id: int, query: str = "", status: str = "", paymen
 
 
 def _parse_range(text: str) -> tuple[int, int] | None:
-    m = re.match(r"^\s*(\d{6,15})\s*(?:-|–|to)\s*(\d{6,15})\s*$", str(text or ""))
+    m = re.match(r"^\s*(\d{6,15})\s*(?:-|â€“|to)\s*(\d{6,15})\s*$", str(text or ""))
     if not m or len(m.group(1)) != len(m.group(2)) or int(m.group(1)) > int(m.group(2)):
         return None
     return int(m.group(1)), int(m.group(2))
@@ -368,8 +566,11 @@ def _number(db: Session, tenant_id: int, party_id: int, partner: MbPartner | Non
     return value
 
 
-def _sim(db: Session, tenant_id: int, party_id: int, sim_type: str, iccid: str, reference: str) -> tuple[str, str, str]:
-    """(iccid, imsi, esim activation code) for a new SIM."""
+def _sim(db: Session, tenant_id: int, party_id: int, sim_type: str, iccid: str, reference: str, pending_ok: bool = False) -> tuple[str, str, str]:
+    """(iccid, imsi, esim activation code) for a new SIM. pending_ok: no ICCID and no SIM stock gives ("", "", "") -
+    the line waits for a SIM (an order being fulfilled must not fail for it)."""
+    if not iccid and sim_type != "esim" and pending_ok and not inv.managed(db, tenant_id, "sim"):
+        return "", "", ""
     if sim_type == "esim":
         iccid = iccid or "8991" + "".join(str(secrets.randbelow(10)) for _ in range(15))
         code = f"LPA:1${settings(db, tenant_id)['smdp_address']}${secrets.token_hex(8).upper()}"
@@ -438,78 +639,312 @@ def _pay_method(value: Any, default: str = "cash") -> str:
     return method
 
 
-# ------------------------------------------------------------------ activation
+# ------------------------------------------------------------------ activation: lines are sold on orders and live as assets
+
+
+def _plan_charge(prof: dict[str, Any], from_order: bool) -> str:
+    if prof["payment_type"] == "prepaid":
+        return "wallet"
+    return "asset" if from_order else "ledger"
+
+
+def _start_plan(db: Session, tenant_id: int, line: MbLine, prof: dict[str, Any], what: str = "") -> MbPack | None:
+    """The plan's allowance for a period, paid as the line's plan is charged: from the wallet (prepaid - not
+    started while the balance can't pay it; the next recharge starts it), on the bill (postpaid sold without an
+    order) or nothing here (postpaid on an order - the bill run bills its asset)."""
+    price = prof["price"]
+    if line.plan_charge == "wallet":
+        if price > line.balance:
+            _event(db, line, "plan_due", f"{prof['name']} ({price:,.2f}) starts with the next recharge - {line.balance:,.2f} on the wallet")
+            return None
+        paid = _charge(db, tenant_id, line, price, what or f"{prof['name']} plan", kind="plan_fee") if price else "free"
+        line.valid_until = max(line.valid_until or _today(), _today() + dt.timedelta(days=int(prof["validity_days"])))
+        _bar(line, "validity", False)
+    elif line.plan_charge == "ledger":
+        paid = _charge(db, tenant_id, line, price, what or f"{prof['name']} plan", kind="plan_fee") if price else "free"
+    else:
+        paid = "asset"
+    return _add_pack(db, line, prof, paid, kind="plan", auto_renew=True)
+
+
+def _activate_line(db: Session, tenant_id: int, party: Party, prof: dict[str, Any], req: dict[str, Any], *, order_id: int | None = None,
+                   order_item_id: int | None = None, asset_id: int | None = None) -> tuple[MbLine, str]:
+    """One line on a plan: number, SIM, plan, first recharge or deposit. Returns (line, eSIM activation code)."""
+    s = settings(db, tenant_id)
+    partner = _partner(db, tenant_id, req.get("partner_id") or req.get("wholesale_partner"))
+    if partner and partner.status != "active":
+        raise ValueError(f"{partner.name} is {partner.status} - no new lines")
+    reference = f"mobile line for {party.name}" + (f" (order {order_id})" if order_id else "")
+    sim_type = str(req.get("sim_type") or prof["sim_type"]).lower()
+    held_number = held_sim = None
+    if order_id:  # fulfilment reserved them for the order (a mobile pattern's SOM steps): the line takes exactly those
+        used = {l.msisdn for l in db.query(MbLine).filter(MbLine.order_id == order_id)} | {l.iccid for l in db.query(MbLine).filter(MbLine.order_id == order_id)}
+        held_number = next((i for i in inv.held_by_order(db, tenant_id, order_id, "phone_number") if norm_msisdn(i.identifier) not in used), None)
+        held_sim = next((i for i in inv.held_by_order(db, tenant_id, order_id, "sim") if i.identifier not in used), None) if sim_type != "esim" else None
+    if held_number is not None and not req.get("msisdn"):
+        msisdn = norm_msisdn(held_number.identifier) or held_number.identifier
+        if why := number_taken(db, tenant_id, msisdn):
+            raise ValueError(why)
+        inv.set_lifecycle(db, tenant_id, held_number, "in_use", source="mobile", reference=reference)
+    else:
+        msisdn = _number(db, tenant_id, party.id, partner, str(req.get("msisdn") or ""), reference, set(req.get("_taken") or []))
+    if held_sim is not None and not req.get("iccid"):
+        inv.set_lifecycle(db, tenant_id, held_sim, "in_use", source="mobile", reference=reference)
+        iccid, imsi, code = held_sim.identifier, str(inv._j(held_sim.attributes_json, {}).get("imsi") or ""), ""
+    else:
+        iccid, imsi, code = _sim(db, tenant_id, party.id, sim_type, str(req.get("iccid") or ""), reference, pending_ok=order_item_id is not None)
+    postpaid = prof["payment_type"] == "postpaid"
+    limit = _r(req["credit_limit"] if req.get("credit_limit") not in (None, "") else s["credit_limit_default"]) if postpaid else 0.0
+    line = MbLine(tenant_id=tenant_id, party_id=party.id, partner_id=partner.id if partner else None, order_id=order_id, order_item_id=order_item_id,
+                  asset_id=asset_id, plan_charge=_plan_charge(prof, order_item_id is not None), msisdn=msisdn, iccid=iccid, imsi=imsi,
+                  sim_type=sim_type, user_name=str(req.get("user_name") or "")[:200], plan=prof["name"], plan_profile=prof,
+                  payment_type=prof["payment_type"], status="active" if iccid else "pending",
+                  status_reason="" if iccid else "waiting for a SIM - swap its ICCID in (Swap a SIM)", barrings=[], roaming=False,
+                  balance=0.0, advance_owed=0.0, credit_limit=limit, spend_alert_pct=80, cycle_spend=0.0, alert_sent=False,
+                  deposit=_r(req.get("deposit") if req.get("deposit") not in (None, "") else (s["postpaid_deposit"] if postpaid else 0)) if postpaid else 0.0,
+                  previous_msisdns=[], cycle_start=_today() if postpaid else None)
+    db.add(line)
+    db.flush()
+    line.imsi = line.imsi or f"{s['imsi_prefix']}{line.id:010d}"[:15]
+    if not postpaid:
+        line.valid_until = _today() + dt.timedelta(days=int(s["prepaid_validity_days"]))
+        recharge = _r(req.get("initial_recharge") or 0)
+        if recharge > 0:
+            _wallet(db, line, "recharge", recharge, method=_pay_method(req.get("payment_method")), reference="first recharge")
+    _start_plan(db, tenant_id, line, prof)
+    _event(db, line, "activated", f"Activated on {prof['name']} ({prof['payment_type']})" + (f", SIM {iccid}" if iccid else ", waiting for a SIM")
+           + (f", order {order_id}" if order_id else "") + (f", deposit {line.deposit:,.2f}" if line.deposit else ""),
+           plan=prof["name"], partner=partner.name if partner else None, order_id=order_id, asset_id=asset_id)
+    return line, code
 
 
 def activate(db: Session, tenant_id: int, e: dict[str, Any]) -> dict[str, Any]:
-    """Activate one or more mobile lines for a customer (an SME's lines in one go)."""
+    """INT-136 - sell mobile lines on orders, through the platform's order flow: the plan is configured from its
+    product model and priced from the customer's pricelist; each line is an order line of its own and becomes
+    an installed asset (so it can later be changed, suspended or ported on its own). A fulfilment pattern made
+    for the plan fulfils it; otherwise the mobile activation completes it at once (no field work). The lines
+    appear as the assets are installed (on_asset_installed)."""
+    from app.crm_core import account_service, instance_service, om_service as om, product_config_service as pc
+    from app.integration import order_adapter
+    from app.models.orders import OrderType
+    from app.models.product_config import OrderItemConfig
+    from app.orchestration.actions_prospect import check_products
+
     s = settings(db, tenant_id)
     party = cs.party_of(db, tenant_id, e)
-    plan = plan_of(db, tenant_id, e.get("plan"))
-    payment_type = str(e.get("payment_type") or plan["payment_type"]).lower()
-    if payment_type not in ("prepaid", "postpaid"):
-        raise ValueError("Payment type: prepaid or postpaid")
-    if payment_type != plan["payment_type"]:
-        raise ValueError(f"{plan['name']} is a {plan['payment_type']} plan - pick a {payment_type} one")
+    prof = plan_of(db, tenant_id, e.get("offering_name") or e.get("plan"), party=party)
+    if prof["status"] != "active":
+        raise ValueError(f"{prof['name']} is not on sale ({prof['status']})")
+    if e.get("payment_type") and str(e["payment_type"]).lower() != prof["payment_type"]:
+        raise ValueError(f"{prof['name']} is a {prof['payment_type']} plan - pick a {str(e['payment_type']).lower()} one")
     quantity = int(e.get("quantity") or 1)
     if not 1 <= quantity <= int(s["max_bulk_lines"]):
         raise ValueError(f"Activate 1 to {s['max_bulk_lines']} lines at a time")
-    sim_type = str(e.get("sim_type") or "physical").lower()
-    if sim_type not in SIM_TYPES:
-        raise ValueError("SIM type: physical or esim")
     numbers, iccids, users = _list(e.get("msisdn")), _list(e.get("iccid")), _list(e.get("user_name"))
     if len(numbers) > quantity or len(iccids) > quantity:
         raise ValueError(f"More numbers / SIMs than lines ({quantity})")
+    sim_type = str(e.get("sim_type") or "").lower()
+    if sim_type and sim_type not in SIM_TYPES:
+        raise ValueError("SIM type: physical or esim")
     partner = _partner(db, tenant_id, e.get("wholesale_partner") or e.get("partner"))
     if partner and partner.status != "active":
         raise ValueError(f"{partner.name} is {partner.status} - no new lines")
-    _standing(db, tenant_id, party.id, payment_type == "postpaid")
-    recharge = _r(e.get("initial_recharge") or 0)
-    if payment_type == "prepaid" and plan["fee"] > 0 and recharge < plan["fee"]:
-        raise ValueError(f"{plan['name']} costs {plan['fee']:,.2f} - give an initial recharge of at least that much")
-    deposit = _r(e.get("deposit") if e.get("deposit") not in (None, "") else (s["postpaid_deposit"] if payment_type == "postpaid" else 0))
-    limit = _r(e.get("credit_limit") if e.get("credit_limit") not in (None, "") else s["credit_limit_default"])
-    if payment_type == "postpaid" and limit > float(s["credit_limit_max"]):
+    _standing(db, tenant_id, party.id, prof["payment_type"] == "postpaid")
+    check_products(db, tenant_id, party, [(prof["name"], quantity)])  # sold to the customer's segment, and eligible
+    if prof["payment_type"] == "postpaid" and e.get("credit_limit") not in (None, "") and float(e["credit_limit"]) > float(s["credit_limit_max"]):
         raise ValueError(f"The credit limit can be at most {s['credit_limit_max']:,.2f}")
-    method = _pay_method(e.get("payment_method"))
+    if prof["payment_type"] == "prepaid" and prof["price"] > 0 and _r(e.get("initial_recharge") or 0) < prof["price"]:
+        raise ValueError(f"{prof['name']} costs {prof['price']:,.2f} - give a first recharge of at least that much")
     cs.no_card_numbers(e.get("reference"))
-    made: list[MbLine] = []
-    codes: dict[str, str] = {}
-    taken: set[str] = set()
+    offering = offering_of(db, tenant_id, prof["name"])
+    price_list = pc.price_list_for(db, tenant_id, party)
+    base, _ = pc.base_price(db, tenant_id, price_list, offering, 1)
+    configured = pc.configure(db, tenant_id, offering.name, e.get("pricing_attributes") or {}, e.get("technical_attributes") or {}, base,
+                              party=party, price_list=price_list)
+    billing = order_adapter.get_or_create_billing_account(db, tenant_id, party.id)
+    service_account = account_service.get_or_create_service_account(db, tenant_id, billing.id, f"{offering.name} Service")
+    orders, codes, made = [], {}, []
+    taken: list[str] = []
     for i in range(quantity):
-        reference = f"mobile line for {party.name}"
-        msisdn = _number(db, tenant_id, party.id, partner, numbers[i] if i < len(numbers) else "", reference, taken)
-        taken.add(msisdn)
-        iccid, imsi, code = _sim(db, tenant_id, party.id, sim_type, iccids[i] if i < len(iccids) else "", reference)
-        line = MbLine(tenant_id=tenant_id, party_id=party.id, partner_id=partner.id if partner else None, msisdn=msisdn, iccid=iccid, imsi=imsi,
-                      sim_type=sim_type, user_name=(users[i] if i < len(users) else "")[:200], plan=plan["code"], payment_type=payment_type,
-                      status="active", barrings=[], roaming=False, balance=0.0, advance_owed=0.0, credit_limit=limit if payment_type == "postpaid" else 0.0,
-                      spend_alert_pct=80, cycle_spend=0.0, alert_sent=False, deposit=0.0, previous_msisdns=[], order_id=e.get("order_id") or None)
-        db.add(line)
+        req = {"msisdn": numbers[i] if i < len(numbers) else "", "iccid": iccids[i] if i < len(iccids) else "", "sim_type": sim_type,
+               "user_name": users[i] if i < len(users) else "", "partner_id": partner.id if partner else None,
+               "initial_recharge": e.get("initial_recharge"), "payment_method": e.get("payment_method"), "deposit": e.get("deposit"),
+               "credit_limit": e.get("credit_limit")}
+        order = order_adapter.create_order(db, tenant_id=tenant_id, party_id=party.id, service_account_id=service_account.id, quote_id=None,
+                                           order_type=OrderType.new, monthly_price=configured["configured"])
+        item = order_adapter.add_order_item(db, order.id, offering.id, 1)
+        item.unit_price = item.net_unit_price = configured["configured"]
+        item.discount_pct = 0.0
+        db.add(OrderItemConfig(order_item_id=item.id, pricing_attributes_json=_dumps(configured["pricing"]),
+                               technical_attributes_json=_dumps(configured["technical"])))
+        inst = instance_service.take(db, tenant_id, "order", order.id, offering.name, item_id=item.id)
+        # what the line is to be activated with travels with the order line (and so onto its asset)
+        inst.configuration_json = _dumps({"pricing": configured["pricing"], "technical": configured["technical"], "quantity": 1,
+                                          "mobile": {**req, "_taken": taken[:]}})
+        inst.price_json = _dumps(configured)
+        detail = om.order_detail(db, tenant_id, order)
+        detail.channel = str(e.get("order_channel") or "store")[:30]
         db.flush()
-        line.imsi = line.imsi or f"{s['imsi_prefix']}{line.id:010d}"[:15]
-        if code:
-            codes[msisdn] = code
-        if payment_type == "prepaid":
-            line.valid_until = _today() + dt.timedelta(days=int(plan.get("validity_days") or s["prepaid_validity_days"]))
-            if recharge > 0:
-                _wallet(db, line, "recharge", recharge, method=method, reference="initial recharge")
-            paid = _charge(db, tenant_id, line, plan["fee"], f"{plan['name']} plan", kind="plan_fee")
-        else:
-            line.cycle_start = _today()
-            line.deposit = deposit
-            paid = _charge(db, tenant_id, line, plan["fee"], f"{plan['name']} plan - first month", kind="plan_fee")
-        _add_pack(db, line, {**plan, "price": plan["fee"]}, paid, kind="plan", auto_renew=True)
-        _event(db, line, "activated", f"Activated on {plan['name']} ({payment_type}), SIM {iccid}" + (f", deposit {deposit:,.2f}" if line.deposit else ""),
-               plan=plan["code"], partner=partner.name if partner else None)
-        made.append(line)
+        _fulfil(db, tenant_id, order, prof["name"])
+        db.refresh(order)
+        for line in db.query(MbLine).filter(MbLine.order_item_id == item.id).all():
+            made.append(line)
+            taken.append(line.msisdn)
+        orders.append({"order_id": order.id, "status": order.status.value})
     db.flush()
+    for line in made:
+        ev = db.query(MbLineEvent).filter(MbLineEvent.line_id == line.id, MbLineEvent.action == "esim_code").first()
+        if ev is not None:
+            codes[line.msisdn] = (ev.detail or {}).get("code")
     out = [line_out(db, l) for l in made]
-    return {"party_id": party.id, "count": len(made), "lines": out, "msisdn": made[0].msisdn, "line_id": made[0].id, "payment_type": payment_type,
-            "plan": plan["code"], **({"esim_activation_codes": codes} if codes else {}),
-            "summary": f"{len(made)} {payment_type} line(s) on {plan['name']}: {', '.join(l.msisdn for l in made[:10])}"
-                       + (" ..." if len(made) > 10 else "")}
+    return {"party_id": party.id, "count": len(made), "ordered": quantity, "orders": orders, "lines": out,
+            "msisdn": made[0].msisdn if made else None, "line_id": made[0].id if made else None, "payment_type": prof["payment_type"],
+            "plan": prof["name"], "monthly_price": configured["configured"], **({"esim_activation_codes": codes} if codes else {}),
+            "summary": (f"{len(made)} {prof['payment_type']} line(s) on {prof['name']}: {', '.join(l.msisdn for l in made[:10])}"
+                        + (" ..." if len(made) > 10 else "")) if made else
+                       f"{quantity} order(s) for {prof['name']} sent to fulfilment - the lines appear as they are installed"}
 
+
+def _dumps(value: Any) -> str:
+    import json
+
+    return json.dumps(value, default=str)
+
+
+def _fulfil(db: Session, tenant_id: int, order, plan: str) -> None:
+    """A fulfilment pattern designed for this plan (it lists the product) runs the order; otherwise the
+    mobile activation fulfils it at once - a mobile line needs no field work."""
+    from app.crm_core import abo_service
+    from app.orchestration import fulfillment_engine
+
+    pattern = fulfillment_engine.matching_pattern(db, tenant_id, order)
+    named = pattern is not None and cs._key(plan) in {cs._key(p) for p in (pattern.products or "").split(",")}
+    if named:
+        f_order = fulfillment_engine.receive(db, tenant_id, order, pattern=pattern)
+        fulfillment_engine.advance(db, f_order)
+        return
+    from app.integration import network_activation_adapter, orchestration_adapter
+
+    orchestration_adapter.submit_order_for_orchestration(order.id)
+    network_activation_adapter.activate_connection(order.items[0].id)
+    abo_service.complete(db, order)
+
+
+def on_asset_installed(db: Session, order, item, asset, data: dict[str, Any]) -> None:
+    """abo_service.assetize: an installed asset of a mobile plan gets its line(s) - one per unit ordered, as the
+    order line's mobile request says (number, SIM, first recharge ...) or by default; a pack on the order goes
+    on the order's new lines (or the customer's only line)."""
+    if db.query(MbLine.id).filter(MbLine.order_item_id == item.id).first():
+        db.query(MbLine).filter(MbLine.order_item_id == item.id, MbLine.asset_id.is_(None)).update({MbLine.asset_id: asset.id}, synchronize_session=False)
+        return
+    configuration = data.get("configuration") or {}
+    party = db.get(Party, order.party_id)
+    prof = profile(db, order.tenant_id, data.get("offering_name"), configuration, data.get("definition"), party=party)
+    if prof is None:
+        return
+    if prof["kind"] == "plan":
+        req = dict(configuration.get("mobile") or {})
+        taken = list(req.pop("_taken", []))
+        for n in range(max(1, int(data.get("quantity") or 1))):
+            one = req if n == 0 else {k: v for k, v in req.items() if k not in ("msisdn", "iccid", "user_name")}
+            line, code = _activate_line(db, order.tenant_id, party, prof, {**one, "_taken": taken}, order_id=order.id, order_item_id=item.id,
+                                        asset_id=asset.id)
+            taken.append(line.msisdn)
+            if code:
+                _event(db, line, "esim_code", "eSIM activation code issued", code=code)
+        return
+    targets = [l for l in db.query(MbLine).filter(MbLine.order_id == order.id, MbLine.status != "terminated").order_by(MbLine.id)]
+    if not targets:
+        live = db.query(MbLine).filter(MbLine.tenant_id == order.tenant_id, MbLine.party_id == order.party_id, MbLine.status == "active").all()
+        targets = live if len(live) == 1 else []
+    for line in targets[:max(1, int(data.get("quantity") or 1))]:
+        paid = "asset" if line.payment_type == "postpaid" else _charge(db, order.tenant_id, line, prof["price"], prof["name"])
+        _add_pack(db, line, prof, paid)
+        _event(db, line, "pack_added", f"Added {prof['name']} (order {order.id})")
+
+
+def wallet_paid(db: Session, row: Any) -> bool:
+    """A live service (comm_service.live_orders row) whose price prepaid mobile lines pay from their wallets -
+    the bill run must not bill it as well."""
+    q = db.query(MbLine.id).filter(MbLine.plan_charge == "wallet", MbLine.status != "terminated")
+    asset_id = getattr(row, "asset_id", None)
+    return bool((asset_id and q.filter(MbLine.asset_id == asset_id).first()) or q.filter(MbLine.order_id == row.id).first())
+
+
+def _single_asset(db: Session, line: MbLine):
+    """The installed asset that is this line alone - its changes go through change orders. None when the line
+    has none, or shares it with other lines (an SME's lines sold as one order line): those change line by line."""
+    from app.models.fulfillment import Asset
+
+    if not line.asset_id:
+        return None
+    others = db.query(MbLine.id).filter(MbLine.asset_id == line.asset_id, MbLine.id != line.id, MbLine.status != "terminated").first()
+    asset = db.get(Asset, line.asset_id)
+    return asset if others is None and asset is not None and not asset.superseded_by_asset_id else None
+
+
+def _change_order(db: Session, tenant_id: int, line: MbLine, operation: str, values: dict[str, Any], request: dict[str, Any] | None = None) -> dict[str, Any]:
+    """A change order on the line's asset, fulfilled now (asset-based ordering); the line follows it in
+    on_asset_changed - what only the line knows (refund the balance, a new limit ...) rides along in request."""
+    from app.crm_core import abo_service
+
+    db.info.setdefault("mobile_change", {})[line.asset_id] = request or {}
+    out = abo_service.submit(db, tenant_id, line.asset_id, operation, {**values, "fulfil_now": True})
+    db.info.get("mobile_change", {}).pop(line.asset_id, None)
+    return {"change_order_id": out["order_id"], "operation": out["operation"], "new_monthly": out.get("new_monthly"),
+            "asset_id": out.get("asset_id")}
+
+
+def on_asset_changed(db: Session, order, change, asset, data: dict[str, Any]) -> None:
+    """abo_service.complete: a fulfilled change order on an asset moves its mobile line(s) with it - a product
+    change is a plan change (or a prepaid <-> postpaid switch), suspend / resume / terminate / port-out change
+    the line's status, a port-in brings the customer's number, an account transfer moves the line."""
+    from app.crm_core import abo_service
+
+    rows = db.query(MbLine).filter(MbLine.asset_id == asset.id, MbLine.status != "terminated").all()
+    if not rows:
+        return
+    req = db.info.get("mobile_change", {}).get(asset.id) or {}
+    op, tenant_id = change.operation, order.tenant_id
+    for line in rows:
+        why = f"change order {order.id}"
+        if op in abo_service.REPLACING:
+            line.asset_id = data.get("asset_id") or line.asset_id
+            if op == "product_change":
+                # a product change carries over settings the new product also has - fine for options the customer chose
+                # (pricing), never for what the new plan IS (payment type, allowances): those come from its own model
+                chosen = {"pricing": (data.get("configuration") or {}).get("pricing") or {}, "technical": {},
+                          "price": (data.get("configuration") or {}).get("price")}
+                prof = profile(db, tenant_id, data.get("offering_name"), chosen, data.get("definition"), party=db.get(Party, line.party_id))
+                if prof is not None and prof["kind"] == "plan":
+                    if prof["payment_type"] != line.payment_type:
+                        _switch_payment(db, tenant_id, line, prof["payment_type"], req, from_order=True)
+                    _apply_plan(db, tenant_id, line, prof, why)
+        elif op == "modify":
+            prof = profile(db, tenant_id, data.get("offering_name"), data.get("configuration"), data.get("definition"), party=db.get(Party, line.party_id))
+            if prof is not None and prof["kind"] == "plan":
+                _apply_plan(db, tenant_id, line, prof, why)
+        elif op == "suspend":
+            line.status, line.status_reason = "suspended", req.get("reason") or why
+            _event(db, line, "suspended", f"Suspended - {line.status_reason}")
+        elif op == "resume":
+            line.status, line.status_reason = "active", ""
+            _event(db, line, "resumed", f"Resumed ({why})")
+        elif op in abo_service.ENDING:
+            _terminate(db, tenant_id, line, req.get("reason") or ("ported out" if op == "port_out" else why), bool(req.get("refund_balance")),
+                       req.get("payment_method"), quarantine=op != "port_out")
+        elif op == "number_portability":
+            ported = norm_msisdn((data.get("portability") or {}).get("port_number"))
+            if ported and ported != line.msisdn:
+                if db.query(MbLine.id).filter(MbLine.tenant_id == tenant_id, MbLine.msisdn == ported, MbLine.status != "terminated").first():
+                    raise ValueError(f"{ported} is already a line here")
+                old, line.msisdn = line.msisdn, ported
+                inv.release_from_subscriber(db, tenant_id, "phone_number", old, note="replaced by a ported-in number")
+                db.query(CmUsage).filter(CmUsage.tenant_id == tenant_id, CmUsage.service == old).update({CmUsage.service: ported}, synchronize_session=False)
+                _event(db, line, "ported_in", f"Number {ported} ported in from {(data.get('portability') or {}).get('donor_operator')} - {old} released")
+        elif op == "customer_transfer":
+            line.party_id = data.get("party_id") or line.party_id
+            _event(db, line, "transferred", f"Moved to {cs.party_name(db, line.party_id)} ({why})")
 
 # ------------------------------------------------------------------ prepaid
 
@@ -574,6 +1009,8 @@ def recharge(db: Session, tenant_id: int, e: dict[str, Any]) -> dict[str, Any]:
             _wallet(db, line, "advance_recovery", -recovered, reference="emergency credit recovered")
             line.advance_owed = _r(line.advance_owed - recovered)
     _extend_validity(line, validity)
+    if line.plan_charge == "wallet" and line.plan_profile and _plan_pack(db, line) is None and line.status in ("active", "suspended"):
+        _start_plan(db, tenant_id, line, line.plan_profile)  # a plan waiting for the money starts now
     if line.balance > 0:
         _bar(line, "no_balance", False)
     _event(db, line, "recharged", f"Recharged {amount:,.2f} by {method}" + (f" ({recovered:,.2f} emergency credit recovered)" if recovered else ""),
@@ -667,7 +1104,7 @@ def manage_pack(db: Session, tenant_id: int, e: dict[str, Any]) -> dict[str, Any
         raise ValueError(f"{line.msisdn} is {line.status}")
     if {"lost_stolen", "fraud"} & set(_barrings(line)):
         raise ValueError(f"{line.msisdn} is barred ({', '.join(_barrings(line))})")
-    spec = pack_of(db, tenant_id, e.get("pack"))
+    spec = pack_of(db, tenant_id, e.get("pack") or e.get("offering_name"), party=db.get(Party, line.party_id), plan=line.plan)
     if spec.get("roaming") and not line.roaming:
         raise ValueError(f"Turn roaming on for {line.msisdn} before a roaming pack")
     paid = _charge(db, tenant_id, line, spec["price"], spec["name"])
@@ -681,53 +1118,31 @@ def manage_pack(db: Session, tenant_id: int, e: dict[str, Any]) -> dict[str, Any
             "valid_to": p.valid_to.isoformat(), "balance": _r(line.balance), "cycle_spend": _r(line.cycle_spend)}
 
 
-def change_plan(db: Session, tenant_id: int, e: dict[str, Any]) -> dict[str, Any]:
-    line = line_of(db, tenant_id, e.get("msisdn"))
-    plan = plan_of(db, tenant_id, e.get("plan"))
-    if plan["code"] == line.plan:
-        raise ValueError(f"{line.msisdn} is already on {plan['name']}")
-    if plan["payment_type"] != line.payment_type:
-        raise ValueError(f"{plan['name']} is {plan['payment_type']} and {line.msisdn} is {line.payment_type} - switch it to {plan['payment_type']} instead")
-    if line.status != "active":
-        raise ValueError(f"{line.msisdn} is {line.status}")
+def _apply_plan(db: Session, tenant_id: int, line: MbLine, prof: dict[str, Any], why: str = "") -> MbPack | None:
+    """The line moves to a plan (a product change, a reconfiguration, a switch): the old plan's allowance ends -
+    a postpaid plan the mobile engine billed gets the unused part of its month back - and the new one starts,
+    paid as the line's plan is charged."""
     old = _plan_pack(db, line)
-    if line.payment_type == "postpaid" and old is not None and old.price > 0:
-        # credit the unused part of the month already billed
-        total = (old.valid_to - old.valid_from).total_seconds() or 1
-        unused = max(0.0, (old.valid_to - utcnow()).total_seconds() / total)
-        if unused > 0.01:
-            _post(db, tenant_id, line, -_r(old.price * unused), f"{old.name} - unused part of the month")
-            line.cycle_spend = _r(max(0.0, line.cycle_spend - old.price * unused))
-    paid = _charge(db, tenant_id, line, plan["fee"], f"{plan['name']} plan", kind="plan_fee")
     if old is not None:
+        if line.plan_charge == "ledger" and old.paid_from == "bill" and old.price > 0:
+            total = (old.valid_to - old.valid_from).total_seconds() or 1
+            unused = max(0.0, (old.valid_to - utcnow()).total_seconds() / total)
+            if unused > 0.01:
+                _post(db, tenant_id, line, -_r(old.price * unused), f"{old.name} - unused part of the month")
+                line.cycle_spend = _r(max(0.0, line.cycle_spend - old.price * unused))
         old.status, old.auto_renew = "cancelled", False
-    _add_pack(db, line, {**plan, "price": plan["fee"]}, paid, kind="plan", auto_renew=True)
-    previous, line.plan = line.plan, plan["code"]
-    if line.payment_type == "prepaid":
-        _extend_validity(line, 0)
-        line.valid_until = max(line.valid_until or _today(), _today() + dt.timedelta(days=int(plan.get("validity_days") or 30)))
-    _event(db, line, "plan_changed", f"Plan {previous} -> {plan['code']}")
-    db.flush()
-    return {"line_id": line.id, "msisdn": line.msisdn, "plan": plan["code"], "previous_plan": previous, "paid_from": paid, "price": plan["fee"],
-            "balance": _r(line.balance)}
+    previous, line.plan, line.plan_profile = line.plan, prof["name"], prof
+    pack = _start_plan(db, tenant_id, line, prof)
+    _event(db, line, "plan_changed", f"Plan {previous} -> {prof['name']}" + (f" ({why})" if why else ""))
+    return pack
 
 
-def migrate(db: Session, tenant_id: int, e: dict[str, Any]) -> dict[str, Any]:
-    """Prepaid -> postpaid or postpaid -> prepaid, keeping the number and the SIM."""
+def _switch_payment(db: Session, tenant_id: int, line: MbLine, to: str, e: dict[str, Any], from_order: bool = False) -> float:
+    """Prepaid <-> postpaid money moves: the prepaid balance goes to the bill (emergency credit recovered first),
+    the deposit comes back as balance. Returns what was carried over."""
     s = settings(db, tenant_id)
-    line = line_of(db, tenant_id, e.get("msisdn"))
-    to = str(e.get("to_payment_type") or ("postpaid" if line.payment_type == "prepaid" else "prepaid")).lower()
-    if to == line.payment_type:
-        raise ValueError(f"{line.msisdn} is already {to}")
-    if line.status != "active":
-        raise ValueError(f"{line.msisdn} is {line.status}")
-    plans = [p for p in s["plans"] if p["payment_type"] == to]
-    plan = plan_of(db, tenant_id, e["plan"]) if e.get("plan") else (plans[0] if plans else None)
-    if plan is None or plan["payment_type"] != to:
-        raise ValueError(f"Pick a {to} plan")
     carried = 0.0
     if to == "postpaid":
-        _standing(db, tenant_id, line.party_id, True)
         if line.advance_owed > 0:
             if line.balance < line.advance_owed:
                 raise ValueError(f"{line.msisdn} owes {line.advance_owed:,.2f} of emergency credit - recharge it first")
@@ -742,28 +1157,80 @@ def migrate(db: Session, tenant_id: int, e: dict[str, Any]) -> dict[str, Any]:
         line.cycle_start, line.cycle_spend, line.alert_sent, line.valid_until = _today(), 0.0, False, None
         for b in ("no_balance", "validity"):
             _bar(line, b, False)
+        line.plan_charge = "asset" if from_order or line.asset_id else "ledger"
     else:
-        owed = cb.balance(db, tenant_id, line.party_id)
-        if owed > 0:
-            raise ValueError(f"The account owes {owed:,.2f} - settle the bill before moving {line.msisdn} to prepaid")
         if line.deposit > 0:
             _wallet(db, line, "migration", line.deposit, reference="security deposit returned as balance")
             carried, line.deposit = _r(line.deposit), 0.0
         line.credit_limit, line.cycle_start, line.cycle_spend = 0.0, None, 0.0
         _bar(line, "credit_limit", False)
-        line.valid_until = _today() + dt.timedelta(days=int(plan.get("validity_days") or s["prepaid_validity_days"]))
-    old = _plan_pack(db, line)
-    if old is not None:
-        old.status, old.auto_renew = "cancelled", False
-    previous = line.payment_type
-    line.payment_type, line.plan = to, plan["code"]
-    paid = _charge(db, tenant_id, line, plan["fee"], f"{plan['name']} plan", kind="plan_fee")
-    _add_pack(db, line, {**plan, "price": plan["fee"]}, paid, kind="plan", auto_renew=True)
-    _event(db, line, "migrated", f"{previous} -> {to} on {plan['name']}" + (f", {carried:,.2f} carried over" if carried else ""))
-    db.flush()
-    return {"line_id": line.id, "msisdn": line.msisdn, "payment_type": to, "previous": previous, "plan": plan["code"], "carried_over": carried,
-            "credit_limit": _r(line.credit_limit), "balance": _r(line.balance)}
+        line.valid_until = _today() + dt.timedelta(days=int(s["prepaid_validity_days"]))
+        line.plan_charge = "wallet"
+    previous, line.payment_type = line.payment_type, to
+    _event(db, line, "migrated", f"{previous} -> {to}" + (f", {carried:,.2f} carried over" if carried else ""))
+    return carried
 
+
+def change_plan(db: Session, tenant_id: int, e: dict[str, Any]) -> dict[str, Any]:
+    """INT-142. A line that is an asset of its own changes plan by a product-change order on the asset (billed and
+    tracked like any product change); other lines change directly."""
+    line = line_of(db, tenant_id, e.get("msisdn"))
+    party = db.get(Party, line.party_id)
+    plan = plan_of(db, tenant_id, e.get("plan") or e.get("offering_name"), party=party)
+    if cs._key(plan["name"]) == cs._key(line.plan):
+        raise ValueError(f"{line.msisdn} is already on {plan['name']}")
+    if plan["payment_type"] != line.payment_type:
+        raise ValueError(f"{plan['name']} is {plan['payment_type']} and {line.msisdn} is {line.payment_type} - switch it to {plan['payment_type']} instead")
+    if line.status != "active":
+        raise ValueError(f"{line.msisdn} is {line.status}")
+    if plan["status"] != "active":
+        raise ValueError(f"{plan['name']} is not on sale ({plan['status']})")
+    previous, out = line.plan, {}
+    if line.payment_type == "prepaid" and plan["price"] > line.balance:
+        raise ValueError(f"{line.msisdn} has {line.balance:,.2f} - {plan['name']} costs {plan['price']:,.2f}. Recharge first.")
+    if _single_asset(db, line) is not None:
+        out = _change_order(db, tenant_id, line, "product_change", {"offering_name": plan["name"],
+                                                                     "pricing_attributes": e.get("pricing_attributes") or {}})
+    else:
+        _apply_plan(db, tenant_id, line, plan)
+    db.flush()
+    return {"line_id": line.id, "msisdn": line.msisdn, "plan": line.plan, "previous_plan": previous, "price": plan["price"],
+            "balance": _r(line.balance), **out}
+
+
+def migrate(db: Session, tenant_id: int, e: dict[str, Any]) -> dict[str, Any]:
+    """INT-134 - prepaid <-> postpaid, keeping the number and the SIM: a product change to a plan of the other
+    payment type (a change order on the line's asset when it has one of its own)."""
+    line = line_of(db, tenant_id, e.get("msisdn"))
+    party = db.get(Party, line.party_id)
+    to = str(e.get("to_payment_type") or ("postpaid" if line.payment_type == "prepaid" else "prepaid")).lower()
+    if to == line.payment_type:
+        raise ValueError(f"{line.msisdn} is already {to}")
+    if line.status != "active":
+        raise ValueError(f"{line.msisdn} is {line.status}")
+    if e.get("plan") or e.get("offering_name"):
+        plan = plan_of(db, tenant_id, e.get("plan") or e.get("offering_name"), party=party)
+    else:
+        plan = next((p for p in catalog(db, tenant_id)["plans"] if p["payment_type"] == to), None)
+    if plan is None or plan["payment_type"] != to:
+        raise ValueError(f"Pick a {to} plan")
+    if to == "postpaid":
+        _standing(db, tenant_id, line.party_id, True)
+    else:
+        owed = cb.balance(db, tenant_id, line.party_id)
+        if owed > 0:
+            raise ValueError(f"The account owes {owed:,.2f} - settle the bill before moving {line.msisdn} to prepaid")
+    previous, before = line.payment_type, _r(line.balance) if line.payment_type == "prepaid" else _r(line.deposit)
+    out: dict[str, Any] = {}
+    if _single_asset(db, line) is not None:
+        out = _change_order(db, tenant_id, line, "product_change", {"offering_name": plan["name"]},
+                            {"credit_limit": e.get("credit_limit"), "deposit": e.get("deposit")})
+    else:
+        _switch_payment(db, tenant_id, line, to, e)
+        _apply_plan(db, tenant_id, line, plan)
+    db.flush()
+    return {"line_id": line.id, "msisdn": line.msisdn, "payment_type": line.payment_type, "previous": previous, "plan": line.plan,
+            "carried_over": before if line.payment_type != previous else 0.0, "credit_limit": _r(line.credit_limit), "balance": _r(line.balance), **out}
 
 # ------------------------------------------------------------------ postpaid controls
 
@@ -845,9 +1312,10 @@ def deposit(db: Session, tenant_id: int, e: dict[str, Any]) -> dict[str, Any]:
 def swap_sim(db: Session, tenant_id: int, e: dict[str, Any]) -> dict[str, Any]:
     s = settings(db, tenant_id)
     line = line_of(db, tenant_id, e.get("msisdn"))
-    if not _bool(e.get("identity_verified")):
+    first = line.status == "pending" and not line.iccid  # the first SIM of a line activated without one: no checks, no fee
+    if not first and not _bool(e.get("identity_verified")):
         raise ValueError("Verify the customer's identity before a SIM swap (identity_verified)")
-    reason = str(e.get("reason") or "damaged").lower()
+    reason = "first SIM" if first else str(e.get("reason") or "damaged").lower()
     sim_type = str(e.get("sim_type") or line.sim_type).lower()
     if sim_type not in SIM_TYPES:
         raise ValueError("SIM type: physical or esim")
@@ -856,17 +1324,21 @@ def swap_sim(db: Session, tenant_id: int, e: dict[str, Any]) -> dict[str, Any]:
     if iccid == old:
         raise ValueError("That is the SIM the line already has")
     inv.release_from_subscriber(db, tenant_id, "sim", old, note=f"swapped out ({reason})")
-    fee = 0.0 if _bool(e.get("waive_fee")) else _r(s["sim_swap_fee"])
+    fee = 0.0 if first or _bool(e.get("waive_fee")) else _r(s["sim_swap_fee"])
     paid = _charge(db, tenant_id, line, fee, "SIM swap", kind="fee") if fee else "free"
     line.iccid, line.sim_type = iccid, sim_type
     line.imsi = imsi or f"{s['imsi_prefix']}{line.id:05d}{secrets.randbelow(10 ** 5):05d}"[:15]
-    line.swap_cooldown_until = utcnow() + dt.timedelta(hours=int(s["swap_cooldown_hours"]))
+    if first:
+        line.status, line.status_reason = "active", ""
+    else:
+        line.swap_cooldown_until = utcnow() + dt.timedelta(hours=int(s["swap_cooldown_hours"]))
     _bar(line, "lost_stolen", False)
-    _event(db, line, "sim_swapped", f"SIM {old} -> {iccid} ({reason}, {sim_type}); international and premium blocked until "
-                                    f"{line.swap_cooldown_until:%Y-%m-%d %H:%M}")
+    _event(db, line, "sim_swapped", f"First SIM {iccid} ({sim_type}) - the line is active" if first else
+           f"SIM {old} -> {iccid} ({reason}, {sim_type}); international and premium blocked until {line.swap_cooldown_until:%Y-%m-%d %H:%M}")
     db.flush()
     return {"line_id": line.id, "msisdn": line.msisdn, "old_iccid": old, "iccid": iccid, "sim_type": sim_type, "fee": fee, "paid_from": paid,
-            "cooldown_until": line.swap_cooldown_until.isoformat(), **({"esim_activation_code": code} if code else {})}
+            "status": line.status, "cooldown_until": line.swap_cooldown_until.isoformat() if line.swap_cooldown_until else None,
+            **({"esim_activation_code": code} if code else {})}
 
 
 def change_number(db: Session, tenant_id: int, e: dict[str, Any]) -> dict[str, Any]:
@@ -979,8 +1451,8 @@ def shared_plan(db: Session, tenant_id: int, e: dict[str, Any]) -> dict[str, Any
         return {"line_id": head.id, "msisdn": head.msisdn, "member": member.msisdn, "action": "remove", "members": _members(db, head)}
     if action not in ("add", "join"):
         raise ValueError("Action: add or remove")
-    plan = next((p for p in s["plans"] if p["code"] == head.plan), None)
-    if not plan or not plan.get("shared"):
+    plan = head.plan_profile or {}
+    if not plan.get("shared"):
         raise ValueError(f"{head.msisdn} is on {head.plan}, which is not a shared plan")
     if head.id == member.id:
         raise ValueError("Pick another line to share with")
@@ -1005,18 +1477,50 @@ def _members(db: Session, head: MbLine) -> list[str]:
     return [m.msisdn for m in db.query(MbLine).filter(MbLine.group_head_id == head.id, MbLine.status != "terminated").order_by(MbLine.id)]
 
 
-def lifecycle(db: Session, tenant_id: int, e: dict[str, Any]) -> dict[str, Any]:
+def _terminate(db: Session, tenant_id: int, line: MbLine, reason: str, refund: bool = False, method: Any = None, quarantine: bool = True) -> dict[str, Any]:
     s = settings(db, tenant_id)
+    out: dict[str, Any] = {}
+    for p in _active_packs(db, line):
+        p.status, p.auto_renew = "cancelled", False
+    members = db.query(MbLine).filter(MbLine.group_head_id == line.id).all()
+    for m in members:
+        m.group_head_id = None
+        _event(db, m, "left_group", f"{line.msisdn}'s shared plan ended - it was terminated")
+    line.group_head_id = None
+    if line.payment_type == "prepaid":
+        left = _r(line.balance)
+        if left > 0:
+            kind = "refund" if refund else "forfeit"
+            _wallet(db, line, kind, -left, method=_pay_method(method, "bank_transfer") if refund else "",
+                    reference="balance refunded on termination" if refund else "balance forfeited on termination")
+            out[kind] = left
+    elif line.deposit > 0:
+        _post(db, tenant_id, line, -line.deposit, "security deposit applied to the final bill")
+        out["deposit_applied"], line.deposit = _r(line.deposit), 0.0
+    inv.release_from_subscriber(db, tenant_id, "sim", line.iccid, note="line terminated")
+    line.status, line.status_reason, line.terminated_at, line.roaming = "terminated", reason[:300], utcnow(), False
+    if quarantine:
+        line.quarantine_until = _today() + dt.timedelta(days=int(s["quarantine_days"]))
+        out["quarantined_until"] = line.quarantine_until.isoformat()
+    else:  # ported out: the number left with the customer
+        inv.release_from_subscriber(db, tenant_id, "phone_number", line.msisdn, note="ported out")
+    out["members_released"] = [m.msisdn for m in members]
+    _event(db, line, "terminated", f"Terminated - {reason}" + (f"; number quarantined until {line.quarantine_until}" if quarantine else "; number ported out"))
+    return out
+
+
+def lifecycle(db: Session, tenant_id: int, e: dict[str, Any]) -> dict[str, Any]:
+    """INT-143. A line that is an asset of its own is suspended, resumed or terminated by a change order on the
+    asset - so billing, the order history and the asset follow; other lines change directly."""
     line = line_of(db, tenant_id, e.get("msisdn"))
-    action = str(e.get("action") or "").lower()
+    action = {"reactivate": "resume", "restore": "resume", "disconnect": "terminate", "cancel": "terminate"}.get(
+        str(e.get("action") or "").lower(), str(e.get("action") or "").lower())
     reason = str(e.get("reason") or "")[:300]
     out: dict[str, Any] = {"line_id": line.id, "msisdn": line.msisdn, "action": action}
     if action == "suspend":
         if line.status == "suspended":
             raise ValueError(f"{line.msisdn} is already suspended")
-        line.status, line.status_reason = "suspended", reason or "at the customer's request"
-        _event(db, line, "suspended", f"Suspended - {line.status_reason}")
-    elif action in ("resume", "reactivate", "restore"):
+    elif action == "resume":
         if line.status != "suspended":
             raise ValueError(f"{line.msisdn} is {line.status}, not suspended")
         if line.status_reason == "validity expired":
@@ -1024,41 +1528,30 @@ def lifecycle(db: Session, tenant_id: int, e: dict[str, Any]) -> dict[str, Any]:
         blocked = set(_barrings(line)) & {"lost_stolen", "fraud", "non_payment"}
         if blocked:
             raise ValueError(f"{line.msisdn} is barred for {', '.join(sorted(blocked))} - lift that first")
-        line.status, line.status_reason = "active", ""
-        _event(db, line, "resumed", "Resumed" + (f" - {reason}" if reason else ""))
-    elif action in ("terminate", "disconnect", "cancel"):
+    elif action == "terminate":
         if not reason:
             raise ValueError("Say why the line is terminated (a reason)")
-        for p in _active_packs(db, line):
-            p.status, p.auto_renew = "cancelled", False
-        members = db.query(MbLine).filter(MbLine.group_head_id == line.id).all()
-        for m in members:
-            m.group_head_id = None
-            _event(db, m, "left_group", f"{line.msisdn}'s shared plan ended - it was terminated")
-        line.group_head_id = None
-        if line.payment_type == "prepaid":
-            left = _r(line.balance)
-            if left > 0:
-                kind = "refund" if _bool(e.get("refund_balance")) else "forfeit"
-                _wallet(db, line, kind, -left, method=_pay_method(e.get("payment_method"), "bank_transfer") if kind == "refund" else "",
-                        reference="balance refunded on termination" if kind == "refund" else "balance forfeited on termination")
-                out[kind] = left
-        elif line.deposit > 0:
-            _post(db, tenant_id, line, -line.deposit, "security deposit applied to the final bill")
-            out["deposit_applied"], line.deposit = _r(line.deposit), 0.0
-        inv.release_from_subscriber(db, tenant_id, "sim", line.iccid, note="line terminated")
-        line.status, line.status_reason, line.terminated_at = "terminated", reason, utcnow()
-        line.quarantine_until = _today() + dt.timedelta(days=int(s["quarantine_days"]))
-        line.roaming = False
-        out["quarantined_until"] = line.quarantine_until.isoformat()
-        out["members_released"] = [m.msisdn for m in members]
-        _event(db, line, "terminated", f"Terminated - {reason}; number quarantined until {line.quarantine_until}")
     else:
         raise ValueError("Action: suspend, resume or terminate")
+    if _single_asset(db, line) is not None:
+        before = (_r(line.balance), _r(line.deposit))
+        out.update(_change_order(db, tenant_id, line, action, {}, {"reason": reason or None, "refund_balance": _bool(e.get("refund_balance")),
+                                                                    "payment_method": e.get("payment_method")}))
+        if action == "terminate":
+            out.update({"refund" if _bool(e.get("refund_balance")) else "forfeit": before[0]} if line.payment_type == "prepaid" and before[0] else {})
+            out.update({"deposit_applied": before[1]} if line.payment_type == "postpaid" and before[1] else {})
+            out["quarantined_until"] = line.quarantine_until.isoformat() if line.quarantine_until else None
+    elif action == "suspend":
+        line.status, line.status_reason = "suspended", reason or "at the customer's request"
+        _event(db, line, "suspended", f"Suspended - {line.status_reason}")
+    elif action == "resume":
+        line.status, line.status_reason = "active", ""
+        _event(db, line, "resumed", "Resumed" + (f" - {reason}" if reason else ""))
+    else:
+        out.update(_terminate(db, tenant_id, line, reason, _bool(e.get("refund_balance")), e.get("payment_method")))
     db.flush()
     out["status"] = line.status
     return out
-
 
 # ------------------------------------------------------------------ online charging
 
@@ -1442,7 +1935,8 @@ def housekeeping(db: Session, tenant_id: int | None = None, now: dt.datetime | N
             counts["expired"] += 1
             continue
         try:
-            paid = _charge(db, line.tenant_id, line, p.price, f"{p.name} renewal", kind="plan_fee" if p.kind == "plan" else "pack")
+            paid = "asset" if p.paid_from == "asset" else _charge(db, line.tenant_id, line, p.price, f"{p.name} renewal",
+                                                                  kind="plan_fee" if p.kind == "plan" else "pack")
         except ValueError:
             _event(db, line, "renewal_failed", f"{p.name} not renewed - {line.balance:,.2f} on the wallet, {p.price:,.2f} needed")
             counts["expired"] += 1

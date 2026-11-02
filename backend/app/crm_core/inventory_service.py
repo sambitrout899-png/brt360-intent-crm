@@ -942,6 +942,14 @@ def assign_to_subscriber(db: Session, tenant_id: int, rtype: str, *, party_id: i
     return item
 
 
+def held_by_order(db: Session, tenant_id: int, order_id: int, rtype: str) -> list[InvItem]:
+    """What fulfilment reserved for an order of one resource type (a mobile order's number and SIM) - the line
+    activated from the order takes exactly these."""
+    types = _types_for(db, tenant_id, rtype)
+    return (db.query(InvItem).filter(InvItem.tenant_id == tenant_id, InvItem.type_id.in_(types or [0]), InvItem.order_id == order_id,
+                                     InvItem.lifecycle.in_(("reserved", "in_use"))).order_by(InvItem.id).all())
+
+
 def release_from_subscriber(db: Session, tenant_id: int, rtype: str, identifier: str, source: str = "mobile", note: str = "") -> bool:
     """A number or SIM a mobile line gave up: a number goes back to its pool, a SIM is retired
     (lost, damaged or swapped - never handed out again). False when Inventory doesn't hold it."""

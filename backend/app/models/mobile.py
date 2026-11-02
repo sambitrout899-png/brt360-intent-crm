@@ -31,7 +31,9 @@ from app.db import Base
 from app.timeutils import utcnow
 
 PAYMENT_TYPES = ("prepaid", "postpaid")
-LINE_STATUSES = ("active", "suspended", "terminated")
+LINE_STATUSES = ("pending", "active", "suspended", "terminated")  # pending = activated without a SIM yet (swap one in)
+# product lines (catalog ProductSpecification.product_line) the mobile engine runs - a plan, or what is bought on one
+MOBILE_PRODUCT_LINES = {"mobile": "plan", "mobile_addon": "pack", "mobile_vas": "vas", "roaming": "roaming"}
 SIM_TYPES = ("physical", "esim")
 # What a barring stops. Raised by an agent (lost_stolen, fraud, outgoing ...), or by the
 # system (no_balance, validity, credit_limit, non_payment).
@@ -68,13 +70,21 @@ class MbLine(Base):
     tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id"), index=True)
     party_id: Mapped[int] = mapped_column(ForeignKey("parties.id"), index=True)
     partner_id: Mapped[int | None] = mapped_column(ForeignKey("mb_partners.id"), nullable=True)
+    # The order line that sold it and the installed asset it is the mobile side of (abo_service): sales,
+    # fulfilment, billing and change orders run on the asset; the line follows it.
     order_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    order_item_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    asset_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    # who charges the plan's price: "asset" (the bill run bills the installed asset - postpaid sold on an order),
+    # "wallet" (prepaid, from the line's balance) or "ledger" (postpaid, posted by the mobile engine)
+    plan_charge: Mapped[str] = mapped_column(String(10), default="ledger")
     msisdn: Mapped[str] = mapped_column(String(20))
     iccid: Mapped[str] = mapped_column(String(25), default="")
     imsi: Mapped[str] = mapped_column(String(20), default="")
     sim_type: Mapped[str] = mapped_column(String(10), default="physical")
     user_name: Mapped[str] = mapped_column(String(200), default="")  # who uses it - an employee on a business account
-    plan: Mapped[str] = mapped_column(String(60), default="")  # a plan code from the mobile settings
+    plan: Mapped[str] = mapped_column(String(200), default="")  # the plan: a catalog product (product line "mobile")
+    plan_profile: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # what the plan gives, as sold (comm_mobile.profile)
     payment_type: Mapped[str] = mapped_column(String(10), default="prepaid")
     status: Mapped[str] = mapped_column(String(15), default="active")
     status_reason: Mapped[str] = mapped_column(String(300), default="")
@@ -107,15 +117,15 @@ class MbPack(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id"), index=True)
     line_id: Mapped[int] = mapped_column(ForeignKey("mb_lines.id"), index=True)
-    code: Mapped[str] = mapped_column(String(60))
-    name: Mapped[str] = mapped_column(String(150))
+    code: Mapped[str] = mapped_column(String(200))  # the catalog product it is
+    name: Mapped[str] = mapped_column(String(200))
     kind: Mapped[str] = mapped_column(String(15), default="data")
     # {"data": MB, "voice": minutes, "sms": messages} granted, and what is left
     granted: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     remaining: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     roaming: Mapped[bool] = mapped_column(Boolean, default=False)  # its allowance is for usage abroad
     price: Mapped[float] = mapped_column(Float, default=0.0)
-    paid_from: Mapped[str] = mapped_column(String(10), default="balance")  # balance (prepaid) / bill (postpaid) / free
+    paid_from: Mapped[str] = mapped_column(String(10), default="balance")  # balance (prepaid) / bill (postpaid) / asset (billed on the order's asset) / free
     valid_from: Mapped[dt.datetime] = mapped_column(default=utcnow)
     valid_to: Mapped[dt.datetime] = mapped_column(DateTime)
     auto_renew: Mapped[bool] = mapped_column(Boolean, default=False)

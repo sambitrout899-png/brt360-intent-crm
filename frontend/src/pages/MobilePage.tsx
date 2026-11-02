@@ -10,6 +10,7 @@ type Line = {
   payment_type: "prepaid" | "postpaid"; status: string; status_reason: string; barrings: string[]; roaming: boolean; balance: number;
   valid_until: string | null; advance_owed: number; credit_limit: number; spend_alert_pct: number; cycle_start: string | null; cycle_spend: number;
   deposit: number; group_head_id: number | null; partner: string | null; activated_at: string; terminated_at: string | null;
+  order_id: number | null; asset_id: number | null; plan_charge: string;
 };
 type Pack = { id: number; code: string; name: string; kind: string; granted: Record<string, number>; remaining: Record<string, number>; roaming: boolean;
   price: number; paid_from: string; valid_to: string; auto_renew: boolean };
@@ -24,9 +25,9 @@ type Overview = {
   prepaid_balance: number; postpaid_spend: number; vouchers_available: number; partners: number;
   recent: { line_id: number; action: string; summary: string; at: string }[];
 };
-type CatalogRow = { code: string; name: string; payment_type?: string; kind?: string; fee?: number; price?: number; validity_days: number;
-  allowance: Record<string, number>; shared?: boolean; roaming?: boolean };
-type Catalog = Record<string, unknown> & { plans: CatalogRow[]; packs: CatalogRow[] };
+type CatalogRow = { name: string; kind: string; payment_type: string | null; price: number; validity_days: number;
+  allowance: Record<string, number>; shared: boolean; roaming: boolean };
+type Catalog = { plans: CatalogRow[]; packs: CatalogRow[]; policy: Record<string, unknown> };
 type Batch = { batch: string; face_value: number; validity_days: number; expires_on: string; count: number; redeemed: number; available: number;
   blocked: number; expired: number; pins_pending: boolean; created_at: string };
 type Partner = { id: number; name: string; kind: string; brand: string; wholesale_rates: Record<string, number>; revenue_share_pct: number;
@@ -36,8 +37,11 @@ type Settlement = { id: number; number: string; partner: string; period_start: s
 
 const UNIT: Record<string, string> = { voice: "min", sms: "SMS", data: "MB" };
 const money = (n: number) => n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const UNLIMITED = 10_000_000;
+const amount = (k: string, v: number) =>
+  v >= UNLIMITED ? `unlimited ${k === "voice" ? "calls" : k}` : k === "data" && v >= 1024 ? `${(v / 1024).toFixed(v % 1024 ? 1 : 0)} GB` : `${Math.round(v * 100) / 100} ${UNIT[k] ?? k}`;
 const allowance = (a: Record<string, number>) =>
-  Object.entries(a).filter(([, v]) => v > 0).map(([k, v]) => `${k === "data" && v >= 1024 ? `${(v / 1024).toFixed(v % 1024 ? 1 : 0)} GB` : `${v} ${UNIT[k] ?? k}`}`).join(" · ") || "—";
+  Object.entries(a).filter(([, v]) => v > 0).map(([k, v]) => amount(k, v)).join(" · ") || "—";
 
 function errorText(e: unknown, fallback: string) {
   return e instanceof Error && e.message ? e.message : fallback;
@@ -46,6 +50,7 @@ function errorText(e: unknown, fallback: string) {
 function StatusChip({ line }: { line: Line }) {
   if (line.status === "terminated") return <Chip tone="slate">terminated</Chip>;
   if (line.status === "suspended") return <Chip tone="amber">suspended</Chip>;
+  if (line.status === "pending") return <Chip tone="sky">waiting for a SIM</Chip>;
   if (line.barrings.length) return <Chip tone="red">barred</Chip>;
   return <Chip tone="emerald">active</Chip>;
 }
@@ -208,7 +213,13 @@ function LineView({ line, act, canRun, onOpen, lines }: { line: LineDetail; act:
         {line.roaming && <Chip tone="sky">roaming</Chip>}
         <Chip>{line.sim_type === "esim" ? "eSIM" : "SIM"} {line.iccid}</Chip>
         {line.partner && <Chip tone="violet">{line.partner}</Chip>}
+        {line.order_id && <Chip>order #{line.order_id}</Chip>}
+        {line.asset_id && <Chip>asset #{line.asset_id}</Chip>}
       </div>
+      {line.asset_id && (
+        <p className="text-xs text-slate-400">This line is installed asset #{line.asset_id}: plan changes, suspend, resume and termination run as change orders on it,
+          and {line.plan_charge === "wallet" ? "its plan is paid from the wallet" : line.plan_charge === "asset" ? "the bill run bills its plan" : "its plan is posted to the bill"}.</p>
+      )}
       {line.status_reason && <p className="text-xs text-slate-400">{line.status} - {line.status_reason}</p>}
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -244,8 +255,10 @@ function LineView({ line, act, canRun, onOpen, lines }: { line: LineDetail; act:
             {button("INT-137", "🔁 Swap SIM", m, BTN_WARN)}
             {button("INT-138", "🔢 Change number")}
             {button("INT-139", "⛔ Bar / unbar", m, BTN_WARN)}
-            {line.status === "active" ? button("INT-143", "⏸️ Suspend", { ...m, action: "suspend" }) : button("INT-143", "▶️ Resume", { ...m, action: "resume" })}
+            {line.status === "pending" && button("INT-137", "📇 Give it its SIM", m, BTN_PRIMARY)}
+            {line.status === "active" ? button("INT-143", "⏸️ Suspend", { ...m, action: "suspend" }) : line.status === "suspended" ? button("INT-143", "▶️ Resume", { ...m, action: "resume" }) : null}
             {button("INT-143", "✖ Terminate", { ...m, action: "terminate" }, BTN_DANGER)}
+            {line.asset_id && button("INT-107", "🧾 Change the asset (port, transfer …)", { asset_id: line.asset_id })}
           </div>
         </Panel>
       )}
@@ -319,21 +332,22 @@ function LineView({ line, act, canRun, onOpen, lines }: { line: LineDetail; act:
   );
 }
 
-/* ---------------------------------------------------------------- catalog */
+/* ---------------------------------------------------------------- catalog: products from the Product Modeller */
 
 function CatalogView({ admin, onError }: { admin: boolean; onError: (s: string | null) => void }) {
+  const { openProductModeller } = useWorkspace();
   const [c, setC] = useState<Catalog | null>(null);
   const [draft, setDraft] = useState("");
-  const [saved, setSaved] = useState<string | null>(null);
-  useEffect(() => {
+  const [note, setNote] = useState<string | null>(null);
+  const load = useCallback(() => {
     mobileApi<Catalog>("/catalog").then((data) => {
       setC(data);
-      const { pack_kinds: _kinds, ...rest } = data;
-      setDraft(JSON.stringify(rest, null, 2));
+      setDraft(JSON.stringify(data.policy, null, 2));
     }).catch((e) => onError(errorText(e, "Could not load the catalog")));
   }, [onError]);
+  useEffect(load, [load]);
   if (!c) return <Empty>Loading…</Empty>;
-  const save = () => {
+  const savePolicy = () => {
     let body: unknown;
     try {
       body = JSON.parse(draft);
@@ -341,57 +355,70 @@ function CatalogView({ admin, onError }: { admin: boolean; onError: (s: string |
       onError("That isn't valid JSON");
       return;
     }
-    mobileApi<Catalog>("/catalog", "PUT", body).then((data) => {
-      setC(data);
-      setSaved("Saved - new activations, recharges and packs use it straight away.");
+    mobileApi<Record<string, unknown>>("/policy", "PUT", body).then(() => {
+      setNote("Policy saved.");
+      load();
     }).catch((e) => onError(errorText(e, "Could not save")));
   };
+  const post = (path: string, done: (r: Record<string, unknown>) => string) =>
+    mobileApi<Record<string, unknown>>(path, "POST").then((r) => {
+      setNote(done(r));
+      load();
+    }).catch((e) => onError(errorText(e, "That didn't work")));
+  const open = (name: string) => openProductModeller?.(name);
+  const table = (rows: CatalogRow[], plans: boolean) => (
+    <table className="w-full text-sm">
+      <thead className="text-left text-[11px] uppercase text-slate-500">
+        <tr><th className="py-1">{plans ? "Plan" : "Pack"}</th><th>{plans ? "Type" : "Kind"}</th><th className="text-right">Monthly / price</th><th>Gives</th><th /></tr>
+      </thead>
+      <tbody>
+        {rows.map((p) => (
+          <tr key={p.name} className="border-t border-slate-800">
+            <td className="py-1.5 text-slate-100">{p.name}{p.shared ? <span className="text-slate-500"> · shared pool</span> : null}</td>
+            <td>{plans ? <Chip tone={p.payment_type === "prepaid" ? "sky" : "violet"}>{p.payment_type}</Chip> : <Chip tone={p.roaming ? "violet" : "slate"}>{p.kind}</Chip>}</td>
+            <td className="text-right tabular-nums text-slate-200">{money(p.price ?? 0)}</td>
+            <td className="text-xs text-slate-400">{allowance(p.allowance)} · {p.validity_days} d</td>
+            <td className="text-right">{admin && openProductModeller && <button type="button" className={BTN} onClick={() => open(p.name)}>Model</button>}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
   return (
     <div className="space-y-4">
+      <Panel title="Where plans and packs come from">
+        <p className="text-sm text-slate-300">
+          Mobile plans and packs are ordinary catalog products. A product on the <b>mobile</b> product line is a plan; <b>mobile_addon</b>,
+          <b> mobile_vas</b> and <b>roaming</b> products are packs and services bought on a plan. What they give - payment type, validity, data /
+          voice / SMS allowances, SIM type, shared pool, roaming - is their product model's attributes, designed in the Product Modeller (its AI
+          guidance proposes them). They are sold through the normal order flow, priced from the customer's pricelist, and each line lives as an asset.
+        </p>
+        <Notice text={note} tone="emerald" onClose={() => setNote(null)} />
+        {admin && (
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button type="button" className={BTN} onClick={() => post("/sample-catalog", (r) => `${(r.created as string[]).length} sample products created - edit them in the Product Modeller`)}>
+              Load a sample mobile catalog
+            </button>
+            <button type="button" className={BTN} onClick={() => post("/fulfillment-pattern", (r) => `Fulfilment pattern "${r.name}" set up for ${(r.products as string[]).length} plan(s)`)}>
+              Set up the mobile fulfilment pattern
+            </button>
+          </div>
+        )}
+      </Panel>
       <div className="grid gap-4 lg:grid-cols-2">
-        <Section title="Plans" count={c.plans.length}>
-          <table className="w-full text-sm">
-            <thead className="text-left text-[11px] uppercase text-slate-500"><tr><th className="py-1">Plan</th><th>Type</th><th className="text-right">Monthly</th><th>Allowance</th></tr></thead>
-            <tbody>
-              {c.plans.map((p) => (
-                <tr key={p.code} className="border-t border-slate-800">
-                  <td className="py-1.5"><div className="text-slate-100">{p.name}</div><div className="font-mono text-[11px] text-slate-500">{p.code}{p.shared ? " · shared" : ""}</div></td>
-                  <td><Chip tone={p.payment_type === "prepaid" ? "sky" : "violet"}>{p.payment_type}</Chip></td>
-                  <td className="text-right tabular-nums text-slate-200">{money(p.fee ?? 0)}</td>
-                  <td className="text-xs text-slate-400">{allowance(p.allowance)} · {p.validity_days} d</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </Section>
-        <Section title="Packs & value-added services" count={c.packs.length}>
-          <table className="w-full text-sm">
-            <thead className="text-left text-[11px] uppercase text-slate-500"><tr><th className="py-1">Pack</th><th>Kind</th><th className="text-right">Price</th><th>Gives</th></tr></thead>
-            <tbody>
-              {c.packs.map((p) => (
-                <tr key={p.code} className="border-t border-slate-800">
-                  <td className="py-1.5"><div className="text-slate-100">{p.name}</div><div className="font-mono text-[11px] text-slate-500">{p.code}</div></td>
-                  <td><Chip tone={p.roaming ? "violet" : "slate"}>{p.kind}</Chip></td>
-                  <td className="text-right tabular-nums text-slate-200">{money(p.price ?? 0)}</td>
-                  <td className="text-xs text-slate-400">{allowance(p.allowance)} · {p.validity_days} d</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </Section>
+        <Section title="Plans on sale" count={c.plans.length}>{c.plans.length ? table(c.plans, true) : <Empty>No mobile plans yet.</Empty>}</Section>
+        <Section title="Packs & value-added services" count={c.packs.length}>{c.packs.length ? table(c.packs, false) : <Empty>No packs yet.</Empty>}</Section>
       </div>
       {admin && (
-        <Panel title="Edit the catalog and policy" action={<button type="button" className={BTN_PRIMARY} onClick={save}>Save</button>}>
-          <p className="mb-2 text-xs text-slate-400">Plans, packs, number range, recharge limits, emergency credit, transfer limits, fees, quarantine and
-            roaming policy. Allowances are in minutes (voice), messages (sms) and MB (data).</p>
-          <Notice text={saved} tone="emerald" onClose={() => setSaved(null)} />
-          <textarea className={`${INPUT} h-96 font-mono text-xs`} value={draft} onChange={(e) => setDraft(e.target.value)} spellCheck={false} aria-label="Catalog JSON" />
+        <Panel title="Operating policy" action={<button type="button" className={BTN_PRIMARY} onClick={savePolicy}>Save</button>}>
+          <p className="mb-2 text-xs text-slate-400">Number range, recharge limits, emergency credit, transfer limits, fees, quarantine, roaming and
+            credit-limit policy. (Plans and packs are products - not set here.)</p>
+          <textarea className={`${INPUT} h-72 font-mono text-xs`} value={draft} onChange={(e) => setDraft(e.target.value)} spellCheck={false} aria-label="Policy JSON" />
         </Panel>
       )}
     </div>
   );
 }
-
 /* ---------------------------------------------------------------- vouchers */
 
 function VouchersView({ admin, onError, act, canRun }: { admin: boolean; onError: (s: string | null) => void;

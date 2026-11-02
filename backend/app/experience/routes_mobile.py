@@ -4,7 +4,9 @@ can trigger Flow Studio flows; these routes read, and keep the tenant's catalog 
 
   /api/mobile/overview                        counts and recent line events
   /api/mobile/lines                           search lines; /lines/{id} - everything about one
-  /api/mobile/catalog                         plans, packs and policy (PUT: admin)
+  /api/mobile/catalog                         the mobile plans and packs on sale (catalog products) and the policy
+  /api/mobile/policy                          PUT: the operating policy (admin)
+  /api/mobile/fulfillment-pattern             POST: set up the 'Mobile activation' fulfilment pattern (admin)
   /api/mobile/vouchers/batches                voucher batches; /{batch}/pins - the PINs, once (admin);
                                               /{batch}/block, /{batch}/unblock (admin)
   /api/mobile/partners, /settlements          wholesale partners and their statements
@@ -63,24 +65,56 @@ def line_detail(line_id: int, db: Session = Depends(get_db), tenant_id: int = De
 
 @router.get("/catalog")
 def catalog(db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> Payload:
-    return {**mb.settings(db, tenant_id), "pack_kinds": list(PACK_KINDS)}
+    """The plans and packs on sale (catalog products - Product Modeller) and the operating policy."""
+    return {**mb.catalog(db, tenant_id), "policy": mb.settings(db, tenant_id), "pack_kinds": list(PACK_KINDS)}
 
 
-@router.put("/catalog", dependencies=[_admin])
-def save_catalog(data: Payload = Body(...), db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> Payload:
+@router.put("/policy", dependencies=[_admin])
+def save_policy(data: Payload = Body(...), db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> Payload:
+    """Operating policy only - plans and packs are designed in the Product Modeller."""
     def run() -> Payload:
         current = mb.settings(db, tenant_id)
         unknown = [k for k in data if k not in current]
         if unknown:
-            raise ValueError(f"Unknown setting(s): {', '.join(unknown)}")
-        mb.check_catalog(data)
+            raise ValueError(f"Unknown setting(s): {', '.join(unknown)} - plans and packs are products: design them in the Product Modeller")
         for key, value in data.items():
-            if key not in ("plans", "packs") and isinstance(current[key], (int, float)) and not isinstance(value, (int, float)):
-                raise ValueError(f"{key} must be a number")
+            if isinstance(current[key], (int, float)) and (isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0):
+                raise ValueError(f"{key} must be a number, 0 or more")
+            if isinstance(current[key], str) and not isinstance(value, str):
+                raise ValueError(f"{key} must be text")
         cs.save_settings(db, tenant_id, {"mobile": {**current, **data}})
-        return {**mb.settings(db, tenant_id), "pack_kinds": list(PACK_KINDS)}
+        return mb.settings(db, tenant_id)
     return _do(db, run)
 
+
+@router.post("/sample-catalog", dependencies=[_admin])
+def sample_catalog(db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> Payload:
+    """Typical mobile plans and packs as catalog products with their product models - to edit in the Product Modeller."""
+    return _do(db, lambda: mb.sample_catalog(db, tenant_id))
+
+
+@router.post("/fulfillment-pattern", dependencies=[_admin])
+def mobile_pattern(db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> Payload:
+    """Set up (or refresh) the 'Mobile activation' fulfilment pattern for every mobile plan on sale: number and
+    SIM from Inventory, network activation, asset, billing - no field work."""
+    import json
+
+    from app.models.fulfillment_orders import FulfillmentPattern
+    from app.orchestration import fulfillment_engine
+
+    def run() -> Payload:
+        plans = [p["name"] for p in mb.catalog(db, tenant_id)["plans"]]
+        if not plans:
+            raise ValueError("No mobile plans on sale yet - launch one on the 'mobile' product line first")
+        row = db.query(FulfillmentPattern).filter(FulfillmentPattern.tenant_id == tenant_id, FulfillmentPattern.name == "Mobile activation").first()
+        if row is None:
+            row = FulfillmentPattern(tenant_id=tenant_id, name="Mobile activation", order_type="new", priority=200, mode="deterministic")
+            db.add(row)
+        row.description = "Mobile lines: number and SIM from Inventory, network activation, asset (the line), billing - no field work."
+        row.products, row.graph_json, row.is_active = ", ".join(plans), json.dumps(fulfillment_engine.mobile_graph()), True
+        db.flush()
+        return {"pattern_id": row.id, "name": row.name, "products": plans}
+    return _do(db, run)
 
 @router.get("/vouchers/batches")
 def batches(db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> list[Payload]:

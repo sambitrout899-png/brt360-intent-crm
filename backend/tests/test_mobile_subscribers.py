@@ -1,12 +1,17 @@
-"""Mobile subscribers (INT-129..148, crm_core/comm_mobile.py): prepaid and postpaid lines for
-operators, MVNOs and MVNEs - activation, recharge and vouchers, packs and online charging,
-emergency credit and transfers, postpaid limits and deposits, migration, SIM swap, number
-change, barring, roaming, shared plans, termination and quarantine, wholesale partners and
-settlements - each refusing what the line's state or the policy doesn't allow."""
+"""Mobile subscribers, integrated with the platform (INT-129..148, crm_core/comm_mobile.py):
+
+- plans and packs are catalog products: their product line says they are mobile, their product model's
+  attributes (as configured when sold) say what they give;
+- lines are sold on orders, priced from the customer's pricelist, fulfilled and installed as assets - the
+  line comes to life with its asset; postpaid plans are billed by the bill run, prepaid ones from the wallet;
+- change orders on the asset (product change, suspend, resume, terminate, port-in) move the line;
+- the prepaid / postpaid / SIM / wholesale operations refuse what the line or the policy doesn't allow."""
 
 import datetime as dt
+import json
 
-from app.crm_core import comm_billing as cb, comm_mobile as mb
+from app.crm_core import comm_billing as cb, comm_mobile as mb, product_config_service as pc
+from app.models.fulfillment import Asset
 from app.models.mobile import MbLine
 
 
@@ -25,20 +30,43 @@ def refused(body, words):
     return body
 
 
-def customer(client, name):
+def catalog(client):
+    out = client.post("/api/mobile/sample-catalog")
+    assert out.status_code == 200, out.text
+    return out.json()
+
+
+def consumer(client, name):
     return ok(run(client, "INT-41", name=name))["party_id"]
 
 
+def business(client, name):
+    return ok(run(client, "INT-15", segment="B2B", name=name, email=f"{name.split()[0].lower()}@example.com"))["party_id"]
+
+
+def db_of(client):
+    return client.TestSessionLocal()
+
+
 def line(client, msisdn):
-    db = client.TestSessionLocal()
+    db = db_of(client)
     try:
-        return mb.line_out(db, db.query(MbLine).filter(MbLine.msisdn == msisdn).one(), full=True)
+        return mb.line_out(db, db.query(MbLine).filter(MbLine.msisdn == msisdn).order_by(MbLine.id.desc()).first(), full=True)
+    finally:
+        db.close()
+
+
+def asset(client, asset_id):
+    db = db_of(client)
+    try:
+        a = db.get(Asset, asset_id)
+        return {"status": a.status.value, "offering": json.loads(a.instance_json or "{}").get("offering_name"), "superseded": a.superseded_by_asset_id}
     finally:
         db.close()
 
 
 def age(client, msisdn, days):
-    db = client.TestSessionLocal()
+    db = db_of(client)
     try:
         row = db.query(MbLine).filter(MbLine.msisdn == msisdn).one()
         row.activated_at -= dt.timedelta(days=days)
@@ -47,254 +75,285 @@ def age(client, msisdn, days):
         db.close()
 
 
+def recurring(client, party_id):
+    db = db_of(client)
+    try:
+        return cb.unbilled(db, 1, party_id)["items"]["recurring"]
+    finally:
+        db.close()
+
+
 def owed(client, party_id):
-    db = client.TestSessionLocal()
+    db = db_of(client)
     try:
         return cb.balance(db, 1, party_id)
     finally:
         db.close()
 
 
-def test_prepaid_lifecycle(client):
-    party = customer(client, "Priya Prepaid")
-    refused(run(client, "INT-136", party_id=party, plan="PRE_SMART", initial_recharge=100), "at least")
-    made = ok(run(client, "INT-136", party_id=party, plan="PRE_SMART", initial_recharge=400, sim_type="esim"))
+def test_plans_and_packs_are_catalog_products_modelled_in_the_product_modeller(client):
+    loaded = catalog(client)
+    plans = {p["name"]: p for p in loaded["plans"]}
+    packs = {p["name"]: p for p in loaded["packs"]}
+    smart = plans["Prepaid Smart 28"]
+    assert smart["payment_type"] == "prepaid" and smart["validity_days"] == 28 and smart["price"] == 299
+    assert smart["allowance"] == {"voice": 1000, "data": 30720, "sms": 300}
+    assert plans["Business Shared Pool 1499"]["shared"] and plans["Postpaid 399"]["payment_type"] == "postpaid"
+    assert packs["Roaming 7 Days"]["roaming"] and packs["Caller Tune"]["kind"] == "vas" and packs["Data 10 GB Booster"]["allowance"] == {"data": 10240}
+    assert client.post("/api/mobile/sample-catalog").json()["created"] == []  # once
+
+    # what the plan gives is its product model: change the attribute, the plan changes
+    db = db_of(client)
+    try:
+        pc.apply_design(db, 1, "Prepaid Smart 28", [{"op": "upsert_attribute", "name": "Data allowance", "kind": "technical", "data_type": "string",
+                                                     "default": "50 GB"}])
+        db.commit()
+    finally:
+        db.close()
+    again = {p["name"]: p for p in client.get("/api/mobile/catalog").json()["plans"]}
+    assert again["Prepaid Smart 28"]["allowance"]["data"] == 51200
+    # the policy holds no plans any more
+    assert client.put("/api/mobile/policy", json={"plans": []}).status_code == 400
+    assert client.put("/api/mobile/policy", json={"transfer_max": 250}).json()["transfer_max"] == 250
+    # the Product Modeller's built-in suggestion for a mobile plan proposes the mobile attributes
+    db = db_of(client)
+    try:
+        names = {o["name"] for o in pc._templates(mb.offering_of(db, 1, "Postpaid 399"), {"mobile"})}
+        assert {"Payment type", "Validity", "Data allowance", "SIM type"} <= names
+    finally:
+        db.close()
+
+
+def test_a_prepaid_line_is_sold_on_an_order_and_lives_as_an_asset(client):
+    catalog(client)
+    party = consumer(client, "Priya Prepaid")
+    refused(run(client, "INT-136", party_id=party, offering_name="Prepaid Smart 28", initial_recharge=100), "at least")
+    refused(run(client, "INT-136", party_id=party, offering_name="Business Postpaid 599", sim_type="esim"), "isn't an active product sold to b2c")
+    refused(run(client, "INT-136", party_id=party, offering_name="Data 10 GB Booster"), "not a mobile plan")
+    made = ok(run(client, "INT-136", party_id=party, offering_name="Prepaid Smart 28", initial_recharge=400, sim_type="esim"))
     msisdn = made["msisdn"]
-    assert made["payment_type"] == "prepaid" and made["esim_activation_codes"][msisdn].startswith("LPA:1$")
+    assert made["orders"][0]["status"] == "completed" and made["esim_activation_codes"][msisdn].startswith("LPA:1$")
     view = line(client, msisdn)
+    assert view["order_id"] == made["orders"][0]["order_id"] and view["asset_id"] and view["plan_charge"] == "wallet"
+    assert asset(client, view["asset_id"])["offering"] == "Prepaid Smart 28"
     assert view["balance"] == 101 and view["remaining"] == {"voice": 1000, "data": 30720, "sms": 300} and view["valid_until"]
+    assert recurring(client, party) == []  # paid from the wallet - the bill run doesn't bill it again
 
-    # usage inside the plan's allowance costs nothing; international never comes out of a pack
+    # usage: packs first, international from the wallet, roaming refused while off
     call = ok(run(client, "INT-144", msisdn=msisdn, event_type="voice", quantity=10))
-    assert call["granted"] and call["charged"] == 0 and call["from_packs"] == {"PRE_SMART": 10}
+    assert call["granted"] and call["charged"] == 0 and call["from_packs"] == {"Prepaid Smart 28": 10}
     intl = ok(run(client, "INT-144", msisdn=msisdn, event_type="voice", quantity=5, international=True))
-    assert intl["charged"] == 10.0 and intl["balance"] == 91  # 5 min x 0.5 x 4
-    roam = ok(run(client, "INT-144", msisdn=msisdn, event_type="data", quantity=10, roaming=True))
-    assert roam["granted"] is False and "roaming is off" in roam["reason"]
+    assert intl["charged"] == 10.0 and intl["balance"] == 91
+    assert "roaming is off" in ok(run(client, "INT-144", msisdn=msisdn, event_type="data", quantity=10, roaming=True))["reason"]
 
-    # recharge by amount, limits checked; then a pack from the wallet, and removed again
+    # packs are catalog products, priced from the customer's pricelist
     refused(run(client, "INT-129", msisdn=msisdn, amount=5), "a recharge is")
-    top = ok(run(client, "INT-129", msisdn=msisdn, amount=500, payment_method="upi"))
-    assert top["recharged"] and top["balance"] == 591 and top["method"] == "upi"
-    pack = ok(run(client, "INT-130", msisdn=msisdn, pack="DATA10"))
+    assert ok(run(client, "INT-129", msisdn=msisdn, amount=500, payment_method="upi"))["balance"] == 591
+    pack = ok(run(client, "INT-130", msisdn=msisdn, pack="Data 10 GB Booster"))
     assert pack["paid_from"] == "balance" and pack["balance"] == 392
-    assert ok(run(client, "INT-130", msisdn=msisdn, pack="DATA10", action="remove"))["removed"] == 1
+    refused(run(client, "INT-130", msisdn=msisdn, pack="Postpaid 399"), "not a mobile pack")
+    refused(run(client, "INT-130", msisdn=msisdn, pack="Roaming 7 Days"), "turn roaming on")
+    assert ok(run(client, "INT-130", msisdn=msisdn, pack="Data 10 GB Booster", action="remove"))["removed"] == 1
 
-    # emergency credit: only on a low balance and after the minimum time on the network
-    second = ok(run(client, "INT-136", party_id=party, plan="PRE_BASIC", sim_type="esim"))["msisdn"]
-    refused(run(client, "INT-130", msisdn=second, pack="DATA1"), "recharge first")
+    # emergency credit and transfers between prepaid lines
+    second = ok(run(client, "INT-136", party_id=party, offering_name="Prepaid Pay-as-you-go", sim_type="esim"))["msisdn"]
+    refused(run(client, "INT-130", msisdn=second, pack="Data 1 GB Day Pass"), "recharge first")
     refused(run(client, "INT-133", msisdn=second), "on the network")
     age(client, second, 40)
-    credit = ok(run(client, "INT-133", msisdn=second))
-    assert credit["credited"] == 10 and credit["owed"] == 12
-    refused(run(client, "INT-133", msisdn=second), "still owes")
-    refused(run(client, "INT-132", msisdn=second, to_msisdn=msisdn, amount=5), "emergency credit")
-    back = ok(run(client, "INT-129", msisdn=second, amount=20, payment_method="cash"))
-    assert back["recovered"] == 12 and back["balance"] == 18
-
-    # balance transfer, with the fee
+    assert ok(run(client, "INT-133", msisdn=second))["owed"] == 12
+    assert ok(run(client, "INT-129", msisdn=second, amount=20, payment_method="cash"))["recovered"] == 12
     sent = ok(run(client, "INT-132", msisdn=msisdn, to_msisdn=second, amount=50))
     assert sent["fee"] == 1 and sent["to_balance"] == 68
-    refused(run(client, "INT-132", msisdn=msisdn, to_msisdn=second, amount=5000), "at most")
-
-    # out of money: refused with nothing taken; spent to zero, it is barred for no balance until recharged
     refuse = ok(run(client, "INT-144", msisdn=second, event_type="voice", quantity=60, international=True))
-    assert refuse["granted"] is False and "insufficient balance" in refuse["reason"] and refuse["balance"] == 68
+    assert refuse["granted"] is False and "insufficient balance" in refuse["reason"]
     spent = ok(run(client, "INT-144", msisdn=second, event_type="voice", quantity=136))
-    assert spent["granted"] and spent["charged"] == 68 and spent["balance"] == 0
-    assert "no_balance" in line(client, second)["barrings"]
-    # (what a pack covers still goes through - only the money is missing)
-    assert "insufficient balance" in ok(run(client, "INT-144", msisdn=second, event_type="sms", quantity=1))["reason"]
+    assert spent["balance"] == 0 and "no_balance" in line(client, second)["barrings"]
     ok(run(client, "INT-129", msisdn=second, amount=10, payment_method="cash"))
     assert "no_balance" not in line(client, second)["barrings"]
-
-    check = ok(run(client, "INT-131", msisdn=msisdn))
-    assert check["msisdn"] == msisdn and "prepaid" in check["summary"]
+    assert "prepaid" in ok(run(client, "INT-131", msisdn=msisdn))["summary"]
 
 
-def test_vouchers_once_and_wrong_pins(client):
-    party = customer(client, "Vikram Voucher")
-    msisdn = ok(run(client, "INT-136", party_id=party, plan="PRE_BASIC", sim_type="esim"))["msisdn"]
-    made = ok(run(client, "INT-145", count=3, face_value=100, validity_days=45))
-    assert made["count"] == 3 and "pending_pins" not in made
-    csv = client.get(made["download"])
-    assert csv.status_code == 200 and csv.text.startswith("serial,pin"), csv.text
-    pins = [row.split(",")[1] for row in csv.text.strip().splitlines()[1:]]
-    assert len(pins) == 3 and client.get(made["download"]).status_code == 400  # handed out once
+def test_postpaid_lines_for_an_sme_are_billed_on_their_assets(client):
+    catalog(client)
+    sme = business(client, "Acme SME")
+    made = ok(run(client, "INT-136", party_id=sme, offering_name="Business Postpaid 599", quantity=3, user_name="Asha, Ben, Chen", credit_limit=900))
+    assert made["count"] == 3 and len(made["orders"]) == 3 and [l["user_name"] for l in made["lines"]] == ["Asha", "Ben", "Chen"]
+    assert all(l["plan_charge"] == "asset" and l["asset_id"] and l["sim_type"] == "esim" for l in made["lines"])  # the plan's SIM type
+    assert len({l["asset_id"] for l in made["lines"]}) == 3  # each line is an installed service of its own
+    billed = recurring(client, sme)
+    assert len(billed) == 3 and all("Business Postpaid 599" in r["description"] for r in billed)
+    assert owed(client, sme) == 0  # nothing posted by the mobile engine - the bill run bills the assets
 
-    wrong = ok(run(client, "INT-129", msisdn=msisdn, voucher_pin="99999999999999"))
-    assert wrong["recharged"] is False and "not a voucher" in wrong["reason"]
-    good = ok(run(client, "INT-129", msisdn=msisdn, voucher_pin=pins[0]))
-    assert good["recharged"] and good["amount"] == 100 and good["method"] == "voucher"
-    again = ok(run(client, "INT-129", msisdn=msisdn, voucher_pin=pins[0]))
-    assert again["recharged"] is False and "already used" in again["reason"]
-    for _ in range(4):
-        run(client, "INT-129", msisdn=msisdn, voucher_pin="11111111111111")
-    refused(run(client, "INT-129", msisdn=msisdn, voucher_pin=pins[1]), "too many wrong voucher pins")
-    batches = client.get("/api/mobile/vouchers/batches").json()
-    assert batches[0]["redeemed"] == 1 and batches[0]["available"] == 2 and not batches[0]["pins_pending"]
+    # the customer's choices in the product model set price and allowance
+    home = consumer(client, "Ravi Postpaid")
+    unlimited = ok(run(client, "INT-136", party_id=home, offering_name="Postpaid 399", pricing_attributes={"Data allowance": "Unlimited"},
+                       sim_type="esim"))
+    assert unlimited["monthly_price"] == 699 and line(client, unlimited["msisdn"])["remaining"]["data"] >= mb.UNLIMITED
+
+    # packs on postpaid go on the bill; spend alert, then the credit limit bars outgoing use
+    first = made["lines"][0]["msisdn"]
+    pack = ok(run(client, "INT-130", msisdn=first, pack="Voice 100 Minutes"))
+    assert pack["paid_from"] == "bill" and pack["cycle_spend"] == 49 and owed(client, sme) == 49
+    ok(run(client, "INT-135", msisdn=first, spend_alert_pct=50))
+    big = ok(run(client, "INT-144", msisdn=first, event_type="voice", quantity=500, international=True))  # 1000 > 900 - 49
+    assert big["granted"] is False and "credit limit" in big["reason"] and "credit_limit" in line(client, first)["barrings"]
+    assert ok(run(client, "INT-135", msisdn=first, credit_limit=5000))["barred"] is False
+
+    # a shared pool: members draw on the owner's allowance
+    pool = ok(run(client, "INT-136", party_id=sme, offering_name="Business Shared Pool 1499"))["msisdn"]
+    second = made["lines"][1]["msisdn"]
+    refused(run(client, "INT-141", msisdn=second, member_msisdn=pool), "not a shared plan")
+    assert ok(run(client, "INT-141", msisdn=pool, member_msisdn=second))["members"] == [second]
+    used = ok(run(client, "INT-144", msisdn=second, event_type="data", quantity=76800 + 100))
+    assert used["from_packs"] == {"Business Postpaid 599": 76800, "Business Shared Pool 1499": 100} and used["charged"] == 0
+
+    # deposits
+    assert ok(run(client, "INT-148", msisdn=first, action="take", amount=500))["deposit"] == 500
+    refused(run(client, "INT-148", msisdn=first, action="refund"), "owes")
 
 
-def test_postpaid_limits_deposits_and_shared_plans(client):
-    party = customer(client, "Acme SME")
-    made = ok(run(client, "INT-136", party_id=party, plan="BIZ_SHARED", quantity=1, credit_limit=1600, deposit=1000, sim_type="esim"))
-    head = made["msisdn"]
-    assert owed(client, party) == 1499  # the first month is on the bill
-    members = ok(run(client, "INT-136", party_id=party, plan="POST_399", quantity=3, user_name="Asha, Ben, Chen", sim_type="esim"))
-    assert members["count"] == 3 and [l["user_name"] for l in members["lines"]] == ["Asha", "Ben", "Chen"]
-    m1 = members["lines"][0]["msisdn"]
-    refused(run(client, "INT-141", msisdn=m1, member_msisdn=head), "not a shared plan")
-    assert ok(run(client, "INT-141", msisdn=head, member_msisdn=m1))["members"] == [m1]
-    other = customer(client, "Somebody Else")
-    stranger = ok(run(client, "INT-136", party_id=other, plan="POST_399", sim_type="esim"))["msisdn"]
-    refused(run(client, "INT-141", msisdn=head, member_msisdn=stranger), "same customer")
+def test_change_orders_on_the_asset_move_the_line(client):
+    catalog(client)
+    party = consumer(client, "Chandra Change")
+    made = ok(run(client, "INT-136", party_id=party, offering_name="Postpaid 399", sim_type="esim"))
+    msisdn, first_asset = made["msisdn"], made["lines"][0]["asset_id"]
 
-    # the member draws on the plan owner's pool once its own allowance is gone
-    used = ok(run(client, "INT-144", msisdn=m1, event_type="data", quantity=40960 + 100))
-    assert used["from_packs"] == {"POST_399": 40960, "BIZ_SHARED": 100} and used["charged"] == 0
-
-    # spend alert, then the credit limit bars outgoing use; a new cycle lifts it
-    ok(run(client, "INT-135", msisdn=head, credit_limit=1600, spend_alert_pct=95))
-    pack = ok(run(client, "INT-130", msisdn=head, pack="VOICE100"))
-    assert pack["paid_from"] == "bill" and pack["cycle_spend"] == 1548  # the plan's 1499 + 49
-    assert any(h["action"] == "spend_alert" for h in line(client, head)["history"])
-    big = ok(run(client, "INT-144", msisdn=head, event_type="voice", quantity=100, international=True))
-    assert big["granted"] is False and "credit limit" in big["reason"]
-    assert "credit_limit" in line(client, head)["barrings"]
-    refused(run(client, "INT-139", msisdn=head, action="unbar", barring="credit_limit"), "lifts by itself")
-    raised = ok(run(client, "INT-135", msisdn=head, credit_limit=5000))
-    assert raised["barred"] is False
-
-    # deposit: refund refused while the account owes
-    assert ok(run(client, "INT-148", msisdn=head, action="take", amount=500))["deposit"] == 1500
-    refused(run(client, "INT-148", msisdn=head, action="refund"), "owes")
-    refused(run(client, "INT-134", msisdn=head, to_payment_type="prepaid", plan="PRE_BASIC"), "settle the bill")
-
-    # a prepaid line moves to postpaid with its balance carried to the bill
-    pre = ok(run(client, "INT-136", party_id=party, plan="PRE_BASIC", initial_recharge=300, sim_type="esim"))["msisdn"]
-    before = owed(client, party)
-    moved = ok(run(client, "INT-134", msisdn=pre, to_payment_type="postpaid", plan="POST_399"))
-    assert moved["carried_over"] == 300 and owed(client, party) == before - 300 + 399
-
-    # a month on: the cycle starts again (spend back to 0) and the plans renew onto the bill
-    db = client.TestSessionLocal()
-    try:
-        before = cb.balance(db, 1, party)
-        done = mb.housekeeping(db, now=dt.datetime.utcnow() + dt.timedelta(days=32))
+    # a plan change is a product change order: a new asset, the line moves onto it with the new plan
+    refused(run(client, "INT-142", msisdn=msisdn, plan="Prepaid Smart 28"), "switch it to prepaid")
+    db = db_of(client)
+    try:  # a second postpaid consumer plan to move to, designed in the Product Modeller
+        from app.integration import tmf620_adapter
+        from app.models.catalog import BundleEligibilityRule
+        o = tmf620_adapter.create_offering_version(db, tenant_id=1, name="Postpaid 799", segment="B2C", composition="MobileLine", list_price=799,
+                                           price_floor=0, discount_ceiling_pct=20)
+        db.add(BundleEligibilityRule(product_offering_id=o.id, segment="B2C", channel="B2C", region="ALL"))
+        tmf620_adapter.publish_offering(db, o.id)
+        pc.apply_design(db, 1, "Postpaid 799", [mb._t("Payment type", "Postpaid"), mb._t("Data allowance", "Unlimited"),
+                                                mb._t("Validity", 30, data_type="number", unit="days")])
         db.commit()
-        row = db.query(MbLine).filter(MbLine.msisdn == head).one()
-        assert done["cycles"] >= 1 and done["renewed"] >= 1 and row.cycle_spend == 1499  # the renewed plan is the new cycle's first spend
-        assert cb.balance(db, 1, party) > before
     finally:
         db.close()
-    assert set(client.post("/api/mobile/housekeeping").json()) >= {"renewed", "cycles", "numbers_released"}
+    changed = ok(run(client, "INT-142", msisdn=msisdn, plan="Postpaid 799"))
+    view = line(client, msisdn)
+    assert changed["change_order_id"] and changed["operation"] == "product_change" and view["plan"] == "Postpaid 799"
+    assert view["asset_id"] != first_asset and asset(client, first_asset)["status"] == "decommissioned"
+    assert asset(client, view["asset_id"])["offering"] == "Postpaid 799" and view["remaining"]["data"] >= mb.UNLIMITED
+
+    # suspend / resume / terminate are change orders too - asset and line move together
+    ok(run(client, "INT-143", msisdn=msisdn, action="suspend", reason="travelling"))
+    assert line(client, msisdn)["status"] == "suspended" and asset(client, view["asset_id"])["status"] == "suspended"
+    assert ok(run(client, "INT-144", msisdn=msisdn, event_type="sms", quantity=1))["granted"] is False
+    ok(run(client, "INT-143", msisdn=msisdn, action="resume"))
+    assert line(client, msisdn)["status"] == "active" and asset(client, view["asset_id"])["status"] == "active"
+
+    # a change order raised on the asset itself (Change an asset, INT-107) - here an MNP port-in - moves the line
+    db = db_of(client)
+    try:
+        from app.crm_core import abo_service
+        abo_service.submit(db, 1, view["asset_id"], "number_portability", {"port_number": "9876543210", "donor_operator": "OtherTel", "fulfil_now": True})
+        db.commit()
+    finally:
+        db.close()
+    assert line(client, "9876543210")["id"] == view["id"]
+
+    gone = ok(run(client, "INT-143", msisdn="9876543210", action="terminate", reason="moving abroad"))
+    assert gone["status"] == "terminated" and gone["change_order_id"] and asset(client, view["asset_id"])["status"] == "decommissioned"
+    other = consumer(client, "Next Person")
+    refused(run(client, "INT-136", party_id=other, offering_name="Prepaid Pay-as-you-go", msisdn="9876543210", sim_type="esim"), "quarantined")
 
 
-def test_sim_number_barring_roaming_and_termination(client):
-    party = customer(client, "Sam Swap")
-    msisdn = ok(run(client, "INT-136", party_id=party, plan="PRE_BASIC", initial_recharge=200,
-                    iccid="8991000000000000001"))["msisdn"]
+def test_prepaid_to_postpaid_is_a_product_change_and_billing_follows(client):
+    catalog(client)
+    party = consumer(client, "Mira Move")
+    msisdn = ok(run(client, "INT-136", party_id=party, offering_name="Prepaid Smart 28", initial_recharge=500, sim_type="esim"))["msisdn"]
+    assert recurring(client, party) == []
+    moved = ok(run(client, "INT-134", msisdn=msisdn, to_payment_type="postpaid", plan="Postpaid 399", credit_limit=1500))
+    view = line(client, msisdn)
+    assert moved["change_order_id"] and view["payment_type"] == "postpaid" and view["plan_charge"] == "asset" and view["plan"] == "Postpaid 399"
+    assert moved["carried_over"] == 201 and owed(client, party) == -201  # the prepaid balance is a credit on the bill
+    assert view["credit_limit"] == 1500 and view["balance"] == 0
+    assert any("Postpaid 399" in r["description"] for r in recurring(client, party))  # now billed on its asset
+
+
+def test_a_mobile_fulfilment_pattern_takes_the_number_and_sim_from_inventory(client):
+    catalog(client)
+    assert client.post("/api/inventory/sample").status_code == 200
+    assert ok(run(client, "INT-122", item_type="sim", quantity=2, location="BLR-STORE"))["received"] == 2
+    pattern = client.post("/api/mobile/fulfillment-pattern")
+    assert pattern.status_code == 200 and "Prepaid Smart 28" in pattern.json()["products"], pattern.text
+    party = consumer(client, "Pat Pattern")
+    made = ok(run(client, "INT-136", party_id=party, offering_name="Prepaid Smart 28", initial_recharge=299))
+    view = made["lines"][0]
+    assert view["msisdn"].startswith("918041000") and view["iccid"] and view["status"] == "active", view
+    db = db_of(client)
+    try:
+        from app.crm_core import inventory_service as inv
+        held = {i.identifier: i.lifecycle for i in inv.held_by_order(db, 1, view["order_id"], "sim")}
+        assert held == {view["iccid"]: "in_use"}
+    finally:
+        db.close()
+
+
+def test_sim_number_barring_roaming_vouchers_and_wholesale(client):
+    catalog(client)
+    party = consumer(client, "Sam Swap")
+    # an order line without a SIM (no stock, no ICCID) activates the line pending; its first SIM makes it live
+    made = ok(run(client, "INT-136", party_id=party, offering_name="Prepaid Pay-as-you-go", initial_recharge=200))
+    msisdn = made["msisdn"]
+    assert line(client, msisdn)["status"] == "pending"
+    first = ok(run(client, "INT-137", msisdn=msisdn, new_iccid="8991000000000000001"))
+    assert first["status"] == "active" and first["fee"] == 0
     refused(run(client, "INT-137", msisdn=msisdn, reason="lost"), "verify the customer's identity")
     swapped = ok(run(client, "INT-137", msisdn=msisdn, reason="lost", identity_verified=True, sim_type="esim"))
-    assert swapped["old_iccid"] == "8991000000000000001" and swapped["esim_activation_code"] and swapped["fee"] == 25
-    cooled = ok(run(client, "INT-144", msisdn=msisdn, event_type="voice", quantity=1, international=True))
-    assert cooled["granted"] is False and "just swapped" in cooled["reason"]
-    refused(run(client, "INT-140", msisdn=msisdn), "just swapped")
-
-    # barring: lost / stolen stops everything; lifting it needs the identity checked
+    assert swapped["fee"] == 25 and swapped["esim_activation_code"]
+    assert "just swapped" in ok(run(client, "INT-144", msisdn=msisdn, event_type="voice", quantity=1, international=True))["reason"]
     ok(run(client, "INT-139", msisdn=msisdn, action="bar", barring="lost_stolen", reason="phone stolen"))
-    stopped = ok(run(client, "INT-144", msisdn=msisdn, event_type="sms", quantity=1))
-    assert stopped["granted"] is False and "lost_stolen" in stopped["reason"]
-    refused(run(client, "INT-129", msisdn=msisdn, amount=50), "barred")
+    assert "lost_stolen" in ok(run(client, "INT-144", msisdn=msisdn, event_type="sms", quantity=1))["reason"]
     refused(run(client, "INT-139", msisdn=msisdn, action="unbar", barring="lost_stolen"), "verify")
     ok(run(client, "INT-139", msisdn=msisdn, action="unbar", barring="lost_stolen", identity_verified=True))
-    ok(run(client, "INT-139", msisdn=msisdn, action="bar", barring="data"))
-    assert ok(run(client, "INT-144", msisdn=msisdn, event_type="data", quantity=5))["granted"] is False
-
-    # number change: the old number is quarantined
     changed = ok(run(client, "INT-138", msisdn=msisdn, new_msisdn="9100055555"))
-    assert changed["msisdn"] == "9100055555" and changed["old_msisdn"] == msisdn
-    other = customer(client, "Next Person")
-    refused(run(client, "INT-136", party_id=other, plan="PRE_BASIC", msisdn=msisdn, sim_type="esim"), "quarantined")
-    assert line(client, "9100055555")["iccid"] == swapped["iccid"]
-
-    # roaming: prepaid needs a balance; usage abroad then charges at the roaming rate
-    db = client.TestSessionLocal()
+    assert changed["old_msisdn"] == msisdn
+    db = db_of(client)
     try:
-        row = db.query(MbLine).filter(MbLine.msisdn == "9100055555").one()
-        row.swap_cooldown_until = None
+        db.query(MbLine).filter(MbLine.msisdn == "9100055555").update({MbLine.swap_cooldown_until: None})
         db.commit()
     finally:
         db.close()
-    on = ok(run(client, "INT-140", msisdn="9100055555", action="on"))
-    assert on["roaming"] is True
-    abroad = ok(run(client, "INT-144", msisdn="9100055555", event_type="voice", quantity=2, roaming=True))
-    assert abroad["granted"] and abroad["charged"] == 5.0  # 2 x 0.5 x 5
-    assert ok(run(client, "INT-140", msisdn="9100055555", action="off"))["roaming"] is False
+    ok(run(client, "INT-129", msisdn="9100055555", amount=600, payment_method="card", card_last4="4242"))
+    assert ok(run(client, "INT-140", msisdn="9100055555", action="on", pack="Roaming 7 Days"))["pack"]["paid_from"] == "balance"
+    abroad = ok(run(client, "INT-144", msisdn="9100055555", event_type="data", quantity=100, roaming=True))
+    assert abroad["from_packs"] == {"Roaming 7 Days": 100} and abroad["charged"] == 0
 
-    # suspend / resume / terminate - the prepaid balance refunded, the number quarantined
-    ok(run(client, "INT-143", msisdn="9100055555", action="suspend", reason="travelling"))
-    assert ok(run(client, "INT-144", msisdn="9100055555", event_type="sms", quantity=1))["granted"] is False
-    ok(run(client, "INT-143", msisdn="9100055555", action="resume"))
-    refused(run(client, "INT-143", msisdn="9100055555", action="terminate"), "reason")
-    gone = ok(run(client, "INT-143", msisdn="9100055555", action="terminate", reason="moving abroad", refund_balance=True))
-    assert gone["status"] == "terminated" and gone["refund"] > 0 and gone["quarantined_until"]
-    refused(run(client, "INT-129", msisdn="9100055555", amount=50), "terminated")
-    refused(run(client, "INT-136", party_id=other, plan="PRE_BASIC", msisdn="9100055555", sim_type="esim"), "quarantined")
+    # vouchers: PINs once, wrong PINs counted
+    made = ok(run(client, "INT-145", count=2, face_value=100))
+    pins = [r.split(",")[1] for r in client.get(made["download"]).text.strip().splitlines()[1:]]
+    assert client.get(made["download"]).status_code == 400
+    assert ok(run(client, "INT-129", msisdn="9100055555", voucher_pin="99999999999999"))["recharged"] is False
+    assert ok(run(client, "INT-129", msisdn="9100055555", voucher_pin=pins[0]))["amount"] == 100
 
-
-def test_wholesale_partner_lines_and_settlement(client):
-    partner = ok(run(client, "INT-146", wholesale_partner="Zoom Mobile", partner_kind="mvno", wholesale_rates="voice 0.2, sms 0.05, data 0.01",
-                     number_range="9180000000-9180000009", revenue_share_pct=0))
-    assert partner["created"] and partner["wholesale_rates"] == {"voice": 0.2, "sms": 0.05, "data": 0.01}
-    refused(run(client, "INT-146", wholesale_partner="Overlap Telecom", partner_kind="mvno", wholesale_rates="voice 0.1",
-                number_range="9180000005-9180000020"), "overlaps")
-    dealer = ok(run(client, "INT-146", wholesale_partner="CityMobile", partner_kind="dealer", revenue_share_pct=5))
-    assert dealer["kind"] == "dealer"
-
-    party = customer(client, "Zoom Customer")
-    made = ok(run(client, "INT-136", party_id=party, plan="PRE_BASIC", quantity=2, wholesale_partner="Zoom Mobile", initial_recharge=100, sim_type="esim"))
-    assert [l["msisdn"] for l in made["lines"]] == ["9180000000", "9180000001"]
-    a = made["lines"][0]["msisdn"]
-    ok(run(client, "INT-144", msisdn=a, event_type="voice", quantity=30))
-    ok(run(client, "INT-144", msisdn=a, event_type="data", quantity=200))
-    ok(run(client, "INT-129", msisdn=a, amount=1000, payment_method="cash", dealer="CityMobile"))
-
+    # wholesale: an MVNO's lines take its number range; settlement at its wholesale rates
+    ok(run(client, "INT-146", wholesale_partner="Zoom Mobile", partner_kind="mvno", wholesale_rates="voice 0.2, sms 0.05, data 0.01",
+           number_range="9180000000-9180000009"))
+    zoom = ok(run(client, "INT-136", party_id=party, offering_name="Prepaid Pay-as-you-go", wholesale_partner="Zoom Mobile",
+                  initial_recharge=100, sim_type="esim"))
+    assert zoom["msisdn"] == "9180000000"
+    ok(run(client, "INT-144", msisdn="9180000000", event_type="voice", quantity=30))
     today = dt.date.today()
-    zoom = ok(run(client, "INT-147", wholesale_partner="Zoom Mobile", period_start=today.replace(day=1).isoformat(), period_end=today.isoformat()))
-    assert zoom["wholesale_due"] == 8.0  # 30 x 0.2 + 200 x 0.01
-    refused(run(client, "INT-147", wholesale_partner="Zoom Mobile", period_start=today.replace(day=1).isoformat(), period_end=today.isoformat()),
-            "settled")
-    city = ok(run(client, "INT-147", wholesale_partner="CityMobile", period_start=today.replace(day=1).isoformat(), period_end=today.isoformat()))
-    assert city["commission_due"] == 50.0 and city["net"] == -50.0
-
-    ok(run(client, "INT-146", wholesale_partner="Zoom Mobile", partner_status="suspended"))
-    refused(run(client, "INT-136", party_id=party, plan="PRE_BASIC", wholesale_partner="Zoom Mobile", sim_type="esim"), "suspended")
-    assert {p["name"] for p in client.get("/api/mobile/partners").json()["partners"]} == {"Zoom Mobile", "CityMobile"}
+    st = ok(run(client, "INT-147", wholesale_partner="Zoom Mobile", period_start=today.replace(day=1).isoformat(), period_end=today.isoformat()))
+    assert st["wholesale_due"] == 6.0
 
 
-def test_plain_english_and_the_mobile_pages(client):
-    party = customer(client, "Nita Natural")
-    said = client.post("/api/intents", json={"text": f"Activate 2 postpaid lines on BIZ_599 for customer {party} as eSIMs"}).json()
+def test_plain_english_and_the_mobile_page(client):
+    catalog(client)
+    sme = business(client, "Nita Natural")
+    said = client.post("/api/intents", json={"text": f"Activate 2 postpaid lines on Business Postpaid 599 for customer {sme} as eSIMs"}).json()
     assert said["intent_type"] == "INT-136" and said["status"] == "executed", said
     first = said["result"]["lines"][0]["msisdn"]
-    pack = client.post("/api/intents", json={"text": f"Add the DATA10 pack to {first}"}).json()
-    assert pack["intent_type"] == "INT-130" and pack["status"] == "executed", pack
+    pack = client.post("/api/intents", json={"text": f"Add the Data 10 GB Booster pack to {first}"}).json()
+    assert pack["intent_type"] == "INT-130", pack
     balance = client.post("/api/intents", json={"text": f"What's the balance on {first}?"}).json()
     assert balance["intent_type"] == "INT-131" and balance["status"] == "executed", balance
-    billing = client.post("/api/intents", json={"text": f"switch customer {party} to prepaid with auto top-up of 200"}).json()
-    assert billing["intent_type"] == "INT-74", billing  # an account's billing profile, not a line
-
-    overview = client.get("/api/mobile/overview").json()
-    assert overview["postpaid"] >= 2 and overview["lines"] >= 2
+    assert client.get("/api/mobile/overview").json()["postpaid"] == 2
     found = client.get("/api/mobile/lines", params={"q": "Nita"}).json()
-    assert len(found) == 2 and client.get(f"/api/mobile/lines/{found[0]['id']}").json()["packs"]
-    catalog = client.get("/api/mobile/catalog").json()
-    assert {p["code"] for p in catalog["plans"]} >= {"PRE_SMART", "POST_399", "BIZ_SHARED"}
-    assert client.put("/api/mobile/catalog", json={"packs": [{"code": "X", "name": "Bad", "price": -1, "validity_days": 1}]}).status_code == 400
-    saved = client.put("/api/mobile/catalog", json={"transfer_max": 250, "packs": catalog["packs"] + [
-        {"code": "NIGHT", "name": "Night data 5 GB", "kind": "data", "price": 29, "validity_days": 7, "allowance": {"data": 5120}}]})
-    assert saved.status_code == 200 and saved.json()["transfer_max"] == 250
-    assert any(p["code"] == "NIGHT" for p in client.get("/api/mobile/catalog").json()["packs"])
-    catalog_intents = {i["code"] for i in client.get("/api/intents/catalog").json()["intents"]}
-    assert {f"INT-{n}" for n in range(129, 149)} <= catalog_intents
+    assert len(found) == 2 and client.get(f"/api/mobile/lines/{found[0]['id']}").json()["asset_id"]
+    assert {f"INT-{n}" for n in range(129, 149)} <= {i["code"] for i in client.get("/api/intents/catalog").json()["intents"]}

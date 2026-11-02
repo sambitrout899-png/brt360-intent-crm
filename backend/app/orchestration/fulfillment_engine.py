@@ -180,6 +180,23 @@ def standard_graph() -> dict[str, Any]:
                 ("t2", "field_work_order", {"kind": "connectivity_test", "subject": "Connectivity test", "duration_minutes": "60"}),
                 ("t3", "field_work_order", {"kind": "acceptance", "subject": "Customer acceptance signing", "duration_minutes": "30"})],
     }
+    return _graph(lanes)
+
+
+def mobile_graph() -> dict[str, Any]:
+    """Mobile activation (no field work): COM registers billing and routes to SOM; SOM assigns the number and
+    the SIM from Inventory and activates them in the network; back in COM the asset is created - which brings
+    the mobile line to life on the number and SIM reserved (comm_mobile.on_asset_installed) - billing starts and
+    the order completes."""
+    return _graph({
+        "COM": [("c1", "sync_customer", {}), ("c2", "create_billing_account", {}), ("c3", "route_to_som", {}),
+                ("c4", "create_assets", {}), ("c5", "start_billing", {}), ("c6", "complete_order", {})],
+        "SOM": [("s1", "assign_logical", {"resources": "phone_number"}), ("s2", "reserve_physical", {"resources": "sim"}),
+                ("s3", "activate_service", {})],
+    })
+
+
+def _graph(lanes: dict[str, list[tuple[str, str, dict[str, Any]]]]) -> dict[str, Any]:
     nodes, edges = [], []
     for row, (layer, steps) in enumerate(lanes.items()):
         for col, (node_id, function, config) in enumerate(steps):

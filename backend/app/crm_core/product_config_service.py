@@ -1367,15 +1367,27 @@ def _templates(offering: ProductOffering, lines: set[str]) -> list[dict[str, Any
             technical("Codec", ["G.711", "G.729"], required=True, default="G.711"),
             technical("Number range"),
         ]
+    if lines & {"mobile_addon", "mobile_vas", "roaming"}:  # a pack / bolt-on / value-added service (comm_mobile.profile reads these)
+        roaming = "roaming" in lines
+        ops = [technical("Validity", data_type="number", unit="days", default="28" if not roaming else "7", required=True)]
+        if "mobile_vas" not in lines:
+            ops += [technical("Data allowance", default="1 GB" if roaming else "10 GB"),
+                    technical("Voice minutes", default="100" if roaming else "0")]
+        if roaming:
+            ops.append(technical("Roaming", data_type="boolean", default="true"))
+        return ops
     if "mobile" in lines or re.search(r"\b(mobile|sim|5g|4g|lte|iot)\b", text):
+        prepaid = "prepaid" in text or (offering.segment or "").upper() == "B2C" and "postpaid" not in text
         return [
+            technical("Payment type", ["Prepaid", "Postpaid"], required=True, default="Prepaid" if prepaid else "Postpaid"),
+            technical("Validity", data_type="number", unit="days", default="28" if prepaid else "30", required=True),
             pricing("Data allowance", ["10 GB", "50 GB", "Unlimited"],
                     [{"value": "50 GB", "type": "percent", "amount": 40}, {"value": "Unlimited", "type": "percent", "amount": 100}],
                     required=True, default="10 GB"),
-            pricing("Lines", [], [{"value": "*", "type": "per_unit", "amount": unit}], default="1"),
-            term,
+            technical("Voice minutes", default="Unlimited"),
+            technical("SMS", default="100"),
             technical("SIM type", ["Physical SIM", "eSIM"], required=True, default="Physical SIM"),
-            technical("APN"),
+            *([] if prepaid else [technical("Shared allowance", data_type="boolean", default="false"), term]),
         ]
     if not ({"connectivity"} & lines) and re.search(r"\b(security|backup|cloud|addon|add-on|licen[cs]e)\b", text):
         return [

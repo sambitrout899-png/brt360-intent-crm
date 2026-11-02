@@ -7,6 +7,46 @@ Code: `app/models/mobile.py`, `app/crm_core/comm_mobile.py`, `app/intent_engine/
 `app/orchestration/actions_mobile.py`, `app/experience/routes_mobile.py`, page **Operations -> Mobile Subscribers**
 (page key `mobile`, part of Telecom CRM). Migration `d7f9b1c3e5a7`.
 
+## Built into the product, sales and order model
+
+**Plans and packs are catalog products, modelled in the universal Product Modeller.** A product on the
+`mobile` product line (specification *MobileLine*) is a plan; `mobile_addon` (*MobileData*), `mobile_vas` (*MobileVAS*)
+and `roaming` (*MobileRoaming*) products are packs, value-added services and roaming packs. The catalog's compatibility
+rules (`mobile` -> `mobile_addon` / `mobile_vas` / `roaming`) say what can be bought on a plan. What a product gives is its
+product model's attributes, as configured when sold (else their defaults):
+
+| Attribute | Meaning |
+| --- | --- |
+| Payment type | Prepaid / Postpaid (plans) |
+| Validity | days the plan or pack lasts before it renews or ends |
+| Data allowance, Voice minutes, SMS | e.g. 10 GB, 300, Unlimited - a pricing attribute when the customer picks a size |
+| SIM type | Physical SIM / eSIM |
+| Shared allowance | a business pool other lines join |
+| Roaming | a pack used abroad |
+
+The Product Modeller's AI guidance and built-in suggestions propose exactly these for mobile products. Releases,
+versions, pricelists, eligibility and approvals apply as to any product. Model fixed characteristics (payment type,
+an allowance that isn't a choice) with one allowed value, so a product change never carries another plan's value over.
+**Mobile -> Plans & packs -> Load a sample mobile catalog** creates typical plans and packs to start from (placeholder prices).
+
+**Lines are sold on orders and live as assets.** *Activate mobile lines* (INT-136) configures the plan from its model,
+prices it from the customer's pricelist, checks the customer's segment and eligibility, and places one order line per
+mobile line; B2C direct orders (INT-104) and B2B quotes -> orders work the same way. When the order's asset is installed
+(`abo_service.assetize`) the line comes to life on it: number and SIM from what fulfilment reserved in Inventory, else
+the partner's range / phone-number pool / tenant range and SIM stock, or an eSIM. With no SIM stock and no ICCID the
+line is *waiting for a SIM* until one is swapped in (INT-137, no fee). **Mobile -> Set up the mobile fulfilment pattern**
+creates the *Mobile activation* pattern (number and SIM from Inventory, network activation, asset, billing - no field
+work); without one the activation completes the order at once.
+
+**Change orders move the line.** A line that is an asset of its own changes plan (INT-142), switches prepaid <->
+postpaid (INT-134), and is suspended, resumed or terminated (INT-143) by a change order on its asset - billing, order
+history and the asset follow. A change raised on the asset directly (*Change an asset*, INT-107) moves the line too:
+product change, suspend / resume, disconnect / terminate / port-out, MNP port-in (the ported number becomes the line's)
+and account transfer. Lines that share one asset (an order line of quantity 20 from a quote) change line by line.
+
+**Billing.** A postpaid plan sold on an order is billed by the bill run on its asset; packs, fees and usage are posted to
+the billing account. A prepaid plan is paid from the line's wallet and the bill run skips its asset.
+
 ## Intents
 
 | Code | Intent | Prepaid | Postpaid |
@@ -60,13 +100,12 @@ from its form, from the buttons on a line, and from Flow Studio (inputs and `res
   activation code (`LPA:1$<smdp_address>$<code>`). A physical SIM needs an ICCID when Inventory keeps no SIM stock.
   A swapped-out SIM is retired in Inventory.
 
-## Policy (Mobile -> Plans & packs, admin)
+## Policy (Mobile -> Plans & packs -> Operating policy, admin)
 
-Plans, packs, `number_range`, `imsi_prefix`, `smdp_address`, recharge min/max, low-balance alert, emergency credit
-amount / fee / minimum days on the network, transfer limit and fee, SIM swap and number change fees, swap cool-down,
-postpaid default deposit and credit limit (and its maximum), roaming minimum balance and multiplier, shared-plan
-size, bulk activation and voucher batch limits. Stored in the communications settings under key `mobile`.
-**The default plans, packs and prices are placeholders - set your own before going live.**
+`number_range`, `imsi_prefix`, `smdp_address`, recharge min/max, low-balance alert, emergency credit amount / fee /
+minimum days on the network, transfer limit and fee, SIM swap and number change fees, swap cool-down, postpaid default
+deposit and credit limit (and its maximum), roaming minimum balance and multiplier, shared-plan size, bulk activation and
+voucher batch limits - the communications settings under key `mobile`. Plans and packs are not here: they are products.
 
 ## Scheduler
 
