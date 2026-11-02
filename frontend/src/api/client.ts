@@ -2309,6 +2309,19 @@ export function mobileApi<T = unknown>(path: string, method: "GET" | "POST" | "P
   return apiCall<T>(`/api/mobile${path}`, method, body);
 }
 
+/** Bulk orders API (/api/bulk-orders/*) - see backend orchestration/bulk_orders.py. */
+export function bulkApi<T = unknown>(path = "", method: "GET" | "POST" = "GET", body?: unknown): Promise<T> {
+  return apiCall<T>(`/api/bulk-orders${path}`, method, body);
+}
+
+/** A bulk order's results as CSV. */
+export async function bulkResultsCsv(id: number): Promise<string> {
+  const token = getAccessToken();
+  const res = await fetch(`${API_BASE}/api/bulk-orders/${id}/results.csv`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+  if (!res.ok) throw new Error(`Could not download the results (${res.status})`);
+  return res.text();
+}
+
 /** A voucher batch's PINs as CSV - handed out once, then cleared on the server. */
 export async function mobileVoucherPins(batch: string): Promise<string> {
   const token = getAccessToken();

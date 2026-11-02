@@ -27,6 +27,7 @@ import IntentCommandBar from "./pages/IntentCommandBar";
 import InventoryPage from "./pages/InventoryPage";
 import LoginPage from "./pages/LoginPage";
 import MobilePage from "./pages/MobilePage";
+import BulkOrdersPage from "./pages/BulkOrdersPage";
 import MyWorkPage from "./pages/MyWorkPage";
 import OrdersPage from "./pages/OrdersPage";
 import PipelinePage from "./pages/PipelinePage";
@@ -38,7 +39,7 @@ import { ENTITY_LABELS } from "./api/types";
 import type { Branding, CurrentUser, EntityType, MyAccess } from "./api/types";
 import { WorkspaceContext } from "./workspace";
 
-type Tab = "training" | LearningPageKey | "dashboard" | "mywork" | "customer" | "pipeline" | "orders" | "tickets" | "field" | "inventory" | "mobile" | "catalog" | "analytics" | "records" | "intent" | "audit" | "admin";
+type Tab = "training" | LearningPageKey | "dashboard" | "mywork" | "customer" | "pipeline" | "orders" | "tickets" | "field" | "inventory" | "mobile" | "bulk_orders" | "catalog" | "analytics" | "records" | "intent" | "audit" | "admin";
 
 const TABS: { id: Tab; label: string; group: string }[] = [
   { id: "training", label: "Learning home", group: "Learning" },
@@ -55,6 +56,7 @@ const TABS: { id: Tab; label: string; group: string }[] = [
   { id: "field", label: "Field Service", group: "Operations" },
   { id: "inventory", label: "Network Inventory", group: "Operations" },
   { id: "mobile", label: "Mobile Subscribers", group: "Operations" },
+  { id: "bulk_orders", label: "Bulk Orders", group: "Operations" },
   { id: "catalog", label: "Catalog", group: "Product & Governance" },
   { id: "audit", label: "Audit Log", group: "Product & Governance" },
   { id: "admin", label: "Admin", group: "Product & Governance" },
@@ -406,6 +408,7 @@ function CrmApp({ user, onLoggedOut }: { user: CurrentUser; onLoggedOut: () => v
           {activeTab === "field" && <FieldServicePage onRequestIntent={requestIntent} />}
           {activeTab === "inventory" && <InventoryPage onRequestIntent={requestIntent} />}
           {activeTab === "mobile" && <MobilePage />}
+          {activeTab === "bulk_orders" && <BulkOrdersPage />}
           {activeTab === "catalog" && <CatalogPage />}
           {activeTab === "analytics" && <AnalyticsPage />}
           {activeTab === "records" && <RecordsPage />}

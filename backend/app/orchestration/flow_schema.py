@@ -133,6 +133,9 @@ _INTENT_INPUTS.update(_CM_FLOW_FIELDS)
 from app.intent_engine.mobile_intents import FLOW_FIELDS as _MB_FLOW_FIELDS, RESULTS as _MB_RESULTS  # noqa: E402
 
 _INTENT_INPUTS.update(_MB_FLOW_FIELDS)
+from app.intent_engine.bulk_intents import FLOW_FIELDS as _BK_FLOW_FIELDS, RESULTS as _BK_RESULTS  # noqa: E402
+
+_INTENT_INPUTS.update(_BK_FLOW_FIELDS)
 _INTENT_INPUTS.update({
     'TRN-01': ['name', 'description', 'curriculum', 'details'],
     'TRN-02': ['program_id', 'curriculum'],
@@ -196,6 +199,7 @@ _INTENT_RESULTS: dict[str, dict[str, list[str]]] = {
     "INT-36": {"decision": ["approve", "reject"], "chain_status": ["approved", "rejected", "pending"]},
 }
 _INTENT_RESULTS.update(_MB_RESULTS)
+_INTENT_RESULTS.update(_BK_RESULTS)
 
 
 @dataclass

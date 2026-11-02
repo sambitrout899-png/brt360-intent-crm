@@ -197,6 +197,11 @@ from app.intent_engine.mobile_intents import TRAINING as _MOBILE_TRAINING  # noq
 
 _T = _T + _MOBILE_TRAINING
 
+# Bulk orders (INT-149..150) - appended last, for the same reason.
+from app.intent_engine.bulk_intents import TRAINING as _BULK_TRAINING  # noqa: E402
+
+_T = _T + _BULK_TRAINING
+
 _INT_SLOTS = {"id", "id2", "price", "pct", "n"}
 
 

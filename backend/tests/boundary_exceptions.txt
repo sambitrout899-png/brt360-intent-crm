@@ -154,6 +154,8 @@ app.orchestration.actions_site -> intent
 app.orchestration.actions_t2r -> intent
 app.orchestration.agent -> crm
 app.orchestration.assistant -> flow
+app.orchestration.bulk_orders -> crm
+app.orchestration.bulk_orders -> telecom
 app.orchestration.conflicts -> flow
 app.orchestration.conflicts -> telecom
 app.orchestration.flow_engine -> crm

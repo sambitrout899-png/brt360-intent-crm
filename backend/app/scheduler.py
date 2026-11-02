@@ -82,8 +82,16 @@ def _mobile() -> None:
     comm_mobile.run_due(SessionLocal)
 
 
+def _bulk_orders() -> None:
+    # bulk orders: queued rows placed, placed rows approved, sent to fulfilment and followed to completion
+    from app.orchestration import bulk_orders
+
+    bulk_orders.run_due(SessionLocal)
+
+
 JOBS = (
     ("Licensing", _licensing),
+    ("Bulk orders", _bulk_orders),
     ("Mobile subscribers", _mobile),
     ("Inventory scheduler", _inventory_sync),
     ("Inventory reservation expiry", _reservation_expiry),

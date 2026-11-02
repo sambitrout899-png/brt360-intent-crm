@@ -67,6 +67,9 @@ PROCESSES: list[dict[str, Any]] = [
                "INT-60", "INT-61", "INT-62", "INT-63", "INT-64", "INT-67", "INT-68", "INT-71"]},
     {"key": "fulfilment", "label": "Order Fulfilment", "steps": ["INT-24", "INT-25", "INT-117", "INT-118", "INT-45", "INT-26", "INT-27", "INT-28", "INT-07", "INT-14", "INT-102", "INT-98"]},
     {"key": "inlife", "label": "In-life Changes", "steps": ["INT-08", "INT-50", "INT-09", "INT-70", "INT-21"]},
+    # Bulk ordering (orchestration/bulk_orders.py): many orders, each through the single-order steps to fulfilment and billing
+    {"key": "bulk", "label": "Bulk Ordering", "steps": ["INT-149", "INT-41", "INT-104", "INT-24", "INT-136", "INT-107", "INT-25", "INT-117", "INT-118",
+                                                        "INT-108", "INT-150"]},
     {"key": "assurance", "label": "Service Assurance", "steps": ["INT-10", "INT-11", "INT-99", "INT-12", "INT-95", "INT-96", "INT-97", "INT-78", "INT-80", "INT-81"]},
     {"key": "accounts", "label": "Account Setup", "steps": ["INT-72", "INT-73", "INT-75", "INT-77", "INT-79", "INT-74", "INT-82", "INT-83", "INT-100", "INT-101"]},
     {"key": "billing", "label": "Bill to Cash", "steps": ["INT-84", "INT-90", "INT-85", "INT-86", "INT-87", "INT-88", "INT-89", "INT-91", "INT-92"]},

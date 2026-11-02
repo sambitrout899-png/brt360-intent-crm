@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.config import get_settings
-from app.intent_engine import abo_intents, b2c_intents, comm_intents, config_intents, om_intents, fulfillment_intents, inventory_intents, mobile_intents, quote_intents, sto_intents
+from app.intent_engine import abo_intents, b2c_intents, comm_intents, config_intents, om_intents, fulfillment_intents, inventory_intents, mobile_intents, bulk_intents, quote_intents, sto_intents
 
 
 @dataclass
@@ -91,6 +91,7 @@ _REQUIRED_FIELDS.update(quote_intents.REQUIRED)
 _REQUIRED_FIELDS.update(fulfillment_intents.REQUIRED)
 _REQUIRED_FIELDS.update(inventory_intents.REQUIRED)
 _REQUIRED_FIELDS.update(mobile_intents.REQUIRED)
+_REQUIRED_FIELDS.update(bulk_intents.REQUIRED)
 
 
 def _consumer_order(intent_type: str, entities: dict[str, Any]) -> bool:

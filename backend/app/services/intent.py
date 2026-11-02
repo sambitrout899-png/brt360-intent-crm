@@ -10,10 +10,10 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-PREFIXES = ("/api/intents", "/api/agent/", "/api/assistant/", "/api/admin/intents", "/api/admin/conflicts")
+PREFIXES = ("/api/intents", "/api/agent/", "/api/assistant/", "/api/admin/intents", "/api/admin/conflicts", "/api/bulk-orders")
 
 
 def routers() -> list[APIRouter]:
-    from app.experience import routes_agent, routes_assistant, routes_conflicts, routes_intent, routes_intent_admin
+    from app.experience import routes_agent, routes_assistant, routes_bulk_orders, routes_conflicts, routes_intent, routes_intent_admin
 
-    return [routes_intent.router, routes_intent_admin.router, routes_agent.router, routes_assistant.router, routes_conflicts.router]
+    return [routes_intent.router, routes_intent_admin.router, routes_agent.router, routes_assistant.router, routes_conflicts.router, routes_bulk_orders.router]

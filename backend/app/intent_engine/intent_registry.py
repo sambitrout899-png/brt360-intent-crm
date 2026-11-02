@@ -440,6 +440,14 @@ for _code, (_label, _desc, _cat, _icon, _target, _fields, _examples) in _mobile.
     BUILTIN[_code] = _B(_code, _label, _desc, _cat, _icon, _target, _fields, _examples)
 _FIELD_OVERRIDES.update(_mobile.OVERRIDES)
 
+# Bulk orders (INT-149..150) - see bulk_intents.py.
+from app.intent_engine import bulk_intents as _bulk  # noqa: E402
+
+_LIB.update({k: v for k, v in _bulk.LIB.items() if k not in _LIB})
+for _code, (_label, _desc, _cat, _icon, _target, _fields, _examples) in _bulk.SPECS.items():
+    BUILTIN[_code] = _B(_code, _label, _desc, _cat, _icon, _target, _fields, _examples)
+_FIELD_OVERRIDES.update(_bulk.OVERRIDES)
+
 # "At least one of" groups the form should explain (reasoning enforces them).
 ONE_OF: dict[str, list[list[str]]] = {
     "INT-12": [["ticket_id", "order_id"]],
