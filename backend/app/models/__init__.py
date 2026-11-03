@@ -47,6 +47,7 @@ from app.models.crm import (
 )
 from app.models.custom_fields import CustomFieldDefinition, CustomFieldValue
 from app.models.custom_records import CustomRecord, CustomRecordType, RecordLink, RecordRelationship
+from app.models.system_tests import SystemTestCase, SystemTestResult, SystemTestRun, SystemTestSuite
 from app.models.field_service import (
     FsAbsence,
     FsActivity,
@@ -255,6 +256,10 @@ __all__ = [
     "CustomRecord",
     "RecordRelationship",
     "RecordLink",
+    "SystemTestSuite",
+    "SystemTestCase",
+    "SystemTestRun",
+    "SystemTestResult",
     "FlowDefinition",
     "StateModel",
     "StateModelState",

@@ -176,3 +176,4 @@ app.orchestration.process_journey -> crm
 app.orchestration.reasoner -> flow
 app.orchestration.reasoner -> product
 app.orchestration.scratch -> flow
+app.orchestration.system_tests -> flow

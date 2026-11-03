@@ -77,6 +77,7 @@ import NotificationLog from "../components/NotificationLog";
 import { ApprovalsSection, BroadcastsSection, PriceListsSection, ProcessRolesSection, QuoteDocumentsSection } from "./AdminProcessSections";
 import AdminPageDesignerSection from "./AdminPageDesignerSection";
 import AdminRecordTypesSection from "./AdminRecordTypesSection";
+import SystemTestsPanel from "../components/SystemTestsPanel";
 import AdminBimSection from "./AdminBimSection";
 import AdminOrderMgmtSection from "./AdminOrderMgmtSection";
 import AdminFulfillmentSection from "./AdminFulfillmentSection";
@@ -1145,6 +1146,8 @@ function TestSuiteSection() {
 
   return (
     <div className="space-y-6">
+      <SystemTestsPanel />
+      <h3 className="text-base font-bold text-slate-100">Platform code checks</h3>
       <p className="text-sm text-slate-400">
         Runs the real backend test suite as a subprocess and reports the result - no SSH access needed to verify a
         deployment is healthy. Tests run against their own isolated in-memory database, never the tenant's real data,

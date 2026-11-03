@@ -587,6 +587,8 @@ def record_step(text: str, db: Session, tenant_id: int, context: dict[str, Any] 
         return None
     if not types:
         return None
+    if any(pattern.search(text) for _, pattern in record_intents.RULES):
+        return None  # "design a record type: Site Survey ..." names a type to design, not records of one
     lowered = text.lower()
     rt, rec = None, None
     for m in _REC_NUMBER.finditer(text):

@@ -124,7 +124,8 @@ MODULES: tuple[Module, ...] = (
     # The intent pipeline: understand, reason, plan, run (via the registry),
     # verify - and the agent and assistant built on it.
     Module("intent", (
-        "intent_engine.*", "orchestration.*", "models.intent_*", "models.bulk_orders", "experience.routes_intent*", "experience.routes_bulk_orders",
+        "intent_engine.*", "orchestration.*", "models.intent_*", "models.bulk_orders", "models.system_tests", "experience.routes_intent*", "experience.routes_bulk_orders",
+        "experience.routes_system_tests",
         "experience.routes_agent", "experience.routes_assistant", "experience.routes_conflicts",
         "schemas.intent*", "services.intent",
     ), uses=("metadata", "identity", "audit", "notification", "ai")),
