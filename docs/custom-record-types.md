@@ -8,7 +8,7 @@ Development** (`custom_development`).
 Code: `app/models/custom_records.py`, `app/crm_core/custom_record_service.py` (records, lookups, relationships,
 visibility, validation), `app/crm_core/record_designer.py` (the AI designer), `app/intent_engine/record_intents.py` +
 `app/orchestration/actions_records.py` (INT-151..158), `app/experience/routes_custom_records.py`. Migration
-`a1c3e5f7b9d2` (after `e2b4d6f8a0c3`). Pages: **Admin -> Record Types** and **Custom Records**.
+`c7d9e1f3a5b8` (after `f9b1d3e5a7c9`). Pages: **Admin -> Record Types** and **Custom Records**.
 
 ## Designing a type
 

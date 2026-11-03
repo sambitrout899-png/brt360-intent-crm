@@ -3,7 +3,7 @@ list columns, and administrators relate record types to each other (record_relat
 from alembic import op
 import sqlalchemy as sa
 
-revision = "a1c3e5f7b9d2"
+revision = "c7d9e1f3a5b8"
 down_revision = "f9b1d3e5a7c9"
 branch_labels = depends_on = None
 
