@@ -39,7 +39,7 @@ from sqlalchemy.orm import Session
 from app.crm_core import access_service, lifecycle_service, record_service
 from app.crm_core.b2c_order_service import is_b2c
 from app.crm_core.access_service import Access
-from app.intent_engine import abo_intents, b2c_intents, classifier, comm_intents, config_intents, context_assembly, intent_registry, om_intents, fulfillment_intents, inventory_intents, mobile_intents, bulk_intents, quote_intents, reasoning, sto_intents, understanding
+from app.intent_engine import abo_intents, b2c_intents, classifier, comm_intents, config_intents, context_assembly, intent_registry, om_intents, fulfillment_intents, inventory_intents, mobile_intents, bulk_intents, record_intents, quote_intents, reasoning, sto_intents, understanding
 from app.models.assurance import TroubleTicket, WorkOrder
 from app.models.auth import User
 from app.models.catalog import OfferingStatus, ProductOffering
@@ -55,7 +55,24 @@ ENTITY_LABELS = {"party": "Customer", "lead": "Lead", "opportunity": "Opportunit
 RECORD_MODELS: dict[str, Any] = {"party": Party, "lead": Lead, "opportunity": Opportunity, "quote": Quote, "order": Order,
                                  "ticket": TroubleTicket, "work_order": WorkOrder, "proposal": Proposal,
                                  "product_offering": ProductOffering}
-LIFECYCLE_TYPES = set(lifecycle_service.ENTITY_MODELS)
+class _LifecycleTypes(set):
+    """The built-in lifecycle records - and every one of the tenant's own record types ("x_<key>"),
+    which have a state model, an owner and data visibility just the same."""
+
+    def __contains__(self, item: object) -> bool:
+        return super().__contains__(item) or lifecycle_service.is_custom(item if isinstance(item, str) else None)
+
+
+LIFECYCLE_TYPES = _LifecycleTypes(lifecycle_service.ENTITY_MODELS)
+
+
+def type_label(db: Session, tenant_id: int, record_type: str) -> str:
+    if lifecycle_service.is_custom(record_type):
+        from app.crm_core import custom_record_service
+
+        rt = custom_record_service.get_type(db, tenant_id, record_type)
+        return rt.label if rt else record_type
+    return ENTITY_LABELS.get(record_type, record_type)
 
 ORIGIN_NOTES = {
     "you": "entered by you",
@@ -88,6 +105,8 @@ def _state(db: Session, tenant_id: int, record_type: str, obj) -> str:
 def record_label(db: Session, tenant_id: int, record_type: str, obj) -> tuple[str, str]:
     """(label, hint) - how a record reads in a picker or a card title."""
     state = _state(db, tenant_id, record_type, obj).replace("_", " ")
+    if lifecycle_service.is_custom(record_type):
+        return f"{obj.number} · {obj.name}", f"{obj.record_type.label} · {state}"
     if record_type == "party":
         return obj.name, f"{(obj.party_type or '').replace('_', ' ')} · #{obj.id}".strip(" ·")
     if record_type == "lead":
@@ -113,6 +132,8 @@ def record_label(db: Session, tenant_id: int, record_type: str, obj) -> tuple[st
 
 
 def _get(db: Session, tenant_id: int, record_type: str, record_id: Any):
+    if lifecycle_service.is_custom(record_type):
+        return lifecycle_service.get_record(db, tenant_id, record_type, record_id)
     model = RECORD_MODELS.get(record_type)
     try:
         obj = db.get(model, int(record_id)) if model is not None else None
@@ -195,6 +216,11 @@ def lookup(
     db: Session, tenant_id: int, access: Access, record_type: str, q: str = "", intent_code: str | None = None,
     field_key: str | None = None, limit: int = 8,
 ) -> list[dict[str, Any]]:
+    if lifecycle_service.is_custom(record_type):
+        from app.crm_core import custom_record_service
+
+        return [{"id": r["id"], "label": r["title"], "hint": r.get("hint", ""), "suggested": False}
+                for r in custom_record_service.search(db, access, record_type, q, limit)]
     if record_type not in RECORD_MODELS:
         return []
     model = RECORD_MODELS[record_type]
@@ -364,7 +390,18 @@ def _options(db: Session, tenant_id: int, user: User, spec: dict[str, Any], valu
         return [{"value": flow_engine.custom_intent_code(f), "label": f.name, "hint": "Flow Studio"}
                 for f in flow_engine.custom_intent_flows(db, tenant_id)]
     if source == "@entity_types":
-        return [{"value": t, "label": ENTITY_LABELS[t]} for t in lifecycle_service.ENTITY_MODELS]
+        from app.crm_core import custom_record_service
+
+        return [{"value": t, "label": ENTITY_LABELS[t]} for t in lifecycle_service.ENTITY_MODELS] + [
+            {"value": rt.entity_type, "label": rt.label, "hint": "Your record type"} for rt in custom_record_service.list_types(db, tenant_id, active_only=True)]
+    if source == "@record_types":
+        from app.crm_core import custom_record_service
+
+        return [{"value": rt.entity_type, "label": rt.label, "hint": rt.number_prefix} for rt in custom_record_service.list_types(db, tenant_id, active_only=True)]
+    if source == "@relationships":
+        from app.crm_core import custom_record_service
+
+        return [{"value": r.key, "label": f"{r.label} / {r.reverse_label}"} for r in custom_record_service.list_relationships(db, tenant_id)]
     if source == "@id_providers":
         rows = db.query(IdentityVerificationProvider).filter(IdentityVerificationProvider.tenant_id == tenant_id, IdentityVerificationProvider.is_active.is_(True))
         return [{"value": p.name, "label": p.name} for p in rows]
@@ -804,9 +841,9 @@ def prepare(
         if spec and spec["type"] == "record" and spec.get("record_type") in LIFECYCLE_TYPES:
             obj = _get(db, tenant_id, spec["record_type"], raw)
             if obj is None:
-                blockers.append({"message": f"{ENTITY_LABELS.get(spec['record_type'], 'Record')} #{raw} could not be found.", "fix": None})
+                blockers.append({"message": f"{type_label(db, tenant_id, spec['record_type'])} #{raw} could not be found.", "fix": None})
             elif not _visible(db, access, spec["record_type"], obj):
-                blockers.append({"message": f"{ENTITY_LABELS[spec['record_type']]} #{raw} is outside the data your position can see.", "fix": None})
+                blockers.append({"message": f"{type_label(db, tenant_id, spec['record_type'])} #{raw} is outside the data your position can see.", "fix": None})
     if not missing and not blockers and code in intent_registry.BUILTIN:
         typed = _typed(values, out_fields)
         try:
@@ -1078,6 +1115,7 @@ _NEXT.update({k: v for k, v in fulfillment_intents.NEXT.items() if k not in _NEX
 _NEXT.update({k: v for k, v in inventory_intents.NEXT.items() if k not in _NEXT})
 _NEXT.update({k: v for k, v in mobile_intents.NEXT.items() if k not in _NEXT})
 _NEXT.update({k: v for k, v in bulk_intents.NEXT.items() if k not in _NEXT})
+_NEXT.update({k: v for k, v in record_intents.NEXT.items() if k not in _NEXT})
 # what a B2C customer is offered instead of the lead path (b2c_order_service)
 _B2C_NEXT: dict[str, list[tuple[str, str]]] = {
     "INT-15": [("INT-104", "Place their order - no lead or quote for B2C"), ("INT-13", "Verify their identity")],
@@ -1225,7 +1263,7 @@ def outcome(
             "entity_type": record_type,
             "entity_id": record_id,
             "brt_id": getattr(obj, "brt_id", None),
-            "type_label": ENTITY_LABELS.get(record_type, record_type),
+            "type_label": type_label(db, tenant_id, record_type),
             "title": label,
             "hint": hint,
             "state": _state(db, tenant_id, record_type, obj),
@@ -1234,6 +1272,7 @@ def outcome(
             "to_state": change.get("to_state") if change else None,
             "fields": _fields_of(db, tenant_id, record_type, obj),
             "openable": record_type in LIFECYCLE_TYPES,
+            **({"number": obj.number} if lifecycle_service.is_custom(record_type) else {}),
         })
     created = [r for r in records if r["change"] == "created"]
     moved = [r for r in records if r["from_state"] and r["to_state"]]

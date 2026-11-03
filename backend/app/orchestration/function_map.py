@@ -70,6 +70,9 @@ PROCESSES: list[dict[str, Any]] = [
     # Bulk ordering (orchestration/bulk_orders.py): many orders, each through the single-order steps to fulfilment and billing
     {"key": "bulk", "label": "Bulk Ordering", "steps": ["INT-149", "INT-41", "INT-104", "INT-24", "INT-136", "INT-107", "INT-25", "INT-117", "INT-118",
                                                         "INT-108", "INT-150"]},
+    # The tenant's own record types (custom_record_service.py) - designed, then run like any record
+    {"key": "custom_records", "label": "Custom Records", "steps": ["INT-158", "INT-151", "INT-152", "INT-153", "INT-154", "INT-155", "INT-156",
+                                                                   "INT-157"]},
     {"key": "assurance", "label": "Service Assurance", "steps": ["INT-10", "INT-11", "INT-99", "INT-12", "INT-95", "INT-96", "INT-97", "INT-78", "INT-80", "INT-81"]},
     {"key": "accounts", "label": "Account Setup", "steps": ["INT-72", "INT-73", "INT-75", "INT-77", "INT-79", "INT-74", "INT-82", "INT-83", "INT-100", "INT-101"]},
     {"key": "billing", "label": "Bill to Cash", "steps": ["INT-84", "INT-90", "INT-85", "INT-86", "INT-87", "INT-88", "INT-89", "INT-91", "INT-92"]},

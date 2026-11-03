@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.config import get_settings
-from app.intent_engine import abo_intents, b2c_intents, comm_intents, config_intents, om_intents, fulfillment_intents, inventory_intents, mobile_intents, bulk_intents, quote_intents, sto_intents
+from app.intent_engine import abo_intents, b2c_intents, comm_intents, config_intents, om_intents, fulfillment_intents, inventory_intents, mobile_intents, bulk_intents, record_intents, quote_intents, sto_intents
 
 
 @dataclass
@@ -92,6 +92,7 @@ _REQUIRED_FIELDS.update(fulfillment_intents.REQUIRED)
 _REQUIRED_FIELDS.update(inventory_intents.REQUIRED)
 _REQUIRED_FIELDS.update(mobile_intents.REQUIRED)
 _REQUIRED_FIELDS.update(bulk_intents.REQUIRED)
+_REQUIRED_FIELDS.update(record_intents.REQUIRED)
 
 
 def _consumer_order(intent_type: str, entities: dict[str, Any]) -> bool:
@@ -133,6 +134,8 @@ def _missing_fields(intent_type: str, entities: dict[str, Any], required: list[s
         missing.extend(quote_intents.missing(intent_type, entities))
     if intent_type in mobile_intents.CODES:
         missing.extend(mobile_intents.missing(intent_type, entities))
+    if intent_type in record_intents.CODES:
+        missing.extend(record_intents.missing(intent_type, entities))
     if intent_type == "INT-32" and not (entities.get("to_user") or entities.get("to_position") or entities.get("to_department")):
         missing.append("to_user or to_position or to_department")
     return missing

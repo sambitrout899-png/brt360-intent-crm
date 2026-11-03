@@ -74,6 +74,11 @@ def coerce(defn: CustomFieldDefinition, raw: Any) -> str | None:
             return dt.date.fromisoformat(text[:10]).isoformat()
         except ValueError:
             raise ValueError(f"Custom field '{defn.key}' must be a date (YYYY-MM-DD), got '{text}'")
+    if defn.data_type == "lookup":
+        # the record's id (custom_record_service.resolve_reference turns "SS-0004" or a name into it first)
+        if not text.lstrip("#").isdigit():
+            raise ValueError(f"Custom field '{defn.key}' must point to a record (its number or id), got '{text}'")
+        return text.lstrip("#")
     if defn.data_type == "picklist":
         options = allowed_values(defn)
         match = next((o for o in options if o.lower() == text.lower()), None)
@@ -91,7 +96,14 @@ def typed(defn: CustomFieldDefinition, stored: str | None) -> Any:
         return int(number) if number.is_integer() else number
     if defn.data_type == "boolean":
         return stored == "true"
+    if defn.data_type == "lookup":
+        return int(stored) if str(stored).isdigit() else None
     return stored
+
+
+def lookup_target(defn: CustomFieldDefinition) -> str | None:
+    """The entity type a lookup field points to."""
+    return (defn.allowed_values or "").strip() or None if defn.data_type == "lookup" else None
 
 
 def get_values(db: Session, tenant_id: int, entity_type: str, entity_id: int) -> dict[str, Any]:
@@ -112,6 +124,11 @@ def get_values(db: Session, tenant_id: int, entity_type: str, entity_id: int) ->
 
 
 def set_value(db: Session, tenant_id: int, entity_type: str, entity_id: int, defn: CustomFieldDefinition, raw: Any) -> Any:
+    if defn.data_type == "lookup" and raw not in (None, ""):
+        # a lookup is kept as the id of a record that exists in this tenant - given by id, number or name
+        from app.crm_core import custom_record_service
+
+        raw = custom_record_service.resolve_reference(db, tenant_id, lookup_target(defn), raw, what=defn.label)
     canonical = coerce(defn, raw)
     row = (
         db.query(CustomFieldValue)

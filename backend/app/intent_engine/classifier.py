@@ -27,7 +27,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.intent_engine import abo_intents, b2c_intents, comm_intents, config_intents, om_intents, fulfillment_intents, inventory_intents, mobile_intents, bulk_intents, quote_intents, sto_intents, understanding
+from app.intent_engine import abo_intents, b2c_intents, comm_intents, config_intents, om_intents, fulfillment_intents, inventory_intents, mobile_intents, bulk_intents, record_intents, quote_intents, sto_intents, understanding
 
 SUPPORTED_INTENTS = (
     "INT-01", "INT-02", "INT-03",
@@ -47,7 +47,7 @@ SUPPORTED_INTENTS = (
     "INT-62", "INT-63", "INT-64", "INT-65", "INT-66", "INT-67", "INT-68", "INT-69", "INT-70", "INT-71",
     # Communications - see comm_intents.py; configuration - config_intents.py; B2C direct order - b2c_intents.py
 ) + comm_intents.CODES + config_intents.CODES + b2c_intents.CODES + sto_intents.CODES + abo_intents.CODES + quote_intents.CODES + fulfillment_intents.CODES \
-    + inventory_intents.CODES + mobile_intents.CODES + bulk_intents.CODES
+    + inventory_intents.CODES + mobile_intents.CODES + bulk_intents.CODES + record_intents.CODES
 
 _SYSTEM_PROMPT = """You are the NLU classifier for BRT 360, a telecom Intent CRM.
 
@@ -296,6 +296,7 @@ INTENT_LABELS.update(fulfillment_intents.LABELS)
 INTENT_LABELS.update(inventory_intents.LABELS)
 INTENT_LABELS.update(mobile_intents.LABELS)
 INTENT_LABELS.update(bulk_intents.LABELS)
+INTENT_LABELS.update(record_intents.LABELS)
 
 # The Sales-to-Order / B2C steps added after the intent model was trained
 # (INT-35..41). They are recognised by these phrase rules before any model
@@ -305,7 +306,7 @@ INTENT_LABELS.update(bulk_intents.LABELS)
 NEW_PROCESS_INTENTS = ("INT-35", "INT-36", "INT-37", "INT-38", "INT-39", "INT-40", "INT-41", "INT-42", "INT-43", "INT-44", "INT-45", "INT-46",
                        "INT-47", "INT-48", "INT-49", "INT-50") + om_intents.CODES + comm_intents.CODES + config_intents.CODES + b2c_intents.CODES \
     + sto_intents.CODES + abo_intents.CODES + quote_intents.CODES + fulfillment_intents.CODES + inventory_intents.CODES \
-    + mobile_intents.CODES + bulk_intents.CODES
+    + mobile_intents.CODES + bulk_intents.CODES + record_intents.CODES
 # Each pattern needs its words together ("attach the PO", "send ... to
 # Presales") so a sentence about something else that merely mentions a PO
 # or an account is never taken for one of these steps.
@@ -356,6 +357,8 @@ _PROCESS_RULES = inventory_intents.RULES + _PROCESS_RULES
 _PROCESS_RULES = mobile_intents.RULES + _PROCESS_RULES
 # Bulk orders - "start a bulk order ...", "status of BULK-000012".
 _PROCESS_RULES = bulk_intents.RULES + _PROCESS_RULES
+# Record types - "design a record type: ..." (a record of one is found by record_step, which knows the tenant's types).
+_PROCESS_RULES = record_intents.RULES + _PROCESS_RULES
 _ENTITY_OF_ID = {"party_id": "party", "lead_id": "lead", "opportunity_id": "opportunity", "quote_id": "quote", "order_id": "order"}
 
 
@@ -375,11 +378,11 @@ def _process_step(text: str, context: dict[str, Any] | None) -> ClassificationRe
 
     if code in om_intents.CODES or code in comm_intents.CODES or code in config_intents.CODES or code in b2c_intents.CODES \
             or code in sto_intents.CODES or code in abo_intents.CODES or code in quote_intents.CODES or code in fulfillment_intents.CODES \
-            or code in inventory_intents.CODES or code in mobile_intents.CODES or code in bulk_intents.CODES:
+            or code in inventory_intents.CODES or code in mobile_intents.CODES or code in bulk_intents.CODES or code in record_intents.CODES:
         mod = (om_intents if code in om_intents.CODES else comm_intents if code in comm_intents.CODES
                else config_intents if code in config_intents.CODES else sto_intents if code in sto_intents.CODES
                else abo_intents if code in abo_intents.CODES else quote_intents if code in quote_intents.CODES else fulfillment_intents if code in fulfillment_intents.CODES
-               else inventory_intents if code in inventory_intents.CODES else mobile_intents if code in mobile_intents.CODES else bulk_intents if code in bulk_intents.CODES else b2c_intents)
+               else inventory_intents if code in inventory_intents.CODES else mobile_intents if code in mobile_intents.CODES else bulk_intents if code in bulk_intents.CODES else record_intents if code in record_intents.CODES else b2c_intents)
         entities.update(mod.extract(code, text, fields, loose))
         required = mod.REQUIRED[code]
         if context and context.get("entity_id"):
@@ -539,6 +542,163 @@ class ClassificationResult:
     alternatives: list[str] = field(default_factory=list)
 
 
+_REC_NUMBER = re.compile(r"\b([A-Za-z][A-Za-z0-9]{0,9}-\d{1,9})\b")
+_REC_VERBS: list[tuple[str, re.Pattern]] = [
+    ("INT-157", re.compile(r"\b(delete|remove|erase|drop)\b(?![^.]{0,40}\bfrom\b)", re.I)),
+    ("INT-155", re.compile(r"\b(link|unlink|relate|associate|detach|connect)\w*\b", re.I)),
+    ("INT-154", re.compile(r"\b(assign|re-?assign|hand\s+(?:it\s+)?over|transfer|allocate|give)\w*\b", re.I)),
+    ("INT-152", re.compile(r"\b(update|change|edit|set|modify|rename|correct|fill\s+in)\b", re.I)),
+    ("INT-151", re.compile(r"\b(create|add|new|log|register|raise|capture|make|book|schedule)\b", re.I)),
+    ("INT-156", re.compile(r"\b(show|list|find|search|which|what|how\s+many|display|all|open\s+ones)\b", re.I)),
+]
+
+
+def _field_values(text: str, defs: list[Any]) -> dict[str, str]:
+    """'with survey date 2026-11-20 and floors 12', 'set the surveyor to Ravi', 'floors=12; outcome: Feasible'
+    -> {field key: value} for the type's own fields."""
+    from app.intent_engine import record_intents
+
+    out: dict[str, str] = {}
+    labels = sorted(((d.label.lower(), d.key) for d in defs), key=lambda x: -len(x[0])) + [(d.key.replace("_", " "), d.key) for d in defs]
+    names = "|".join(re.escape(label) for label, _ in labels) or r"(?!x)x"
+    for label, key in labels:
+        if key in out:
+            continue
+        m = re.search(rf"\b{re.escape(label)}\b\s*(?:=|:|\bis\b|\bto\b|\bas\b|\bof\b)?\s*['\"]?(.+?)['\"]?(?=\s*(?:,|;|\band\b\s+(?:{names})\b|\bfor\b\s+[A-Z]|$|\s+(?:{names})\s*(?:=|:|\bis\b|\bto\b)))",
+                      text, re.I)
+        if m and m.group(1).strip(" .'\"") and not re.match(r"^(?:the|a|an)$", m.group(1).strip(), re.I):
+            out[key] = m.group(1).strip(" .'\"")
+    for k, v in record_intents.fields_text(text if "=" in text else "").items():
+        key = next((key for label, key in labels if k.lower() in (label, key)), None)
+        if key:
+            out[key] = v
+    return out
+
+
+def record_step(text: str, db: Session, tenant_id: int, context: dict[str, Any] | None) -> ClassificationResult | None:
+    """The tenant's own record types (INT-151..157), recognised from its own labels, record numbers and state
+    names - which no static phrase rule can know. None when the request names none of them."""
+    from app.crm_core import custom_record_service as records
+    from app.crm_core import custom_field_service, lifecycle_service
+
+    try:
+        types = records.list_types(db, tenant_id, active_only=True)
+    except Exception:  # noqa: BLE001 - a database without the record tables yet: nothing of the tenant's to recognise
+        return None
+    if not types:
+        return None
+    lowered = text.lower()
+    rt, rec = None, None
+    for m in _REC_NUMBER.finditer(text):
+        try:
+            rt, rec = records.find_record(db, tenant_id, m.group(1))
+            break
+        except ValueError:
+            continue
+    ctx_type, ctx_id = (context or {}).get("entity_type"), (context or {}).get("entity_id")
+    if rec is None and records.is_custom(ctx_type) and ctx_id and re.search(r"\b(this|it|the record)\b", lowered):
+        rt = records.get_type(db, tenant_id, ctx_type)
+        rec = records.get_record(db, tenant_id, rt, ctx_id)
+    named = None
+    for t in sorted(types, key=lambda t: -len(t.label)):
+        for name in (t.plural_label, t.label):
+            if re.search(rf"\b{re.escape(name.lower())}\b", lowered):
+                named = (t, name)
+                break
+        if named:
+            break
+    if rec is None and named is None:
+        return None
+    entities: dict[str, Any] = {}
+    code = None
+    if rec is not None:
+        rt = rec.record_type
+        entities.update(record_ref=rec.number, entity_type=rt.entity_type, entity_id=rec.id)
+        model = lifecycle_service.resolve_state_model(db, tenant_id, rt.entity_type)
+        state = next((s for s in sorted(model.states.values(), key=lambda s: -len(s.label))
+                      if re.search(rf"\b(?:{re.escape(s.label.lower())}|{re.escape(s.code.replace('_', ' '))})\b", lowered)), None)
+        action = next((t.action for t in model.transitions if re.search(rf"\b{re.escape(t.action.replace('_', ' '))}\b", lowered)), None)
+        verb = next((c for c, p in _REC_VERBS if p.search(text)), None)
+        if verb in ("INT-157", "INT-155", "INT-154"):
+            code = verb
+        elif (state or action) and "=" not in text and not re.search(r"\b(?:rename|update)\b", lowered):
+            code = "INT-153"
+            entities["record_state"] = state.code if state else action
+        else:
+            code = "INT-152" if verb in ("INT-152", "INT-151") or "=" in text else "INT-156"
+        defs = custom_field_service.list_definitions(db, tenant_id, rt.entity_type)
+        if code == "INT-152":
+            values = _field_values(re.sub(_REC_NUMBER, " ", text), defs)
+            if values:
+                entities["record_fields"] = values
+            if m := re.search(r"\brename\b.*?\bto\s+['\"]?(.+?)['\"]?$", text, re.I):
+                entities["record_name"] = m.group(1).strip()
+        elif code == "INT-154":
+            if m := re.search(r"\bto\s+(?:the\s+)?(.+?)(?:\s+(?:because|as)\b.*)?$", text, re.I):
+                who = m.group(1).strip(" .'\"")
+                if lifecycle_service.resolve_position(db, tenant_id, who):
+                    entities["to_position"] = who
+                elif lifecycle_service.department_named(db, tenant_id, who):
+                    entities["to_department"] = lifecycle_service.department_named(db, tenant_id, who).name
+                else:
+                    entities["to_user"] = who
+        elif code == "INT-155":
+            entities["unlink"] = bool(re.search(r"\b(unlink|detach|disconnect)\b|\bremove\b.*\bfrom\b", lowered))
+            rels = records.list_relationships(db, tenant_id, rt.entity_type)
+            rel = next((r for r in rels if re.search(rf"\b(?:{re.escape(r.label.lower())}|{re.escape(r.reverse_label.lower())})\b", lowered)), None)
+            others = [m.group(1) for m in _REC_NUMBER.finditer(text) if m.group(1).upper() != rec.number.upper()]
+            if rel is None and others:
+                try:  # the relationship whose other side is the other record's type
+                    other_type, _ = records.find_record(db, tenant_id, others[0])
+                    rel = next((r for r in rels if other_type.entity_type in (r.from_entity_type, r.to_entity_type)), None)
+                except ValueError:
+                    pass
+            if rel is None and len(rels) == 1:
+                rel = rels[0]
+            if rel is not None:
+                entities["relationship"] = rel.key
+            if others:
+                entities["related_ref"] = others[0]
+            elif m := re.search(r"\b(?:to|with|from)\s+(?:the\s+)?(?:\w+\s+)?['\"]?([A-Z][\w &.-]{1,60}?)['\"]?\s*$", text):
+                entities["related_ref"] = m.group(1).strip()
+        elif code == "INT-156":
+            entities.update(record_type=rt.entity_type, record_query=rec.number)
+    else:
+        rt, name = named
+        verb = next((c for c, p in _REC_VERBS if p.search(text) and c in ("INT-151", "INT-156")), None)
+        plural = name.lower() == rt.plural_label.lower() and rt.plural_label.lower() != rt.label.lower()
+        code = "INT-151" if verb == "INT-151" and not (plural and re.search(r"\b(show|list|find|which|how\s+many)\b", lowered)) else "INT-156"
+        entities["record_type"] = rt.entity_type
+        after = text[re.search(rf"\b{re.escape(name)}\b", text, re.I).end():]
+        defs = custom_field_service.list_definitions(db, tenant_id, rt.entity_type)
+        parent_m = re.search(r"\b(?:for|of|under|at|on)\s+(?:the\s+)?(?:customer\s+|prospect\s+|account\s+)?['\"]?([A-Z0-9][\w &.'-]{0,60}?)['\"]?(?=\s*(?:,|\bwith\b|\bcalled\b|\bnamed\b|\bthat\b|\bwhich\b|\bare\b|\bis\b|$))", after)
+        if parent_m and rt.parent_entity_type:
+            entities["parent_ref"] = parent_m.group(1).strip()
+        if code == "INT-151":
+            name_m = re.search(r"['\"“]([^'\"”]{1,200})['\"”]", text) or re.search(r"\b(?:called|named|titled)\s+(.+?)(?=\s*(?:,|\bfor\b|\bwith\b|$))", text, re.I)
+            if name_m:
+                entities["record_name"] = name_m.group(1).strip()
+            elif entities.get("parent_ref"):  # "create a site survey for Acme Towers" - named after what it's for
+                entities["record_name"] = f"{rt.label} for {entities['parent_ref']}"
+            with_m = re.search(r"\bwith\b(.+)$", after, re.I)
+            if with_m:
+                values = _field_values(with_m.group(1), defs)
+                if values:
+                    entities["record_fields"] = values
+        else:
+            model = lifecycle_service.resolve_state_model(db, tenant_id, rt.entity_type)
+            state = next((s for s in sorted(model.states.values(), key=lambda s: -len(s.label))
+                          if re.search(rf"\b(?:{re.escape(s.label.lower())}|{re.escape(s.code.replace('_', ' '))})\b", lowered)), None)
+            if state:
+                entities["record_state"] = state.code
+            if q := re.search(r"['\"“]([^'\"”]{1,100})['\"”]", text):
+                entities["record_query"] = q.group(1)
+    if context and context.get("entity_id"):
+        understanding.apply_context(code, entities, context, record_intents.REQUIRED[code])
+    ok = all(entities.get(k) not in (None, "") for k in record_intents.REQUIRED[code]) and not record_intents.missing(code, entities)
+    return ClassificationResult(code, entities, 0.9 if ok else 0.6, f"Matched \"{INTENT_LABELS[code]}\" on your {rt.label} records.")
+
+
 def classify(
     text: str, db: Session | None = None, tenant_id: int | None = None, context: dict[str, Any] | None = None, live: bool = False,
     use_model: bool = True,
@@ -557,6 +717,10 @@ def classify(
     c360 = _configure_360(text)
     if c360 is not None:
         return c360
+    if db is not None and tenant_id is not None:
+        own = record_step(text, db, tenant_id, context)
+        if own is not None:
+            return own
     step = _process_step(text, context)
     if step is not None:
         return step

@@ -193,12 +193,14 @@ def test_records_follow_the_data_scope_and_the_tenant(client):
 
 
 def test_changes_are_in_the_audit_trail(client):
+    """Every change on the Records page runs as an intent (INT-151 / 152 / 157) - audited like any other."""
     _site_survey(client)
     rec = client.post("/api/custom-records/site_survey", json={"name": "Roof", "fields": {"survey_date": "2026-11-02"}}).json()
     client.patch(f"/api/custom-records/site_survey/{rec['id']}", json={"fields": {"floors": 3}})
     client.delete(f"/api/custom-records/site_survey/{rec['id']}")
     feed = client.get("/api/audit/feed", params={"record": f"x_site_survey:{rec['id']}"}).json()
-    assert [i["code"] for i in feed["items"]] == ["REC-DELETE", "REC-UPDATE", "REC-CREATE"]
+    assert [i["code"] for i in feed["items"]] == ["INT-157", "INT-152", "INT-151"]
     assert feed["items"][-1]["label"] == "Create a record"
     assert feed["items"][-1]["outcome"] == "Created Site Survey SS-0001"
     assert feed["items"][1]["outcome"] == "Updated Site Survey SS-0001"
+    assert feed["items"][0]["outcome"] == "Deleted Site Survey SS-0001"

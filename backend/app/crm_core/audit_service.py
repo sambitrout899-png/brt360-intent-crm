@@ -94,7 +94,7 @@ def records_of(log: IntentExecutionLog) -> list[dict[str, Any]]:
                     for s in x:
                         if isinstance(s, dict) and isinstance(s.get("entity_id"), int):
                             key = (s.get("entity_type"), s["entity_id"])
-                            found[key] = {"entity_type": s.get("entity_type"), "id": s["entity_id"],
+                            found[key] = {"entity_type": s.get("entity_type"), "id": s["entity_id"], "label": (found.get(key) or {}).get("label"),
                                           "change": "created" if not s.get("from_state") else f"{s['from_state']} → {s.get('to_state')}"}
                 if k == "custom_records" and isinstance(x, list):
                     # records of a tenant-defined type carry their own label ("Site Survey SS-0004")

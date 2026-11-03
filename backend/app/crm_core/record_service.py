@@ -32,7 +32,11 @@ def _plain(value: Any) -> Any:
 def snapshot(db: Session, tenant_id: int, entity_type: str, obj) -> dict[str, Any]:
     """Flat dict a flow condition / template can address: core fields,
     custom fields (by key) and lifecycle info (state, owner)."""
-    data: dict[str, Any] = {f: _plain(getattr(obj, f, None)) for f in _SNAPSHOT_FIELDS[entity_type]}
+    if lifecycle_service.is_custom(entity_type):
+        data: dict[str, Any] = {"id": obj.id, "number": obj.number, "name": obj.name, "parent_id": obj.parent_id,
+                                "record_type": entity_type}
+    else:
+        data = {f: _plain(getattr(obj, f, None)) for f in _SNAPSHOT_FIELDS[entity_type]}
     meta = lifecycle_service.get_meta(db, tenant_id, entity_type, obj.id, create=False)
     data["state"] = lifecycle_service.effective_state(db, tenant_id, entity_type, obj, meta)
     data["built_in_status"] = lifecycle_service.built_in_status(db, entity_type, obj)
@@ -72,6 +76,13 @@ def update_fields(
 ) -> dict[str, Any]:
     if not fields:
         raise ValueError("No fields to update were given")
+    if lifecycle_service.is_custom(entity_type):
+        # a tenant's own record: its name, parent and fields - with its page's validation rules
+        from app.crm_core import custom_record_service
+
+        rt = custom_record_service.get_type(db, tenant_id, entity_type)
+        return custom_record_service.apply_changes(db, tenant_id, rt, obj, custom_record_service.split_changes(fields),
+                                                   enforce_editable=enforce_editable)
     if enforce_editable:
         editable, state = lifecycle_service.is_editable(db, tenant_id, entity_type, obj)
         if not editable:

@@ -334,6 +334,22 @@ def _linked_id(db: Session, tenant_id: int, entity_type: str | None, record: Any
         return None
     if key == f"{entity_type}_id":
         return record.id
+    if lifecycle_service.is_custom(entity_type):
+        # its own lookup field of that name, a record above it ("party_id" from the customer it hangs off), its customer
+        from app.crm_core import custom_field_service, custom_record_service
+
+        values = custom_field_service.get_values(db, tenant_id, entity_type, record.id)
+        if values.get(key) not in (None, ""):
+            return values[key]
+        if key in ("entity_type", "entity_id"):
+            return None
+        for parent_type, parent in custom_record_service.ancestors(db, tenant_id, record.record_type, record).items():
+            if key == f"{parent_type}_id":
+                return parent.id
+        if key == "party_id":
+            party = custom_record_service.customer_of(db, tenant_id, record.record_type, record)
+            return party.id if party is not None else None
+        return None
     if key == "address":  # a site address: the customer's own address, from their page
         party = {"party": record, "lead": getattr(record, "party", None)}.get(entity_type)
         if party is None:
@@ -448,6 +464,11 @@ def parents_of(db: Session, entity_type: str | None, record: Any) -> dict[str, A
     from app.models.crm import Lead, Opportunity, Quote
 
     out: dict[str, Any] = {}
+    if lifecycle_service.is_custom(entity_type) and record is not None:
+        # a tenant record type's parents: its parent record, and that one's, up to a built-in record
+        from app.crm_core import custom_record_service
+
+        return custom_record_service.ancestors(db, record.tenant_id, record.record_type, record)
     step = record
     for parent, column, model in (("quote", "quote_id", Quote), ("opportunity", "opportunity_id", Opportunity), ("lead", "lead_id", Lead)):
         if parent not in PARENT_CHAIN.get(entity_type or "", ()) or step is None:
@@ -471,6 +492,10 @@ def customer_of(db: Session, entity_type: str | None, record: Any) -> Any:
         return None
     if entity_type == "party":
         return record
+    if lifecycle_service.is_custom(entity_type):
+        from app.crm_core import custom_record_service
+
+        return custom_record_service.customer_of(db, record.tenant_id, record.record_type, record)
     if getattr(record, "party_id", None):
         return db.get(Party, record.party_id)
     if getattr(record, "quote_id", None):

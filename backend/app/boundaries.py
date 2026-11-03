@@ -71,7 +71,7 @@ MODULES: tuple[Module, ...] = (
         "crm_core.approval_service", "models.pages", "models.custom_*", "models.attributes",
         "models.lifecycle", "models.approval", "experience.routes_pages", "experience.routes_custom_records",
         "experience.routes_records", "experience.routes_admin", "schemas.custom_records", "schemas.admin",
-        "orchestration.actions_pages", "orchestration.actions_lifecycle", "services.metadata",
+        "orchestration.actions_pages", "orchestration.actions_lifecycle", "orchestration.actions_records", "services.metadata",
     ), uses=("identity", "audit", "ai")),
     # Catalog, Product Modeller, configurator, pricing.
     Module("product", (

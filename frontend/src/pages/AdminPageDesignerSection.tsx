@@ -41,6 +41,7 @@ const TYPE: Record<string, { icon: string; label: string; mock: string }> = {
   picklist: { icon: "▾", label: "Dropdown", mock: "Select…" },
   email: { icon: "@", label: "Email", mock: "name@company.com" },
   phone: { icon: "☏", label: "Phone", mock: "+91 …" },
+  lookup: { icon: "🔗", label: "Link to a record", mock: "Search…" },
 };
 const ENTITY_ICON: Record<string, string> = { party: "👤", lead: "🌱", opportunity: "💼", quote: "🧾", order: "📦" };
 const clone = <T,>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
@@ -289,6 +290,8 @@ export default function AdminPageDesignerSection() {
   // what buttons / page events can run, and the roles a page can be given to
   const [runnable, setRunnable] = useState<{ code: string; label: string; flow: boolean }[]>([]);
   const [roles, setRoles] = useState<{ id: number; name: string }[]>([]);
+  // what a "Link to a record" field can point to - built-in records and the tenant's own record types
+  const [lookupTargets, setLookupTargets] = useState<{ value: string; label: string }[]>([]);
   const [copyName, setCopyName] = useState<string | null>(null);
   const toastTimer = useRef<number | undefined>(undefined);
 
@@ -322,6 +325,7 @@ export default function AdminPageDesignerSection() {
         setSegments(r.segments);
         setRunnable(r.runnable ?? []);
         setRoles(r.roles ?? []);
+        setLookupTargets(r.lookup_targets ?? []);
         const target = r.pages.find((p) => p.page_key === keep) ?? r.pages[0];
         if (target) open(target);
         else { setCurrent(null); setLayout(null); }
@@ -733,6 +737,14 @@ export default function AdminPageDesignerSection() {
                     ))}
                   </select>
                   {newField.data_type === "picklist" && <input value={newField.values} onChange={(e) => setNewField({ ...newField, values: e.target.value })} placeholder="Choices, comma-separated" className={INPUT} />}
+                  {newField.data_type === "lookup" && (
+                    <select value={newField.values} onChange={(e) => setNewField({ ...newField, values: e.target.value })} aria-label="Points to" className={INPUT}>
+                      <option value="">Points to…</option>
+                      {lookupTargets.map((t) => (
+                        <option key={t.value} value={t.value}>{t.label}</option>
+                      ))}
+                    </select>
+                  )}
                   {current.segment && (
                     <label className="flex items-center gap-2 text-xs text-slate-400">
                       <input type="checkbox" className="accent-sky-500" checked={newField.segmentOnly} onChange={(e) => setNewField({ ...newField, segmentOnly: e.target.checked })} />
@@ -743,7 +755,7 @@ export default function AdminPageDesignerSection() {
                     <button type="button" className={GHOST} onClick={() => setNewField(null)}>
                       Cancel
                     </button>
-                    <button type="button" className={PRIMARY} disabled={!newField.label.trim() || busy || (newField.data_type === "picklist" && !newField.values.trim())} onClick={createField}>
+                    <button type="button" className={PRIMARY} disabled={!newField.label.trim() || busy || ((newField.data_type === "picklist" || newField.data_type === "lookup") && !newField.values.trim())} onClick={createField}>
                       Create
                     </button>
                   </div>

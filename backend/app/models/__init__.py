@@ -46,7 +46,7 @@ from app.models.crm import (
     TerritoryRule,
 )
 from app.models.custom_fields import CustomFieldDefinition, CustomFieldValue
-from app.models.custom_records import CustomRecord, CustomRecordType
+from app.models.custom_records import CustomRecord, CustomRecordType, RecordLink, RecordRelationship
 from app.models.field_service import (
     FsAbsence,
     FsActivity,
@@ -253,6 +253,8 @@ __all__ = [
     "CustomFieldValue",
     "CustomRecordType",
     "CustomRecord",
+    "RecordRelationship",
+    "RecordLink",
     "FlowDefinition",
     "StateModel",
     "StateModelState",

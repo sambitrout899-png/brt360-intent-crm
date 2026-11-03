@@ -17,6 +17,7 @@ app.crm_core.audit_service -> intent
 app.crm_core.b2c_order_service -> flow
 app.crm_core.bim_service -> crm
 app.crm_core.bim_service -> flow
+app.crm_core.custom_record_service -> flow
 app.crm_core.customer_overview -> flow
 app.crm_core.customer_overview -> telecom
 app.crm_core.dashboard_service -> intent
@@ -76,6 +77,7 @@ app.experience.routes_configurator -> crm
 app.experience.routes_configurator -> telecom
 app.experience.routes_crm -> flow
 app.experience.routes_crm -> telecom
+app.experience.routes_custom_records -> intent
 app.experience.routes_intent -> flow
 app.experience.routes_intent -> telecom
 app.experience.routes_intent_admin -> flow
@@ -147,6 +149,8 @@ app.orchestration.actions_pages -> intent
 app.orchestration.actions_prospect -> flow
 app.orchestration.actions_prospect -> intent
 app.orchestration.actions_prospect -> telecom
+app.orchestration.actions_records -> crm
+app.orchestration.actions_records -> intent
 app.orchestration.actions_sales -> flow
 app.orchestration.actions_sales -> intent
 app.orchestration.actions_sales -> telecom

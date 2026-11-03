@@ -28,10 +28,18 @@ admin_router = APIRouter(prefix="/api/admin/pages", tags=["admin-pages"], depend
 
 
 def _entity(raw: str) -> str:
+    """Built-in or a tenant's own record type (x_<key>) - adding a field checks the custom type exists."""
     try:
         return page_service.entity_type_of(raw)
     except ValueError as exc:
         raise HTTPException(400, str(exc))
+
+
+def _module(entity_type: str) -> str:
+    """The licence a page of this entity needs."""
+    if entity_type == "training_program":
+        return "training_management"
+    return "custom_development" if page_service._is_custom(entity_type) else "telecom_crm"
 
 
 def _segment(raw: str | None) -> str | None:
@@ -62,7 +70,7 @@ def form(entity: str, segment: str | None = None, page_key: str | None = None, r
     role_ids = {r.id for r in access_service.user_roles(db, user)}
     entity_type = _entity(entity)
     from app.licensing import require_module
-    require_module(db, tenant_id, 'training_management' if entity_type == 'training_program' else 'telecom_crm')
+    require_module(db, tenant_id, _module(entity_type))
     values: dict[str, Any] = {}
     if party_id and not segment:
         from app.crm_core import process_service
@@ -91,7 +99,7 @@ def validate(entity: str, payload: ValuesIn, segment: str | None = None, db: Ses
     rules (flow rules run when the record is actually saved)."""
     entity_type = _entity(entity)
     from app.licensing import require_module
-    require_module(db, tenant_id, 'training_management' if entity_type == 'training_program' else 'telecom_crm')
+    require_module(db, tenant_id, _module(entity_type))
     errors = page_service.validate(db, tenant_id, entity_type, _segment(segment or payload.values.get("segment")), payload.values,
                                    payload.page_key, partial=payload.partial)
     return {"ok": not errors, "errors": errors}
@@ -155,12 +163,17 @@ def list_pages(db: Session = Depends(get_db), tenant_id: int = Depends(get_curre
     page_service.seed_defaults(db, tenant_id)  # tenants made before the Page Designer get the standard fields on first visit
     db.commit()
     from app.intent_engine import intent_registry
+    from app.crm_core import custom_record_service
     from app.models.org import AppRole
 
     return {
         "pages": page_service.pages(db, tenant_id),
-        "entities": [{"key": k, "label": v} for k, v in page_service.ENTITIES.items() if entity_available(db, tenant_id, k)],
+        "entities": [{"key": k, "label": v} for k, v in page_service.ENTITIES.items() if entity_available(db, tenant_id, k)] + [
+            {"key": rt.entity_type, "label": rt.label} for rt in custom_record_service.list_types(db, tenant_id)
+            if entity_available(db, tenant_id, rt.entity_type)],
         "data_types": list(CUSTOM_FIELD_DATA_TYPES),
+        # what a lookup field can point to - the built-in records and the tenant's own types
+        "lookup_targets": custom_record_service.entity_options(db, tenant_id),
         "segments": list(page_service.SEGMENTS) if entity_available(db, tenant_id, "party") else [],
         # what buttons and page events can run, and who pages can be given to
         "runnable": [{"code": e["code"], "label": e["label"], "flow": e["code"].startswith("FLOW-")}
@@ -305,7 +318,10 @@ def _field_of(db: Session, tenant_id: int, field_id: int) -> CustomFieldDefiniti
 def add_field(payload: FieldIn, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> dict[str, Any]:
     import re
 
-    entity_type = _entity(payload.entity_type)
+    try:
+        entity_type = page_service.entity_type_of(payload.entity_type, db, tenant_id)
+    except ValueError as exc:
+        raise _bad(exc)
     require_entity(db, tenant_id, entity_type)
     key = re.sub(r"[^a-z0-9_]", "_", (payload.key or payload.label).lower()).strip("_")[:60]
     if not re.match(r"^[a-z][a-z0-9_]*$", key or ""):
@@ -315,13 +331,25 @@ def add_field(payload: FieldIn, db: Session = Depends(get_db), tenant_id: int = 
     values = [v.strip() for v in payload.values if v.strip()]
     if payload.data_type == "picklist" and not values:
         raise HTTPException(400, "A picklist needs its values")
-    core = set(lifecycle_service.UPDATABLE_CORE_FIELDS.get(entity_type, {})) | {f["key"] for f in page_service.CORE_FIELDS.get(entity_type, [])}
+    allowed = ",".join(values) if payload.data_type == "picklist" else None
+    if payload.data_type == "lookup":
+        from app.crm_core import custom_record_service
+
+        try:  # a lookup points to one record of a built-in or custom type
+            allowed = custom_record_service.check_target(db, tenant_id, values[0] if values else "")
+        except ValueError as exc:
+            raise _bad(exc)
+    core = set(lifecycle_service.UPDATABLE_CORE_FIELDS.get(entity_type, {})) | {f["key"] for f in page_service.core_specs(db, tenant_id, entity_type)}
+    if page_service._is_custom(entity_type):
+        from app.crm_core import custom_record_service
+
+        core |= custom_record_service.RESERVED_FIELD_KEYS
     if key in core or db.query(CustomFieldDefinition.id).filter(CustomFieldDefinition.tenant_id == tenant_id,
                                                                CustomFieldDefinition.entity_type == entity_type, CustomFieldDefinition.key == key).first():
         raise HTTPException(400, f"There is already a field '{key}' - pick another name")
     row = CustomFieldDefinition(
         tenant_id=tenant_id, entity_type=entity_type, key=key, label=payload.label, data_type=payload.data_type,
-        allowed_values=",".join(values) if payload.data_type == "picklist" else None, required=False, is_system=False,
+        allowed_values=allowed, required=False, is_system=False,
         segment=_segment(payload.segment), section=(payload.section or "More details")[:60], help_text=payload.help,
     )
     db.add(row)

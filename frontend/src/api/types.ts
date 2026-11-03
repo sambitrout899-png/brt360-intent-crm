@@ -1545,6 +1545,8 @@ export interface FlowCatalog {
   node_types: FlowNodeType[];
   operators: string[];
   entity_types: EntityType[];
+  /** the tenant's own record types ("x_<key>") by label - they are in entity_types too */
+  entity_labels?: Record<string, string>;
   trigger_types: string[];
   timings: string[];
   intents: { code: string; label: string }[];

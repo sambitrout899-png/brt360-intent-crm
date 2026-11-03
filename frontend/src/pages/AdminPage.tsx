@@ -1427,7 +1427,9 @@ export default function AdminPage({ onAccessChanged }: { onAccessChanged?: () =>
           {section === "lifecycle" && <StateModelsSection />}
           {section === "assignment" && <AssignmentSection />}
           {section === "customfields" && <CustomFieldsSection />}
-          {section === "recordtypes" && <AdminRecordTypesSection />}
+          {section === "recordtypes" && (
+            <AdminRecordTypesSection onOpen={(s) => setSection(s)} />
+          )}
           {section === "approvals" && <ApprovalsSection />}
           {section === "broadcasts" && <><BroadcastsSection /><NotificationLog /></>}
           {section === "roles" && <ProcessRolesSection />}

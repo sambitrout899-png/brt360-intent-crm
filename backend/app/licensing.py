@@ -66,9 +66,15 @@ def licensed_pages(db, user, pages):
             and (p != 'records' or 'custom_development' in modules)]
 
 
+# The tenant's own record types' intents (intent_engine/record_intents.py) - Custom Development, not Telecom CRM.
+RECORD_INTENTS = {'INT-151', 'INT-152', 'INT-153', 'INT-154', 'INT-155', 'INT-156', 'INT-157', 'INT-158'}
+
+
 def intent_module(code):
     if code == 'INT-103':
         return 'page_designer'
+    if code in RECORD_INTENTS:
+        return 'custom_development'
     if (code or '').startswith('TRN-'):
         return 'training_management'
     if (code or '').startswith('INT-'):
@@ -137,6 +143,8 @@ TELECOM_ENTITIES = {'party', 'lead', 'opportunity', 'quote', 'order', 'ticket', 
 def entity_available(db, tenant_id, entity):
     if not entity or entity == '@entity_type':
         return True
+    if entity.startswith('x_'):  # a tenant's own record type (Admin -> Record Types)
+        return 'custom_development' in enabled(db, tenant_id)
     module = 'training_management' if entity.startswith('training_') else 'telecom_crm'
     return module in enabled(db, tenant_id)
 

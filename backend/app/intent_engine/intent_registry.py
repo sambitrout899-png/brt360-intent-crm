@@ -448,12 +448,21 @@ for _code, (_label, _desc, _cat, _icon, _target, _fields, _examples) in _bulk.SP
     BUILTIN[_code] = _B(_code, _label, _desc, _cat, _icon, _target, _fields, _examples)
 _FIELD_OVERRIDES.update(_bulk.OVERRIDES)
 
+# The tenant's own record types (INT-151..158) - see record_intents.py.
+from app.intent_engine import record_intents as _records  # noqa: E402
+
+_LIB.update({k: v for k, v in _records.LIB.items() if k not in _LIB})
+for _code, (_label, _desc, _cat, _icon, _target, _fields, _examples) in _records.SPECS.items():
+    BUILTIN[_code] = _B(_code, _label, _desc, _cat, _icon, _target, _fields, _examples)
+_FIELD_OVERRIDES.update(_records.OVERRIDES)
+
 # "At least one of" groups the form should explain (reasoning enforces them).
 ONE_OF: dict[str, list[list[str]]] = {
     "INT-12": [["ticket_id", "order_id"]],
     "INT-123": [["opportunity_id", "order_id"]],  # a deal (Presales' feasibility) or an order
     "INT-124": [["opportunity_id", "order_id"]],
     "INT-32": [["to_user", "to_position", "to_department"]],
+    "INT-154": [["to_user", "to_position", "to_department"]],
     "INT-129": [["amount", "voucher_pin"]],
     "INT-135": [["credit_limit", "spend_alert_pct"]],
 }

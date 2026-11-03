@@ -136,6 +136,9 @@ _INTENT_INPUTS.update(_MB_FLOW_FIELDS)
 from app.intent_engine.bulk_intents import FLOW_FIELDS as _BK_FLOW_FIELDS, RESULTS as _BK_RESULTS  # noqa: E402
 
 _INTENT_INPUTS.update(_BK_FLOW_FIELDS)
+from app.intent_engine.record_intents import FLOW_FIELDS as _RC_FLOW_FIELDS, RESULTS as _RC_RESULTS  # noqa: E402
+
+_INTENT_INPUTS.update(_RC_FLOW_FIELDS)
 _INTENT_INPUTS.update({
     'TRN-01': ['name', 'description', 'curriculum', 'details'],
     'TRN-02': ['program_id', 'curriculum'],
@@ -200,6 +203,7 @@ _INTENT_RESULTS: dict[str, dict[str, list[str]]] = {
 }
 _INTENT_RESULTS.update(_MB_RESULTS)
 _INTENT_RESULTS.update(_BK_RESULTS)
+_INTENT_RESULTS.update(_RC_RESULTS)
 
 
 @dataclass
@@ -292,6 +296,46 @@ def _recent_values(db: Session, tenant_id: int) -> dict[str, list[str]]:
     return seen
 
 
+def _custom_record_fields(db: Session, tenant_id: int, entity_type: str, users, positions: list[str]) -> list[FieldDef]:
+    """A tenant record type's fields for a flow on it: number, name, state, owner and its own fields,
+    then the fields of the records above it (parent.<type>.<field>)."""
+    from app.crm_core import custom_record_service
+
+    rt = custom_record_service.get_type(db, tenant_id, entity_type)
+    if rt is None:
+        return []
+    states = list(lifecycle_service.resolve_state_model(db, tenant_id, entity_type).states)
+    out = [FieldDef("record.number", "number", "Number", "text", "core", []),
+           FieldDef("record.name", "name", rt.name_label or "Name", "text", "core", [], True),
+           FieldDef("record.parent_id", "parent_id", f"{custom_record_service.label_of(db, tenant_id, rt.parent_entity_type) or 'Parent'} #",
+                    "number", "core", [], bool(rt.parent_entity_type)),
+           FieldDef("record.state", "state", "State", "picklist", "lifecycle", states),
+           FieldDef("record.owner_user", "owner_user", "Owner (user email)", "picklist", "lifecycle", [u.email for u in users]),
+           FieldDef("record.owner_position", "owner_position", "Owner (position)", "picklist", "lifecycle", positions)]
+    for d in custom_field_service.list_definitions(db, tenant_id, entity_type):
+        values = custom_field_service.allowed_values(d) if d.data_type == "picklist" else (["true", "false"] if d.data_type == "boolean" else [])
+        out.append(FieldDef(f"record.{d.key}", d.key, d.label, "number" if d.data_type == "lookup" else d.data_type, "custom", values, True))
+    parent_type, seen = rt.parent_entity_type, 0
+    while parent_type and seen < 5:
+        seen += 1
+        title = custom_record_service.label_of(db, tenant_id, parent_type) or parent_type
+        if lifecycle_service.is_custom(parent_type):
+            out += [FieldDef(f"parent.{parent_type}.name", "name", f"{title}: Name", "text", "parent", []),
+                    FieldDef(f"parent.{parent_type}.state", "state", f"{title}: State", "picklist", "parent",
+                             list(lifecycle_service.resolve_state_model(db, tenant_id, parent_type).states))]
+        elif parent_type in _SNAPSHOT_FIELDS:
+            model = lifecycle_service.ENTITY_MODELS[parent_type]
+            for key in _SNAPSHOT_FIELDS[parent_type]:
+                data_type, values = _column_type(model, key)
+                out.append(FieldDef(f"parent.{parent_type}.{key}", key, f"{title}: {_label(key)}", data_type, "parent", values))
+        for d in custom_field_service.list_definitions(db, tenant_id, parent_type):
+            values = custom_field_service.allowed_values(d) if d.data_type == "picklist" else (["true", "false"] if d.data_type == "boolean" else [])
+            out.append(FieldDef(f"parent.{parent_type}.{d.key}", d.key, f"{title}: {d.label}", d.data_type, "parent", values))
+        parent = custom_record_service.get_type(db, tenant_id, parent_type) if lifecycle_service.is_custom(parent_type) else None
+        parent_type = parent.parent_entity_type if parent is not None else None
+    return out
+
+
 def field_catalog(
     db: Session,
     tenant_id: int,
@@ -332,7 +376,9 @@ def field_catalog(
         for d in custom_field_service.list_definitions(db, tenant_id, entity_type):
             values = custom_field_service.allowed_values(d) if d.data_type == "picklist" else (["true", "false"] if d.data_type == "boolean" else [])
             fields.append(FieldDef(f"record.{d.key}", d.key, d.label, d.data_type, "custom", values, True))
-    if entity_type in ("lead", "opportunity", "quote", "order"):
+    elif lifecycle_service.is_custom(entity_type):
+        fields += _custom_record_fields(db, tenant_id, entity_type, users, positions)
+    if entity_type in ("lead", "opportunity", "quote", "order") or lifecycle_service.is_custom(entity_type):
         # the customer behind the record (flow_engine.customer_of) - read-only from this flow
         party = lifecycle_service.ENTITY_MODELS["party"]
         for key in _SNAPSHOT_FIELDS["party"]:

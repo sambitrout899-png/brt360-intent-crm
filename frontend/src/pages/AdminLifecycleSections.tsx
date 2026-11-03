@@ -16,6 +16,7 @@ import {
   resetStateModel,
   saveStateModel,
 } from "../api/client";
+import { listRecordTypes } from "../api/customRecords";
 import { ASSIGNMENT_STRATEGIES, CUSTOM_FIELD_DATA_TYPES, ENTITY_LABELS, ENTITY_TYPES } from "../api/types";
 import type {
   AppRole,
@@ -38,11 +39,21 @@ function errorText(e: unknown, fallback: string) {
 }
 
 function EntityTypeSelect({ value, onChange }: { value: string; onChange: (v: EntityType) => void }) {
+  // the built-in records, then the tenant's own record types (Admin -> Record Types)
+  const [own, setOwn] = useState<{ value: string; label: string }[]>([]);
+  useEffect(() => {
+    listRecordTypes().then((d) => setOwn(d.types.map((t) => ({ value: t.entity_type, label: t.label })))).catch(() => setOwn([]));
+  }, []);
   return (
     <select value={value} onChange={(e) => onChange(e.target.value as EntityType)} className={INPUT}>
       {ENTITY_TYPES.map((t) => (
         <option key={t} value={t}>
           {ENTITY_LABELS[t]}
+        </option>
+      ))}
+      {own.map((t) => (
+        <option key={t.value} value={t.value}>
+          {t.label}
         </option>
       ))}
     </select>

@@ -58,13 +58,26 @@ from app.licensing import entity_available, require_entity, intent_available, fl
 router = APIRouter(prefix="/api/admin", tags=["admin-studio"], dependencies=[Depends(require_roles(UserRole.admin))])
 
 
-def _entity_type(raw: str | None, allow_none: bool = False) -> str | None:
+def _entity_type(raw: str | None, allow_none: bool = False, db: Session | None = None, tenant_id: int | None = None) -> str | None:
+    """A built-in record type, or one of the tenant's own (x_<key>) - which must exist when db is given."""
     if raw in (None, "") and allow_none:
         return None
     entity_type = lifecycle_service.normalize_entity_type(raw)
     if entity_type is None:
-        raise HTTPException(400, f"entity_type must be one of: {', '.join(lifecycle_service.ENTITY_MODELS)}")
+        raise HTTPException(400, f"entity_type must be one of: {', '.join(lifecycle_service.ENTITY_MODELS)} or one of your record types (x_<key>)")
+    if lifecycle_service.is_custom(entity_type) and db is not None and tenant_id is not None:
+        from app.crm_core import custom_record_service
+
+        if custom_record_service.get_type(db, tenant_id, entity_type) is None:
+            raise HTTPException(400, f"No record type '{entity_type}' - create it in Admin -> Record Types first")
     return entity_type
+
+
+def _lifecycle_types(db: Session, tenant_id: int) -> list[str]:
+    """Every record type with a state model: the built-in ones, then the tenant's own."""
+    from app.crm_core import custom_record_service
+
+    return list(lifecycle_service.ENTITY_MODELS) + [rt.entity_type for rt in custom_record_service.list_types(db, tenant_id)]
 
 
 # ---------- state models ----------
@@ -76,7 +89,7 @@ def _state_model_out(db: Session, tenant_id: int, entity_type: str) -> StateMode
         entity_type=entity_type,
         name=model.name,
         configured=model.configured,
-        built_in_states=lifecycle_service.BUILT_IN_STATES[entity_type],
+        built_in_states=lifecycle_service.built_in_states(entity_type),
         states=[
             {"code": s.code, "label": s.label, "editable": s.editable, "is_terminal": s.is_terminal, "built_in": s.built_in}
             for s in model.states.values()
@@ -96,18 +109,30 @@ def _state_model_out(db: Session, tenant_id: int, entity_type: str) -> StateMode
 
 @router.get("/state-models", response_model=list[StateModelOut])
 def list_state_models(db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> list[StateModelOut]:
-    return [_state_model_out(db, tenant_id, entity_type) for entity_type in lifecycle_service.ENTITY_MODELS]
+    return [_state_model_out(db, tenant_id, entity_type) for entity_type in _lifecycle_types(db, tenant_id)
+            if not lifecycle_service.is_custom(entity_type) or entity_available(db, tenant_id, entity_type)]
 
 
 @router.put("/state-models/{entity_type}", response_model=StateModelOut)
 def save_state_model(
     entity_type: str, payload: StateModelIn, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)
 ) -> StateModelOut:
-    entity_type = _entity_type(entity_type)
-    built_ins = lifecycle_service.BUILT_IN_STATES[entity_type]
+    entity_type = _entity_type(entity_type, db=db, tenant_id=tenant_id)
+    built_ins = lifecycle_service.built_in_states(entity_type)
     codes = [s.code for s in payload.states]
     if len(set(codes)) != len(codes):
         raise HTTPException(400, "State codes must be unique")
+    if not codes:
+        raise HTTPException(400, "A state model needs at least one state - its first is where new records start")
+    if lifecycle_service.is_custom(entity_type):
+        # a state records already sit in can't disappear from under them
+        from app.models.custom_records import CustomRecord, CustomRecordType
+
+        in_use = {s for (s,) in db.query(CustomRecord.state).join(CustomRecordType, CustomRecordType.id == CustomRecord.type_id).filter(
+            CustomRecordType.tenant_id == tenant_id, CustomRecordType.key == entity_type[2:]).distinct()}
+        dropped = sorted(s for s in in_use if s and s not in codes)
+        if dropped:
+            raise HTTPException(400, f"Records are in state(s) {', '.join(dropped)} - keep them, or move those records first")
     missing = [b for b in built_ins if b not in codes]
     if missing:
         raise HTTPException(
@@ -165,7 +190,7 @@ def save_state_model(
 @router.delete("/state-models/{entity_type}", response_model=StateModelOut)
 def reset_state_model(entity_type: str, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> StateModelOut:
     """Back to the built-in default for this entity type."""
-    entity_type = _entity_type(entity_type)
+    entity_type = _entity_type(entity_type, db=db, tenant_id=tenant_id)
     for old in db.query(StateModel).filter(StateModel.tenant_id == tenant_id, StateModel.entity_type == entity_type).all():
         db.delete(old)
     db.commit()
@@ -309,7 +334,7 @@ def list_assignment_rules(db: Session = Depends(get_db), tenant_id: int = Depend
 def create_assignment_rule(
     payload: AssignmentRuleIn, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)
 ) -> AssignmentRule:
-    entity_type = _entity_type(payload.entity_type)
+    entity_type = _entity_type(payload.entity_type, db=db, tenant_id=tenant_id)
     if payload.strategy not in ("position", "round_robin", "user", "department"):
         raise HTTPException(400, "strategy must be 'position', 'round_robin', 'user' or 'department'")
     if payload.strategy == "user":
@@ -411,6 +436,13 @@ def create_custom_field(
         raise HTTPException(400, f"'{payload.key}' is a built-in {entity_type} field name - choose another key")
     if payload.data_type == "picklist" and not (payload.allowed_values or "").strip():
         raise HTTPException(400, "A picklist field needs allowed_values (comma-separated)")
+    allowed = payload.allowed_values if payload.data_type == "picklist" else None
+    if payload.data_type == "lookup":
+        # a lookup points to one record of a type - allowed_values names it ("party", "x_site", or its label)
+        try:
+            allowed = custom_record_service.check_target(db, tenant_id, payload.allowed_values)
+        except ValueError as exc:
+            raise HTTPException(400, f"A lookup field needs the record type it points to: {exc}")
     if db.query(CustomFieldDefinition).filter(
         CustomFieldDefinition.tenant_id == tenant_id,
         CustomFieldDefinition.entity_type == entity_type,
@@ -423,11 +455,13 @@ def create_custom_field(
         key=payload.key,
         label=payload.label,
         data_type=payload.data_type,
-        allowed_values=payload.allowed_values if payload.data_type == "picklist" else None,
+        allowed_values=allowed,
         required=payload.required,
         default_value=None,
+        section=getattr(payload, "section", None) or None,
+        help_text=getattr(payload, "help_text", None) or None,
     )
-    if payload.default_value not in (None, ""):
+    if payload.default_value not in (None, "") and payload.data_type != "lookup":
         from app.crm_core import custom_field_service
 
         try:
@@ -527,7 +561,7 @@ def _apply_flow_payload(db: Session, tenant_id: int, flow: FlowDefinition, paylo
         raise HTTPException(400, f"timing must be one of: {', '.join(FLOW_TIMINGS)}")
     if payload.on_error not in FLOW_ERROR_POLICIES:
         raise HTTPException(400, f"on_error must be one of: {', '.join(FLOW_ERROR_POLICIES)}")
-    entity_type = _entity_type(payload.entity_type, allow_none=True)
+    entity_type = _entity_type(payload.entity_type, allow_none=True, db=db, tenant_id=tenant_id)
     if payload.trigger_type == "intent":
         if payload.trigger_intent_type not in INTENT_LABELS:
             raise HTTPException(400, "An intent-triggered flow needs trigger_intent_type set to a built-in intent (e.g. INT-05)")
@@ -569,7 +603,9 @@ def flow_catalog(db: Session = Depends(get_db), tenant_id: int = Depends(get_cur
         "record_entities": flow_records.catalog(db, tenant_id),
         "node_types": [{"type": k, **v} for k, v in flow_engine.NODE_TYPES.items()],
         "operators": list(flow_engine.OPERATORS),
-        "entity_types": [e for e in lifecycle_service.ENTITY_MODELS if entity_available(db, tenant_id, e)],
+        "entity_types": [e for e in _lifecycle_types(db, tenant_id) if entity_available(db, tenant_id, e)],
+        # the tenant's own record types, by label - the pickers show these names in place of x_<key>
+        "entity_labels": _entity_labels(db, tenant_id),
         "trigger_types": list(FLOW_TRIGGER_TYPES),
         "timings": list(FLOW_TIMINGS),
         "error_policies": list(FLOW_ERROR_POLICIES),
@@ -577,6 +613,12 @@ def flow_catalog(db: Session = Depends(get_db), tenant_id: int = Depends(get_cur
         "error_codes": flow_errors.catalog(),
         "intents": [{"code": k, "label": v} for k, v in INTENT_LABELS.items() if intent_available(db, tenant_id, k)],
     }
+
+
+def _entity_labels(db: Session, tenant_id: int) -> dict[str, str]:
+    from app.crm_core import custom_record_service
+
+    return {rt.entity_type: rt.label for rt in custom_record_service.list_types(db, tenant_id)}
 
 
 def _entity_or_none(raw: str | None) -> str | None:

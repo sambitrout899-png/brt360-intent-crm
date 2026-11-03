@@ -202,6 +202,12 @@ from app.intent_engine.bulk_intents import TRAINING as _BULK_TRAINING  # noqa: E
 
 _T = _T + _BULK_TRAINING
 
+# The tenant's own record types (INT-151..158) - appended last, for the same reason. Only the design
+# intent has fixed wording; records of a type are recognised from the tenant's own labels (classifier.record_step).
+from app.intent_engine.record_intents import TRAINING as _RECORD_TRAINING  # noqa: E402
+
+_T = _T + _RECORD_TRAINING
+
 _INT_SLOTS = {"id", "id2", "price", "pct", "n"}
 
 

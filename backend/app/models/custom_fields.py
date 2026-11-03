@@ -14,7 +14,9 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.db import Base
 from app.timeutils import utcnow
 
-CUSTOM_FIELD_DATA_TYPES = ("text", "number", "boolean", "date", "picklist", "email", "phone", "textarea")
+# "lookup": a link to one record of another type - allowed_values holds the target entity type
+# ("party", "order", or a custom type "x_site"); the value is that record's id.
+CUSTOM_FIELD_DATA_TYPES = ("text", "number", "boolean", "date", "picklist", "email", "phone", "textarea", "lookup")
 
 
 class CustomFieldDefinition(Base):

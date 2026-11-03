@@ -711,7 +711,7 @@ export default function FlowStudioSection() {
                 <option value="">—</option>
                 {catalog.entity_types.map((t) => (
                   <option key={t} value={t}>
-                    {ENTITY_LABELS[t]}
+                    {ENTITY_LABELS[t] ?? catalog.entity_labels?.[t] ?? t}
                   </option>
                 ))}
               </select>

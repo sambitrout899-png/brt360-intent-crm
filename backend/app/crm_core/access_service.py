@@ -390,6 +390,11 @@ def _created_visible_ids(db: Session, access: Access, entity_type: str) -> set[i
     return {rid for (rid,) in db.query(model.id).filter(model.tenant_id == access.tenant_id, or_(*conditions)).all()}
 
 
+# Record types that work out their own visibility, by entity-type prefix -> fn(db, access, entity_type) -> ids.
+# The tenant's own record types ("x_") register here (custom_record_service) - identity doesn't import them.
+VISIBILITY_PROVIDERS: dict[str, Any] = {}
+
+
 def visible_ids(db: Session, access: Access, entity_type: str) -> set[int] | None:
     """Ids of the records of this type the user may see; None = all.
 
@@ -402,6 +407,12 @@ def visible_ids(db: Session, access: Access, entity_type: str) -> set[int] | Non
     access._cache = cache  # type: ignore[attr-defined]
     if entity_type in cache:
         return cache[entity_type]
+    provider = next((fn for prefix, fn in VISIBILITY_PROVIDERS.items() if str(entity_type or "").startswith(prefix)), None)
+    if provider is not None:
+        # a record type that works out its own visibility (a tenant's own record type - custom_record_service)
+        ids = provider(db, access, entity_type) or set()
+        cache[entity_type] = ids
+        return ids
     ids = _meta_visible_ids(db, access, entity_type)
     # A deal is seen whole: a visible opportunity's quotes, and the orders of a visible quote.
     if entity_type == "quote":

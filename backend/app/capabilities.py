@@ -41,6 +41,7 @@ PROVIDERS = (
     "app.orchestration.actions_inventory",
     "app.orchestration.actions_mobile",
     "app.orchestration.actions_bulk",
+    "app.orchestration.actions_records",
 )
 
 _steps: dict[str, StepBuilder] = {}

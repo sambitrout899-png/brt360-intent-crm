@@ -201,6 +201,24 @@ DEFAULT_STATE_MODELS: dict[str, dict[str, list[dict]]] = {
 }
 
 
+# A tenant's own record type ("x_<key>", models/custom_records.py) has no built-in status: its state is
+# CustomRecord.state, moved only through its state model. Until the admin designs one, every type gets this.
+CUSTOM_PREFIX = "x_"
+_CUSTOM_TYPE = re.compile(r"^x_[a-z][a-z0-9_]{0,27}$")
+DEFAULT_CUSTOM_STATE_MODEL: dict[str, list[dict]] = {
+    "states": [_s("open", built_in=False), _s("closed", editable=False, built_in=False)],
+    "transitions": [_t("open", "closed", "close"), _t("closed", "open", "reopen")],
+}
+
+
+def is_custom(entity_type: str | None) -> bool:
+    return bool(entity_type) and str(entity_type).startswith(CUSTOM_PREFIX)
+
+
+def built_in_states(entity_type: str) -> list[str]:
+    return BUILT_IN_STATES.get(entity_type, [])
+
+
 @dataclass
 class StateDef:
     code: str
@@ -250,6 +268,8 @@ def normalize_entity_type(raw: Any) -> str | None:
         return None
     value = str(raw).strip().lower().replace(" ", "_")
     value = ENTITY_TYPE_ALIASES.get(value, value)
+    if _CUSTOM_TYPE.match(value):
+        return value  # a tenant's own record type - get_record finds (or doesn't find) the record
     return value if value in ENTITY_MODELS else None
 
 
@@ -272,9 +292,10 @@ def resolve_state_model(db: Session, tenant_id: int, entity_type: str) -> Resolv
                 TransitionDef(t.from_state, t.to_state, t.action, t.intent_type, t.allowed_roles) for t in configured.transitions
             ],
         )
-        _add_new_built_ins(resolved)
+        if not is_custom(entity_type):
+            _add_new_built_ins(resolved)
         return resolved
-    default = DEFAULT_STATE_MODELS[entity_type]
+    default = DEFAULT_CUSTOM_STATE_MODEL if is_custom(entity_type) else DEFAULT_STATE_MODELS[entity_type]
     return ResolvedStateModel(
         entity_type=entity_type,
         name="Default",
@@ -307,6 +328,11 @@ def _add_new_built_ins(model: ResolvedStateModel) -> None:
 
 def get_record(db: Session, tenant_id: int, entity_type: str, entity_id: Any):
     """Tenant-scoped lookup - same isolation rule as context_assembly._get_owned."""
+    if is_custom(entity_type):
+        from app.crm_core import custom_record_service
+
+        rt = custom_record_service.get_type(db, tenant_id, entity_type)
+        return custom_record_service.get_record(db, tenant_id, rt, entity_id) if rt is not None and entity_id is not None else None
     model = ENTITY_MODELS.get(entity_type)
     if model is None or entity_id is None:
         return None
@@ -319,7 +345,15 @@ def get_record(db: Session, tenant_id: int, entity_type: str, entity_id: Any):
     return obj
 
 
+def initial_state(db: Session, tenant_id: int, entity_type: str) -> str:
+    """Where a new record of a custom type starts: the first state of its model."""
+    model = resolve_state_model(db, tenant_id, entity_type)
+    return next(iter(model.states), "open")
+
+
 def built_in_status(db: Session, entity_type: str, obj) -> str:
+    if is_custom(entity_type):
+        return obj.state or "open"
     if entity_type == "party":
         # asked several times per request for the same customer: once, until an order is saved (app/db.py cached)
         has_order = cached(db, ("has_order", obj.id), Order,
@@ -485,7 +519,14 @@ def apply_transition(
     target = state_def(model, transition.to_state)
     base = built_in_status(db, entity_type, obj)
 
-    if target.built_in:
+    if is_custom(entity_type):
+        # a custom record's state is its own column - every state of its model is set directly
+        if transition.to_state not in model.states:
+            raise ValueError(f"'{transition.to_state}' is not a state of this record type")
+        obj.state = transition.to_state
+        meta.sub_state = None
+        meta.sub_state_anchor = None
+    elif target.built_in:
         if transition.to_state != base:
             if entity_type == "party":
                 raise ValueError(f"A party's '{transition.to_state}' state is derived and cannot be set directly")
@@ -721,7 +762,8 @@ def records_in_result(result: dict[str, Any] | None) -> list[tuple[str, int]]:
         value = (result or {}).get(key)
         if isinstance(value, int) and (entity_type, value) not in found:
             found.append((entity_type, value))
-    if result and result.get("entity_type") in ENTITY_MODELS and isinstance(result.get("entity_id"), int):
+    if result and (result.get("entity_type") in ENTITY_MODELS or is_custom(result.get("entity_type"))) \
+            and isinstance(result.get("entity_id"), int):
         pair = (result["entity_type"], result["entity_id"])
         if pair not in found:
             found.append(pair)

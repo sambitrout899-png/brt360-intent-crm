@@ -1673,6 +1673,7 @@ export function leadProducts(leadId: number): Promise<{ offering_name: string; q
 export function listPages(): Promise<{
   pages: DesignedPage[]; entities: { key: string; label: string }[]; data_types: string[]; segments: string[];
   runnable?: { code: string; label: string; flow: boolean }[]; roles?: { id: number; name: string }[]; events?: string[];
+  lookup_targets?: { value: string; label: string }[];
 }> {
   return request("/api/admin/pages");
 }

@@ -146,12 +146,67 @@ DEFAULT_MANDATORY: dict[str, set[str]] = {"party": {"name"}, "opportunity": {"na
 _SECTION_ORDER = ["Basics", "Company", "Personal", "Primary contact", "Address", "KYC", "Current services", "Lead", "Requirement"]
 
 
-def entity_type_of(raw: str | None) -> str:
+def entity_type_of(raw: str | None, db: Session | None = None, tenant_id: int | None = None) -> str:
+    """A page's entity: a built-in record, or one of the tenant's own record types ("x_<key>" - checked to
+    exist when db / tenant_id are given)."""
     value = (raw or "").strip().lower()
     value = {"prospect": "party", "customer": "party", "account": "party", "parties": "party"}.get(value, value)
+    if _is_custom(value):
+        if db is not None and tenant_id is not None:
+            from app.crm_core import custom_record_service
+
+            if custom_record_service.get_type(db, tenant_id, value) is None:
+                raise ValueError(f"No record type '{value}' - create it in Admin -> Record Types first")
+        return value
     if value not in ENTITIES:
-        raise ValueError(f"Pages exist for: {', '.join(ENTITIES)}")
+        raise ValueError(f"Pages exist for: {', '.join(ENTITIES)} and the tenant's own record types")
     return value
+
+
+def _is_custom(entity_type: str | None) -> bool:
+    return bool(entity_type) and str(entity_type).startswith("x_")
+
+
+def entity_label(db: Session, tenant_id: int, entity_type: str) -> str:
+    if _is_custom(entity_type):
+        from app.crm_core import custom_record_service
+
+        rt = custom_record_service.get_type(db, tenant_id, entity_type)
+        return rt.label if rt else entity_type
+    return ENTITIES.get(entity_type, entity_type)
+
+
+def core_specs(db: Session, tenant_id: int, entity_type: str) -> list[dict[str, Any]]:
+    """The record's own columns a page can show. A custom record has its name (and its parent, when its
+    type hangs off another record); everything else on it is a field definition."""
+    if not _is_custom(entity_type):
+        return CORE_FIELDS.get(entity_type, [])
+    from app.crm_core import custom_record_service
+
+    rt = custom_record_service.get_type(db, tenant_id, entity_type)
+    if rt is None:
+        return []
+    from app.crm_core import lifecycle_service
+
+    states = lifecycle_service.resolve_state_model(db, tenant_id, entity_type).states
+    specs = [_f("name", rt.name_label or "Name", "text", "Basics", core=True),
+             # read-only on the page (a state changes through its state model) - there so rules can depend on it
+             _f("state", "State", "picklist", "Basics", values=",".join(states), core=True,
+                help="Changes with the record's actions - rules can depend on it")]
+    if rt.parent_entity_type:
+        spec = _f("parent_id", custom_record_service.parent_type_label(db, tenant_id, rt.parent_entity_type) or "Parent", "lookup",
+                  "Basics", values=rt.parent_entity_type, core=True)
+        specs.append(spec)
+    return specs
+
+
+def _default_mandatory(db: Session, tenant_id: int, entity_type: str) -> set[str]:
+    if _is_custom(entity_type):
+        from app.crm_core import custom_record_service
+
+        rt = custom_record_service.get_type(db, tenant_id, entity_type)
+        return {"name"} | ({"parent_id"} if rt is not None and rt.parent_required else set())
+    return DEFAULT_MANDATORY.get(entity_type, set())
 
 
 def segment_of(raw: Any) -> str | None:
@@ -202,14 +257,20 @@ def _def_out(d: CustomFieldDefinition) -> dict[str, Any]:
 def catalog(db: Session, tenant_id: int, entity_type: str, segment: str | None = None, include_inactive: bool = False) -> list[dict[str, Any]]:
     """Every field a page of this entity (and segment) can show. Built once per
     session (a BIM load asks twice per row) - each caller gets its own copies."""
-    fields = cached(db, ("page_catalog", tenant_id, entity_type, segment, include_inactive), CustomFieldDefinition,
+    models: tuple = (CustomFieldDefinition,)
+    if _is_custom(entity_type):  # its name label, parent and states are part of its catalog too
+        from app.models.custom_records import CustomRecordType
+        from app.models.lifecycle import StateModel, StateModelState
+
+        models = (CustomFieldDefinition, CustomRecordType, StateModel, StateModelState)
+    fields = cached(db, ("page_catalog", tenant_id, entity_type, segment, include_inactive), models,
                     lambda: _build_catalog(db, tenant_id, entity_type, segment, include_inactive))
     return [{**f, "values": list(f["values"])} for f in fields]
 
 
 def _build_catalog(db: Session, tenant_id: int, entity_type: str, segment: str | None, include_inactive: bool) -> list[dict[str, Any]]:
     out = []
-    for spec in CORE_FIELDS.get(entity_type, []):
+    for spec in core_specs(db, tenant_id, entity_type):
         if segment and spec["segment"] and spec["segment"] != segment:
             continue
         out.append({
@@ -239,11 +300,12 @@ def page_key(entity_type: str, segment: str | None) -> str:
 
 def default_layout(db: Session, tenant_id: int, entity_type: str, segment: str | None) -> dict[str, Any]:
     fields = catalog(db, tenant_id, entity_type, segment)
+    mandatory = _default_mandatory(db, tenant_id, entity_type)
     sections: dict[str, list[dict[str, Any]]] = {}
     for f in fields:
         sections.setdefault(f["section"], []).append({
-            "key": f["key"], "mandatory": f["key"] in DEFAULT_MANDATORY.get(entity_type, set()) or f["required_everywhere"],
-            "hidden": False, "readonly": False,
+            "key": f["key"], "mandatory": f["key"] in mandatory or f["required_everywhere"],
+            "hidden": False, "readonly": _is_custom(entity_type) and f["key"] == "state",
         })
     if entity_type == "party" and segment is None:
         # One page for both segments: the segment picker decides which fields apply.
@@ -276,8 +338,8 @@ def _for_roles(row: PageLayout, role_ids: set[int] | None) -> bool:
     return not wanted or role_ids is None or bool(set(wanted) & role_ids)
 
 
-def _default_name(entity_type: str, segment: str | None) -> str:
-    noun = {"party": "Prospect"}.get(entity_type, ENTITIES[entity_type])
+def _default_name(entity_type: str, segment: str | None, label: str | None = None) -> str:
+    noun = label or {"party": "Prospect"}.get(entity_type, ENTITIES.get(entity_type, "Record"))
     return f"{segment} {noun.lower()} page" if segment else f"{noun} page"
 
 
@@ -314,8 +376,12 @@ def page(db: Session, tenant_id: int, entity_type: str, segment: str | None = No
     for k in keys:
         if k in rows and _for_roles(rows[k], role_ids):
             return out(rows[k])
-    return _page_out(entity_type, segment, page_key(entity_type, segment), _default_name(entity_type, segment),
+    return _page_out(entity_type, segment, page_key(entity_type, segment), _default_name(entity_type, segment, _label_of(db, tenant_id, entity_type)),
                      default_layout(db, tenant_id, entity_type, segment), None)
+
+
+def _label_of(db: Session, tenant_id: int, entity_type: str) -> str | None:
+    return entity_label(db, tenant_id, entity_type) if _is_custom(entity_type) else None
 
 
 def page_by_key(db: Session, tenant_id: int, key: str) -> dict[str, Any] | None:
@@ -367,7 +433,17 @@ def pages(db: Session, tenant_id: int) -> list[dict[str, Any]]:
                 out.append(_page_out(entity_type, segment, key, row.name, reconcile(db, tenant_id, entity_type, segment, _layout_of(row)), row))
             else:
                 out.append(_page_out(entity_type, segment, key, _default_name(entity_type, segment), default_layout(db, tenant_id, entity_type, segment), None))
+    # the tenant's own record types: one page each (their records have no segment)
+    from app.crm_core import custom_record_service
+
+    for rt in custom_record_service.list_types(db, tenant_id):
+        key = rt.entity_type
+        row = saved.pop(key, None)
+        layout = reconcile(db, tenant_id, key, None, _layout_of(row)) if row is not None else default_layout(db, tenant_id, key, None)
+        out.append(_page_out(key, None, key, row.name if row is not None else _default_name(key, None, rt.label), layout, row))
     for row in saved.values():
+        if _is_custom(row.entity_type) and custom_record_service.get_type(db, tenant_id, row.entity_type) is None:
+            continue  # a page of a record type that was deleted
         out.append(_page_out(row.entity_type, row.segment, row.page_key, row.name, reconcile(db, tenant_id, row.entity_type, row.segment, _layout_of(row)), row))
     from app.licensing import entity_available
     return [p for p in out if entity_available(db, tenant_id, p["entity_type"])]
@@ -470,7 +546,7 @@ def _clean_layout(db: Session, tenant_id: int, entity_type: str, segment: str | 
                 continue
             key = f.get("key")
             if key not in fields:
-                raise ValueError(f"'{key}' is not a field of {ENTITIES[entity_type].lower()} - add it as a field first")
+                raise ValueError(f"'{key}' is not a field of {entity_label(db, tenant_id, entity_type).lower()} - add it as a field first")
             if key in seen:
                 continue
             seen.add(key)
@@ -501,7 +577,8 @@ def save_page(db: Session, tenant_id: int, entity_type: str, segment: str | None
     row = db.query(PageLayout).filter(PageLayout.tenant_id == tenant_id, PageLayout.page_key == key).first()
     if row is None:
         row = PageLayout(tenant_id=tenant_id, page_key=key, entity_type=entity_type, segment=segment,
-                         name=name or _default_name(entity_type, segment), is_default=key == page_key(entity_type, segment))
+                         name=name or _default_name(entity_type, segment, _label_of(db, tenant_id, entity_type)),
+                         is_default=key == page_key(entity_type, segment))
         db.add(row)
     if name:
         row.name = name[:150]
@@ -543,7 +620,7 @@ def _party_profile(db: Session, party, create: bool):
 
 def record_values(db: Session, tenant_id: int, entity_type: str, obj) -> dict[str, Any]:
     values: dict[str, Any] = {}
-    for spec in CORE_FIELDS.get(entity_type, []):
+    for spec in core_specs(db, tenant_id, entity_type):
         if entity_type == "party" and spec["key"] in _PROFILE_FIELDS:
             profile = obj.profile
             values[spec["key"]] = getattr(profile, spec["key"], None) if profile is not None else None
@@ -592,7 +669,8 @@ def form(db: Session, tenant_id: int, entity_type: str, segment: str | None = No
             f = fields[placed["key"]]
             out.append({
                 "key": f["key"], "label": placed.get("label") or f["label"], "type": f["data_type"], "values": f["values"],
-                "mandatory": bool(placed.get("mandatory")), "readonly": bool(placed.get("readonly")),
+                "mandatory": bool(placed.get("mandatory")) and not (_is_custom(entity_type) and f["key"] == "state"),
+                "readonly": bool(placed.get("readonly")) or (_is_custom(entity_type) and f["key"] == "state"),
                 "help": placed.get("help") or f["help"], "core": f["core"], "value": values.get(f["key"]),
                 "span": placed.get("span") or ("full" if f["data_type"] == "textarea" else None),
             })
