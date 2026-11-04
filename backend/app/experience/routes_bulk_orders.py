@@ -17,7 +17,7 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, Response
 from sqlalchemy.orm import Session
 
 from app.access import get_access, require_page
@@ -46,6 +46,19 @@ def _do(db: Session, fn: Callable[[], Any]) -> Any:
 @router.get("/processes")
 def processes() -> list[Payload]:
     return bulk.processes()
+
+
+_XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+@router.get("/processes/{process}/template.xlsx")
+def template_xlsx(process: str) -> Response:
+    """The process's upload template as Excel - fill in the first sheet and upload it as it is (or save it as CSV)."""
+    try:
+        content = bulk.template_xlsx(process)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return Response(content, media_type=_XLSX, headers={"Content-Disposition": f'attachment; filename="bulk-{process}-template.xlsx"'})
 
 
 @router.get("")
@@ -133,6 +146,21 @@ def retry(bulk_id: int, db: Session = Depends(get_db), tenant_id: int = Depends(
 @router.post("/{bulk_id}/cancel", dependencies=[_write])
 def cancel(bulk_id: int, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> Payload:
     return _do(db, lambda: {"cancelled": bulk.cancel(db, bulk.of(db, tenant_id, bulk_id))})
+
+
+@router.get("/{bulk_id}/results.pdf")
+def results_pdf(bulk_id: int, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> Response:
+    """The request as a PDF report - counts by stage and every row's outcome."""
+    found = bulk.of(db, tenant_id, bulk_id)
+    return Response(bulk.results_pdf(db, found), media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="{found.number}-results.pdf"'})
+
+
+@router.get("/{bulk_id}/results.xlsx")
+def results_xlsx(bulk_id: int, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> Response:
+    found = bulk.of(db, tenant_id, bulk_id)
+    return Response(bulk.results_xlsx(db, found), media_type=_XLSX,
+                    headers={"Content-Disposition": f'attachment; filename="{found.number}-results.xlsx"'})
 
 
 @router.get("/{bulk_id}/results.csv", response_class=PlainTextResponse)

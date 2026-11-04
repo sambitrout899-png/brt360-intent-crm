@@ -24,10 +24,7 @@ import csv
 import io
 import json
 import re
-import zipfile
 from typing import Any
-from xml.etree import ElementTree as ET
-from xml.sax.saxutils import escape
 
 from sqlalchemy.orm import Session
 
@@ -569,104 +566,20 @@ def to_csv(rows: list[list[str]]) -> str:
     return out.getvalue()
 
 
-# ---------------------------------------------------------------- xlsx (standard library only)
-
-_NS = {"m": "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
-       "r": "http://schemas.openxmlformats.org/officeDocument/2006/relationships"}
-
-
-def _col_index(ref: str) -> int:
-    letters = re.match(r"[A-Z]+", ref).group(0)
-    n = 0
-    for ch in letters:
-        n = n * 26 + ord(ch) - 64
-    return n - 1
+# ---------------------------------------------------------------- xlsx (app/documents.py - the house style, standard library only)
 
 
 def read_xlsx(content: bytes) -> list[tuple[str, list[list[str]]]]:
-    z = zipfile.ZipFile(io.BytesIO(content))
-    shared: list[str] = []
-    if "xl/sharedStrings.xml" in z.namelist():
-        for si in ET.fromstring(z.read("xl/sharedStrings.xml")).findall("m:si", _NS):
-            shared.append("".join(t.text or "" for t in si.iter(f"{{{_NS['m']}}}t")))
-    workbook = ET.fromstring(z.read("xl/workbook.xml"))
-    rels = ET.fromstring(z.read("xl/_rels/workbook.xml.rels"))
-    targets = {r.get("Id"): r.get("Target") for r in rels}
-    out = []
-    for sheet in workbook.find("m:sheets", _NS):
-        target = targets.get(sheet.get(f"{{{_NS['r']}}}id"), "")
-        path = target.lstrip("/") if target.startswith("/") else f"xl/{target}"
-        if path not in z.namelist():
-            continue
-        rows: list[list[str]] = []
-        for row in ET.fromstring(z.read(path)).iter(f"{{{_NS['m']}}}row"):
-            cells: dict[int, str] = {}
-            for c in row.findall("m:c", _NS):
-                kind, v = c.get("t"), c.find("m:v", _NS)
-                if kind == "s" and v is not None:
-                    value = shared[int(v.text)]
-                elif kind == "inlineStr":
-                    value = "".join(t.text or "" for t in c.iter(f"{{{_NS['m']}}}t"))
-                else:
-                    value = v.text if v is not None and v.text is not None else ""
-                    if re.fullmatch(r"-?\d+\.0", value or ""):
-                        value = value[:-2]
-                cells[_col_index(c.get("r", "A1"))] = value
-            if cells:
-                rows.append([cells.get(i, "") for i in range(max(cells) + 1)])
-        out.append((sheet.get("name") or "", rows))
-    return out
+    from app.documents import read_xlsx as read
+
+    return read(content)
 
 
 def write_xlsx(sheets: list[tuple[str, list[list[str]]]]) -> bytes:
-    def col(i: int) -> str:
-        s = ""
-        i += 1
-        while i:
-            i, r = divmod(i - 1, 26)
-            s = chr(65 + r) + s
-        return s
+    """Coloured, frozen header rows with filters, banded rows and fitted columns - and read back by read_xlsx as before."""
+    from app.documents import xlsx
 
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-        names = [n for n, _ in sheets]
-        z.writestr("[Content_Types].xml",
-                   '<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
-                   '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
-                   '<Default Extension="xml" ContentType="application/xml"/>'
-                   '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
-                   '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>'
-                   + "".join(f'<Override PartName="/xl/worksheets/sheet{i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
-                             for i in range(len(sheets))) + "</Types>")
-        z.writestr("_rels/.rels", '<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
-                   '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>')
-        z.writestr("xl/workbook.xml", '<?xml version="1.0" encoding="UTF-8"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
-                   'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>'
-                   + "".join(f'<sheet name="{escape(n[:31])}" sheetId="{i + 1}" r:id="rId{i + 1}"/>' for i, n in enumerate(names)) + "</sheets></workbook>")
-        z.writestr("xl/_rels/workbook.xml.rels", '<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
-                   + "".join(f'<Relationship Id="rId{i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet{i + 1}.xml"/>'
-                             for i in range(len(sheets)))
-                   + f'<Relationship Id="rId{len(sheets) + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>')
-        z.writestr("xl/styles.xml", '<?xml version="1.0" encoding="UTF-8"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
-                   '<fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts>'
-                   '<fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill>'
-                   '<fill><patternFill patternType="solid"><fgColor rgb="FFBDD7EE"/></patternFill></fill></fills>'
-                   '<borders count="1"><border/></borders><cellStyleXfs count="1"><xf/></cellStyleXfs>'
-                   '<cellXfs count="2"><xf/><xf fontId="1" fillId="2" applyFont="1" applyFill="1"/></cellXfs></styleSheet>')
-        for i, (_, rows) in enumerate(sheets):
-            body = []
-            for r, row in enumerate(rows):
-                style = ' s="1"' if r == 0 else ""
-                cells = "".join(
-                    f'<c r="{col(c)}{r + 1}" t="inlineStr"{style}><is><t xml:space="preserve">{escape(str(v))}</t></is></c>'
-                    for c, v in enumerate(row) if str(v) != "")
-                body.append(f'<row r="{r + 1}">{cells}</row>')
-            widths = "".join(f'<col min="{c + 1}" max="{c + 1}" width="{min(60, max(10, max((len(str(row[c])) for row in rows if c < len(row)), default=10) + 2))}" customWidth="1"/>'
-                             for c in range(max((len(r) for r in rows), default=0)))
-            z.writestr(f"xl/worksheets/sheet{i + 1}.xml", '<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
-                       + (f"<cols>{widths}</cols>" if widths else "") + f"<sheetData>{''.join(body)}</sheetData></worksheet>")
-    return buf.getvalue()
-
+    return xlsx(sheets)
 
 # ---------------------------------------------------------------- rules
 

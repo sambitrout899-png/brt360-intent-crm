@@ -79,15 +79,33 @@ class ExportIn(BaseModel):
     kind: str = "query"  # query (the report's table) / records (every record behind it)
     query: dict[str, Any] = {}
     name: str = "report"
+    format: str = "csv"  # csv | xlsx | pdf
 
 
 @router.post("/export")
 def export_csv(payload: ExportIn, db: Session = Depends(get_db), access: Access = Depends(_PAGE)) -> Response:
+    """The report as CSV, a formatted Excel sheet, or a PDF report (summary, then the table)."""
     if payload.kind == "records":
         out = _run(engine.records, db, access.tenant_id, access, {**payload.query, "export": True})
     else:
         out = _run(engine.query, db, access.tenant_id, access, payload.query)
     name = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in payload.name)[:60] or "report"
+    if payload.format in ("xlsx", "pdf"):
+        from app.documents import MEDIA, table_pdf, xlsx
+
+        columns = out["columns"]
+        headers = [c.get("label") or c["key"] for c in columns]
+        rows = [[r.get(c["key"]) for c in columns] for r in out["rows"]]
+        if payload.format == "xlsx":
+            content = xlsx([(payload.name[:31] or "Report", [headers, *rows])])
+        else:
+            title = payload.name.replace("_", " ") or "Report"
+            summary = [f"{len(rows)} row{'s' if len(rows) != 1 else ''}" + (f" · {out['total']} in all" if out.get("total") and out["total"] != len(rows) else "")]
+            if out.get("narrative"):
+                summary.append(str(out["narrative"]))
+            content = table_pdf(title, f"Analytics · {payload.kind}", headers, rows[:2000], summary)
+        return Response(content, media_type=MEDIA[payload.format],
+                        headers={"Content-Disposition": f'attachment; filename="{name}.{payload.format}"'})
     return Response(engine.to_csv(out["columns"], out["rows"]), media_type="text/csv",
                     headers={"Content-Disposition": f'attachment; filename="{name}.csv"'})
 

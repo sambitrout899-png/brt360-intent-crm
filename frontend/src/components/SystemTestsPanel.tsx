@@ -133,7 +133,8 @@ function Cases({ suite, onChanged }: { suite: SuiteSummary & { cases: TestCaseRo
           {Object.entries(suite.scope.by_kind ?? {}).map(([k, n]) => <option key={k} value={k}>{KIND[k] ?? k} · {n}</option>)}
         </select>
         <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search…" className="min-w-0 flex-1 rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-200" />
-        <button className={BTN} onClick={() => download(`/api/system-tests/suites/${suite.id}/cases.csv`, `test-cases-${suite.id}.csv`, "text/csv")}>⬇ Test cases (CSV)</button>
+        <button className={BTN} onClick={() => download(`/api/system-tests/suites/${suite.id}/cases.xlsx`, `test-cases-${suite.id}.xlsx`)}>⬇ Test cases (Excel)</button>
+        <button className={BTN} onClick={() => download(`/api/system-tests/suites/${suite.id}/cases.csv`, `test-cases-${suite.id}.csv`)}>CSV</button>
       </div>
       <div className="max-h-[32rem] overflow-y-auto rounded-lg border border-slate-800">
         <table className="w-full text-left text-xs">
@@ -267,8 +268,11 @@ function RunView({ runId, onRefresh }: { runId: number; onRefresh: () => void })
         <span className="text-xs text-slate-500">{run.done}/{run.total}{run.seconds != null ? ` · ${run.seconds}s` : ""}</span>
         <span className="flex-1" />
         {live && <button onClick={async () => setRun({ ...run, ...(await cancelRun(run.id)) })} className={BTN}>Cancel</button>}
-        <button onClick={() => openReport(run.id)} className={BTN} disabled={run.done === 0}>📄 Evidence report</button>
-        <button onClick={() => download(`/api/system-tests/runs/${run.id}/report.html`, `${run.number}-evidence.html`, "text/html")} className={BTN} disabled={run.done === 0}>⬇ Download</button>
+        <button onClick={() => download(`/api/system-tests/runs/${run.id}/report.pdf`, `${run.number}-evidence.pdf`)} className={PRIMARY} disabled={run.done === 0}>📄 PDF report</button>
+        <button onClick={() => download(`/api/system-tests/runs/${run.id}/report.pdf?all_steps=true`, `${run.number}-evidence-full.pdf`)} className={BTN} disabled={run.done === 0}
+          title="Every case with its steps - passed ones too">PDF (every step)</button>
+        <button onClick={() => download(`/api/system-tests/runs/${run.id}/results.xlsx`, `${run.number}-results.xlsx`)} className={BTN} disabled={run.done === 0}>⬇ Excel</button>
+        <button onClick={() => openReport(run.id)} className={BTN} disabled={run.done === 0}>View in browser</button>
       </div>
       <div className="h-2 overflow-hidden rounded-full bg-slate-800" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
         <div className={`h-full ${run.failed + run.errors ? "bg-red-500" : "bg-emerald-500"} transition-all`} style={{ width: `${pct}%` }} />

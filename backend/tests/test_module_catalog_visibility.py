@@ -4,6 +4,7 @@ from app.models.tenant import Tenant
 from app.models.flows import FlowDefinition
 from app.models.pages import PageLayout, ValidationRule
 from app.models.intent_catalog import IntentSetting
+from app.licensing import RECORD_INTENTS
 
 TOOLS = ['custom_development', 'flow_studio', 'page_designer']
 
@@ -31,7 +32,8 @@ def test_training_only_filters_all_admin_surfaces(client):
         db.add(ValidationRule(tenant_id=tid, entity_type='party', name='CRM rule', source_text='Must have name', kind='simple', compiled_json='{}'))
         db.commit()
     catalog = client.get('/api/admin/intents').json()
-    assert {i['code'] for i in catalog['intents']} == {'INT-103'}
+    # the authoring tools' own actions: design a page (Page Designer); design a record type and run records of it (Custom Development)
+    assert {i['code'] for i in catalog['intents']} == {'INT-103'} | RECORD_INTENTS
     assert not catalog['entity_types']
     assert not {'sales','billing','products'} & {c['key'] for c in catalog['categories']}
     pages = client.get('/api/admin/pages').json()
@@ -43,13 +45,13 @@ def test_training_only_filters_all_admin_surfaces(client):
     for suffix in ['', '/vanilla', f'/versions/{from_original}']:
         graph = client.get('/api/admin/function-map' + suffix).json()
         codes = {n['code'] for n in graph['nodes']}
-        assert codes == {'INT-103'}
+        assert codes == {'INT-103'} | RECORD_INTENTS
         assert all(e['source'] in codes and e['target'] in codes for e in graph['edges'])
         assert all(set(p['steps']) <= codes for p in graph['processes'])
-        assert {lane['key'] for lane in graph['lanes']} == {'workspace'}
+        assert {lane['key'] for lane in graph['lanes']} == {'workspace', 'records'}
     assert client.get('/api/admin/flows').json() == []
     triggers = client.get('/api/admin/flows/catalog').json()['intents']
-    assert all(i['code']=='INT-103' or i['code'].startswith('TRN-') for i in triggers)
+    assert all(i['code']=='INT-103' or i['code'] in RECORD_INTENTS or i['code'].startswith('TRN-') for i in triggers)
 
 
 def test_direct_edit_paths_reject_unlicensed_content(client):
@@ -94,7 +96,10 @@ def test_telecom_only_and_no_functional_modules(client):
     assert not any(i['code'].startswith('TRN-') for i in client.get('/api/admin/flows/catalog').json()['intents'])
     select_modules(client)
     assert client.get('/api/admin/pages').json()['pages']==[]
-    assert {i['code'] for i in client.get('/api/admin/intents').json()['intents']}=={'INT-103'}
+    assert {i['code'] for i in client.get('/api/admin/intents').json()['intents']}=={'INT-103'} | RECORD_INTENTS
+    # the command bar offers records of your own types only once you have one - designing one, always
+    bar = {i['code'] for i in client.get('/api/intents/catalog').json()['intents']}
+    assert 'INT-158' in bar and not bar & (RECORD_INTENTS - {'INT-158'})
 
 
 

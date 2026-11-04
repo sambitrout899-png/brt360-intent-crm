@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.timeutils import utcnow
 from app.models.catalog import ProductOffering
 from app.models.intent_log import IntentExecutionLog
 from app.schemas.catalog import AuditLogDetailOut, AuditLogOut, OfferingOut
@@ -55,6 +57,37 @@ def audit_feed(
 
     return audit_service.feed(db, tenant_id, q=q, status=status, code=code, user_id=user_id, channel=channel,
                               days=days if days and days > 0 else None, record=record, limit=max(1, min(limit, 200)), offset=max(0, offset))
+
+
+@router.get("/audit/feed/export")
+def audit_export(
+    format: str = "pdf", q: str | None = None, status: str | None = None, code: str | None = None, user_id: int | None = None,
+    channel: str | None = None, days: int | None = 30, record: str | None = None,
+    db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id),
+) -> Response:
+    """The filtered audit trail as a PDF report (or a formatted Excel sheet) - up to 2,000 entries."""
+    from app.crm_core import audit_service
+    from app.documents import MEDIA, STATUS, Pdf, xlsx
+
+    feed = audit_service.feed(db, tenant_id, q=q, status=status, code=code, user_id=user_id, channel=channel,
+                              days=days if days and days > 0 else None, record=record, limit=2000, offset=0)
+    items = feed.get("items") or []
+    headers = ["When", "Action", "Code", "Who", "Channel", "Status", "Outcome"]
+    rows = [[str(i.get("at") or "")[:16].replace("T", " "), i.get("label") or "", i.get("code") or "", (i.get("user") or {}).get("name") or "",
+             i.get("channel") or "", i.get("status") or "", i.get("outcome") or ""] for i in items]
+    stamp = utcnow().strftime("%Y-%m-%d")
+    if format == "xlsx":
+        content, media = xlsx([("Audit trail", [headers, *rows])]), MEDIA["xlsx"]
+    else:
+        filters = ", ".join(f"{k}: {v}" for k, v in (("search", q), ("status", status), ("action", code), ("channel", channel), ("record", record),
+                                                     ("last days", days)) if v)
+        doc = Pdf("Audit trail", f"{len(rows)} entries · {filters or 'no filters'} · exported {stamp}")
+        counts = {s: sum(1 for r in rows if r[5] == s) for s in ("done", "failed", "review")}
+        doc.tiles([("Entries", len(rows), None), ("Done", counts["done"], STATUS["passed"]), ("Failed", counts["failed"], STATUS["failed"]),
+                   ("Review", counts["review"], STATUS["skipped"])])
+        doc.table(headers, rows, widths=[1.3, 1.8, 0.8, 1.2, 0.8, 0.7, 3.2], size=7.5)
+        content, media = doc.bytes("BRT 360 · Audit trail"), MEDIA["pdf"]
+    return Response(content, media_type=media, headers={"Content-Disposition": f'attachment; filename="audit-trail-{stamp}.{format if format == "xlsx" else "pdf"}"'})
 
 
 @router.get("/audit/{execution_id}/story")

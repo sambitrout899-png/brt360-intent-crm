@@ -807,23 +807,27 @@ def automation_module(s, cases: list[dict[str, Any]], tests: list[dict[str, Any]
 
 
 def tests_docx(s, tests: list[dict[str, Any]]) -> bytes:
-    blocks: list[tuple[str, str]] = [("Title", f"Test cases - {s.name}"),
-                                     ("", f"{len(tests)} test cases · status of the use cases: {s.status}"
-                                          + (f" · Functional Map version id {s.version_id}" if s.version_id else ""))]
+    blocks: list[tuple[str, Any]] = [("Title", f"Test cases - {s.name}"),
+                                     ("Guidance", f"{len(tests)} test cases · status of the use cases: {s.status}"
+                                                  + (f" · Functional Map version id {s.version_id}" if s.version_id else "")),
+                                     ("Heading1", "Summary"),
+                                     ("Table", [["Case", "Title", "Type", "Priority", "Automation"]]
+                                      + [[t["id"], t["title"], t["kind"], t["priority"], t["automation"]] for t in tests])]
     use_case = None
     for t in tests:
         if t["use_case"] != use_case:
             use_case = t["use_case"]
             blocks.append(("Heading1", f"{t['use_case']} - {t['use_case_title']}"))
         blocks.append(("Heading2", f"{t['id']} · {t['title']}"))
-        blocks.append(("", f"Type: {t['kind']} · Priority: {t['priority']} · Automation: {t['automation']}"))
+        facts = [["Type", t["kind"]], ["Priority", t["priority"]], ["Automation", t["automation"]]]
         if t["preconditions"]:
-            blocks.append(("", "Preconditions: " + "; ".join(t["preconditions"])))
+            facts.append(["Preconditions", "\n".join(t["preconditions"])])
         if t["data"]:
-            blocks.append(("", f"Test data: {t['data']}"))
-        blocks += [("", f"{i}. {st['action']}  →  {st['expected']}") for i, st in enumerate(t["steps"], start=1)]
-        blocks.append(("", f"Expected result: {t['expected']}"))
-        blocks.append(("", "Actual result: ____________    Pass / Fail: ____    Tested by / date: ____________"))
+            facts.append(["Test data", t["data"]])
+        blocks.append(("Table", [["Item", "Detail"], *facts]))
+        blocks.append(("Table", [["#", "Action", "Expected"]] + [[str(i), st["action"], st["expected"]] for i, st in enumerate(t["steps"], start=1)]))
+        blocks.append(("Note", f"Expected result: {t['expected']}"))
+        blocks.append(("Table", [["Actual result", "Pass / Fail", "Tested by", "Date"], ["", "", "", ""]]))
     return process_brd.docx(blocks)
 
 

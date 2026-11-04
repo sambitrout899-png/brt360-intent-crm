@@ -396,10 +396,19 @@ def download_use_case_tests(set_id: int, kind: str, db: Session = Depends(get_db
     if kind == "manual.csv":
         return Response("﻿" + use_cases.tests_csv(tests["manual"]), media_type="text/csv; charset=utf-8",
                         headers={"Content-Disposition": f'attachment; filename="test-cases-{stem}.csv"'})
+    if kind == "manual.xlsx":
+        import csv
+        import io
+
+        from app.documents import MEDIA, xlsx
+
+        rows = list(csv.reader(io.StringIO(use_cases.tests_csv(tests["manual"]))))
+        return Response(xlsx([("Test cases", rows)]), media_type=MEDIA["xlsx"],
+                        headers={"Content-Disposition": f'attachment; filename="test-cases-{stem}.xlsx"'})
     if kind == "automation.py":
         return Response(tests["automation"], media_type="text/x-python; charset=utf-8",
                         headers={"Content-Disposition": f'attachment; filename="test_{stem.replace("-", "_")}.py"'})
-    raise HTTPException(404, "manual.docx, manual.csv or automation.py")
+    raise HTTPException(404, "manual.docx, manual.xlsx, manual.csv or automation.py")
 
 
 @router.get("/brd-template")

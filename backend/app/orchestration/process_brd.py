@@ -238,13 +238,6 @@ def to_request(text: str, processes: list[dict[str, Any]] | None = None) -> dict
 # ---------------------------------------------------------------- the template
 
 
-def _para(text: str, style: str | None = None, italic: bool = False) -> str:
-    esc = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    props = f'<w:pPr><w:pStyle w:val="{style}"/></w:pPr>' if style else ""
-    run_props = "<w:rPr><w:i/><w:color w:val=\"6B7280\"/></w:rPr>" if italic else ""
-    return f'<w:p>{props}<w:r>{run_props}<w:t xml:space="preserve">{esc}</w:t></w:r></w:p>'
-
-
 def template_docx() -> bytes:
     """The BRD template as a Word document: one heading per section, a guidance
     line (dropped when it is read back) and an example to overwrite."""
@@ -257,45 +250,10 @@ def template_docx() -> bytes:
     return docx(blocks)
 
 
-def docx(blocks: list[tuple[str, str]]) -> bytes:
-    """A Word document from (style, text) paragraphs: "Title", "Heading1",
-    "Heading2", "Guidance" (grey italic) or "" (body)."""
-    body = [_para(text, style if style in ("Title", "Heading1", "Heading2") else None, italic=style == "Guidance")
-            for style, text in blocks if text is not None]
-    document = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-                '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>'
-                + "".join(body) + '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/></w:sectPr></w:body></w:document>')
-    styles = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-              '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
-              '<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:rPr><w:sz w:val="22"/></w:rPr></w:style>'
-              '<w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/><w:basedOn w:val="Normal"/>'
-              '<w:pPr><w:spacing w:after="240"/></w:pPr><w:rPr><w:b/><w:sz w:val="40"/></w:rPr></w:style>'
-              '<w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:basedOn w:val="Normal"/>'
-              '<w:pPr><w:keepNext/><w:spacing w:before="320" w:after="80"/><w:outlineLvl w:val="0"/></w:pPr>'
-              '<w:rPr><w:b/><w:sz w:val="28"/></w:rPr></w:style>'
-              '<w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="heading 2"/><w:basedOn w:val="Normal"/>'
-              '<w:pPr><w:keepNext/><w:spacing w:before="200" w:after="60"/><w:outlineLvl w:val="1"/></w:pPr>'
-              '<w:rPr><w:b/><w:color w:val="1F4E79"/><w:sz w:val="24"/></w:rPr></w:style></w:styles>')
-    content_types = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-                     '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
-                     '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
-                     '<Default Extension="xml" ContentType="application/xml"/>'
-                     '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
-                     '<Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>'
-                     '</Types>')
-    rels = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
-            '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>'
-            '</Relationships>')
-    doc_rels = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-                '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
-                '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>'
-                '</Relationships>')
-    out = io.BytesIO()
-    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
-        z.writestr("[Content_Types].xml", content_types)
-        z.writestr("_rels/.rels", rels)
-        z.writestr("word/document.xml", document)
-        z.writestr("word/_rels/document.xml.rels", doc_rels)
-        z.writestr("word/styles.xml", styles)
-    return out.getvalue()
+def docx(blocks: list[tuple[str, Any]]) -> bytes:
+    """A Word document in the house style (app/documents.py) from (style, value) blocks: "Title", "Heading1", "Heading2",
+    "Heading3", "Guidance" (a shaded hint), "Note", "Bullet", "Table" (rows) or "" (body). Read back by read() as before:
+    headings are real Word heading styles, guidance paragraphs keep their "Guidance:" lead-in."""
+    from app.documents import docx as styled
+
+    return styled(blocks)

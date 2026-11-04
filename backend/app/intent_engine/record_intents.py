@@ -119,7 +119,21 @@ NEXT: dict[str, list[tuple[str, str]]] = {
     "INT-156": [("INT-151", "Create another")],
     "INT-158": [("INT-151", "Create the first record")],
 }
+# Example wording for a model trained on the exported data - a tenant's own type names vary, so these use a typical
+# one (a site survey, numbered SS-); classifier.record_step recognises each tenant's real labels and numbers.
 TRAINING: list[tuple[str, list[tuple[str, dict[str, Any]]]]] = [
+    ("INT-151", [("Create a site survey for Acme Towers with survey date 2026-11-20", {"record_type": "site survey", "parent_ref": "Acme Towers"}),
+                 ("new contract called Annual support for Globex", {"record_type": "contract", "record_name": "Annual support"})]),
+    ("INT-152", [("Update SS-000{n} floors=12", {"record_ref": "SS-000{n}", "record_fields": {"floors": "12"}}),
+                 ("set the outcome of SS-000{n} to Feasible", {"record_ref": "SS-000{n}", "record_fields": {"outcome": "Feasible"}})]),
+    ("INT-153", [("Move SS-000{n} to completed", {"record_ref": "SS-000{n}", "record_state": "completed"}),
+                 ("close CT-000{n}", {"record_ref": "CT-000{n}", "record_state": "close"})]),
+    ("INT-154", [("Assign SS-000{n} to the Survey Team", {"record_ref": "SS-000{n}", "to_position": "Survey Team"})]),
+    ("INT-155", [("Link ST-000{n} to contact CT-000{n}", {"record_ref": "ST-000{n}", "related_ref": "CT-000{n}"}),
+                 ("unlink CT-000{n} from ST-000{n}", {"record_ref": "CT-000{n}", "related_ref": "ST-000{n}", "unlink": True})]),
+    ("INT-156", [("Show completed site surveys", {"record_type": "site survey", "record_state": "completed"}),
+                 ("which contracts of Globex are open", {"record_type": "contract", "parent_ref": "Globex", "record_state": "open"})]),
+    ("INT-157", [("Delete SS-000{n}", {"record_ref": "SS-000{n}"})]),
     ("INT-158", [("Design a record type: Site Survey for a customer with survey date and floors", {}),
                  ("define a new record type called Asset Inspection", {})]),
 ]

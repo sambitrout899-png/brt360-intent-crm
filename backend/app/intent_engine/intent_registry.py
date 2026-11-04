@@ -599,6 +599,16 @@ def all_intents(db: Session, tenant_id: int) -> list[dict[str, Any]]:
     return [e for e in entries if intent_available(db, tenant_id, e["code"])]
 
 
+_RECORD_ACTIONS = {"INT-151", "INT-152", "INT-153", "INT-154", "INT-155", "INT-156", "INT-157"}
+
+
+def _has_record_types(db: Session, tenant_id: int) -> bool:
+    from app.models.custom_records import CustomRecordType
+
+    return bool(cached(db, ("has_record_types", tenant_id), CustomRecordType,
+                       lambda: db.query(CustomRecordType.id).filter(CustomRecordType.tenant_id == tenant_id).first() is not None))
+
+
 def _user_role_ids(db: Session, user: User) -> list[int]:
     from app.crm_core import access_service
 
@@ -647,9 +657,11 @@ def intents_for_user(db: Session, tenant_id: int, user: User) -> list[dict[str, 
     role_ids = _user_role_ids(db, user)
     has_roles = bool(role_ids) or _has_assigned_roles(db, user)
     served = served_segments(db, tenant_id)
+    # a record of the tenant's own types is offered once it has a type - until then only "Design a record type" (INT-158)
+    hide = set() if _has_record_types(db, tenant_id) else _RECORD_ACTIONS
     return [
         e for e in all_intents(db, tenant_id)
-        if e["is_active"] and allowed_for(e, role_ids, has_roles) and (e["code"] not in ADMIN_ONLY or _is_admin(user))
+        if e["is_active"] and e["code"] not in hide and allowed_for(e, role_ids, has_roles) and (e["code"] not in ADMIN_ONLY or _is_admin(user))
         and (e.get("segment") is None or e["segment"] in served)
         and availability(db, tenant_id, user, e["code"]) is None
     ]

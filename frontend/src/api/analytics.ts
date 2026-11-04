@@ -285,20 +285,20 @@ export const saveReport = (r: { id?: number; kind: "report" | "dashboard"; name:
 export const deleteReport = (id: number) => request<void>(`/api/analytics/reports/${id}`, { method: "DELETE" });
 export const starterDashboard = () => post<SavedReport>("/api/analytics/dashboards/starter", {});
 
-/** Downloads a CSV - the report's table, or every record behind it. */
-export async function exportCsv(kind: "query" | "records", query: unknown, name: string): Promise<void> {
+/** Downloads the report's table, or every record behind it - as CSV, a formatted Excel sheet or a PDF report. */
+export async function exportCsv(kind: "query" | "records", query: unknown, name: string, format: "csv" | "xlsx" | "pdf" = "csv"): Promise<void> {
   const token = getAccessToken();
   const ctx = getWorkContext();
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (token) headers.Authorization = `Bearer ${token}`;
   if (ctx.positionId) headers["X-Position-Id"] = String(ctx.positionId);
   if (ctx.scope) headers["X-Data-Scope"] = ctx.scope;
-  const res = await fetch(`${API_BASE}/api/analytics/export`, { method: "POST", headers, body: JSON.stringify({ kind, query, name }) });
+  const res = await fetch(`${API_BASE}/api/analytics/export`, { method: "POST", headers, body: JSON.stringify({ kind, query, name, format }) });
   if (!res.ok) throw new Error(`${res.status}: ${await res.text().catch(() => "")}`);
   const url = URL.createObjectURL(await res.blob());
   const a = document.createElement("a");
   a.href = url;
-  a.download = `${name || "report"}.csv`;
+  a.download = `${name || "report"}.${format}`;
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }

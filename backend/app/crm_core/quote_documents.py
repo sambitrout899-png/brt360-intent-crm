@@ -12,15 +12,14 @@ none. A template may be switched off: no proposal step (the PO comes straight
 after approval), or no agreement on Match all. Generated documents get a new
 version each time; nothing is overwritten or deleted.
 
-The PDF writer needs no extra package: plain PDF 1.4 with the standard
-Helvetica fonts.
+The PDF writer (app/documents.py) needs no extra package: plain PDF 1.4 with the
+standard Helvetica fonts, in the same house style as every other document.
 """
 
 from __future__ import annotations
 
 import base64
 import datetime as dt
-import io
 import re
 from typing import Any
 
@@ -65,178 +64,8 @@ DEFAULT_TEMPLATES: dict[str, dict[str, Any]] = {
 
 # ---------------------------------------------------------------- the PDF writer
 
-_PAGE_W, _PAGE_H, _MARGIN = 595, 842, 50
-_ACCENT = (0.05, 0.36, 0.55)
-_MUTED = (0.42, 0.45, 0.5)
-_TEXT = (0.1, 0.12, 0.16)
-
-
-def _enc(value: Any) -> str:
-    text = str(value if value is not None else "")
-    text = text.replace("₹", "INR ").replace("→", "->").replace("≤", "<=").replace("≥", ">=")
-    text = text.encode("cp1252", "replace").decode("cp1252")
-    return text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
-
-
-def _width(text: str, size: float, bold: bool = False) -> float:
-    """Close enough to Helvetica's metrics to wrap and right-align."""
-    narrow, wide = set("iljtfI.,;:'!|() "), set("mwMW@%")
-    units = sum(0.28 if c in narrow else 0.83 if c in wide else 0.62 if c.isupper() or c.isdigit() else 0.52 for c in text)
-    return units * size * (1.06 if bold else 1.0)
-
-
-def _wrap(text: str, width: float, size: float, bold: bool = False) -> list[str]:
-    """The text in lines that fit the width - a word longer than a line is cut."""
-    lines, line = [], ""
-    for word in text.split(" "):
-        while _width(word, size, bold) > width and len(word) > 1:  # e.g. a long reference with no spaces
-            cut = max(1, int(len(word) * width / _width(word, size, bold)) - 1)
-            if line:
-                lines.append(line)
-                line = ""
-            lines.append(word[:cut])
-            word = word[cut:]
-        trial = f"{line} {word}".strip()
-        if _width(trial, size, bold) > width and line:
-            lines.append(line)
-            line = word
-        else:
-            line = trial
-    return lines + [line] if line or not lines else lines
-
-
-class _Pdf:
-    def __init__(self, title: str, subtitle: str):
-        self.title, self.subtitle = title, subtitle
-        self.pages: list[list[str]] = []
-        self.y = 0.0
-        self._page()
-
-    # -- drawing
-    def _page(self) -> None:
-        self.ops: list[str] = []
-        self.pages.append(self.ops)
-        self.rect(0, _PAGE_H - 70, _PAGE_W, 70, _ACCENT)
-        self.text(_MARGIN, _PAGE_H - 38, self.title, 18, True, (1, 1, 1))
-        self.text(_MARGIN, _PAGE_H - 56, self.subtitle, 9, False, (0.85, 0.92, 0.97))
-        self.y = _PAGE_H - 100
-
-    def rect(self, x: float, y: float, w: float, h: float, rgb: tuple[float, float, float]) -> None:
-        self.ops.append(f"{rgb[0]:.3f} {rgb[1]:.3f} {rgb[2]:.3f} rg {x:.1f} {y:.1f} {w:.1f} {h:.1f} re f")
-
-    def line(self, x1: float, y1: float, x2: float, y2: float, rgb=(0.82, 0.85, 0.88)) -> None:
-        self.ops.append(f"{rgb[0]:.3f} {rgb[1]:.3f} {rgb[2]:.3f} RG 0.6 w {x1:.1f} {y1:.1f} m {x2:.1f} {y2:.1f} l S")
-
-    def text(self, x: float, y: float, value: Any, size: float = 10, bold: bool = False, rgb=_TEXT) -> None:
-        self.ops.append(f"BT {rgb[0]:.3f} {rgb[1]:.3f} {rgb[2]:.3f} rg /{'F2' if bold else 'F1'} {size} Tf "
-                        f"{x:.1f} {y:.1f} Td ({_enc(value)}) Tj ET")
-
-    def need(self, height: float) -> None:
-        if self.y - height < 60:
-            self._page()
-
-    # -- blocks
-    def heading(self, value: str) -> None:
-        self.need(34)
-        self.y -= 10
-        self.text(_MARGIN, self.y, value, 12, True, _ACCENT)
-        self.y -= 6
-        self.line(_MARGIN, self.y, _PAGE_W - _MARGIN, self.y)
-        self.y -= 14
-
-    def paragraph(self, value: str, size: float = 10, rgb=_TEXT) -> None:
-        for raw in str(value or "").split("\n"):
-            if not raw.strip():
-                self.y -= size * 0.7
-                continue
-            for line in _wrap(raw, _PAGE_W - 2 * _MARGIN, size):
-                self.need(size + 4)
-                self.text(_MARGIN, self.y, line, size, False, rgb)
-                self.y -= size + 4
-        self.y -= 4
-
-    def facts(self, rows: list[tuple[str, Any]]) -> None:
-        """Two columns of label / value pairs."""
-        rows = [(k, v) for k, v in rows if v not in (None, "")]
-        half = (len(rows) + 1) // 2
-        col_w = (_PAGE_W - 2 * _MARGIN) / 2
-        for i in range(half):
-            self.need(28)
-            for j, (label, value) in enumerate(rows[i::half][:2] if half else []):
-                x = _MARGIN + j * col_w
-                self.text(x, self.y, label.upper(), 7, True, _MUTED)
-                self.text(x, self.y - 12, value, 10)
-            self.y -= 28
-        self.y -= 2
-
-    def table(self, headers: list[str], rows: list[list[Any]], widths: list[float], right: set[int]) -> None:
-        total = _PAGE_W - 2 * _MARGIN
-        scale = total / sum(widths)
-        widths = [w * scale for w in widths]
-
-        def row(cells: list[Any], bold: bool, shade=None, size: float = 9) -> None:
-            wrapped = [_wrap(str(cell if cell is not None else ""), widths[i] - 8, size, bold) for i, cell in enumerate(cells)]
-            height = 7 + 11 * max(len(w) for w in wrapped)
-            self.need(height + 2)
-            if shade:
-                self.rect(_MARGIN, self.y - height + 12, total, height, shade)
-            x = _MARGIN
-            for i, lines in enumerate(wrapped):
-                for n, value in enumerate(lines):
-                    tx = x + widths[i] - 4 - _width(value, size, bold) if i in right else x + 4
-                    self.text(tx, self.y - n * 11, value, size, bold, (1, 1, 1) if shade == _ACCENT else _TEXT)
-                x += widths[i]
-            self.y -= height
-
-        row(headers, True, _ACCENT)
-        for n, cells in enumerate(rows):
-            row(cells, False, (0.95, 0.96, 0.98) if n % 2 else None)
-        self.y -= 4
-
-    def totals(self, rows: list[tuple[str, str, bool]]) -> None:
-        for label, value, strong in rows:
-            self.need(18)
-            size = 11 if strong else 9.5
-            right = _PAGE_W - _MARGIN - 4
-            self.text(right - 170, self.y, label, size, strong, _TEXT if strong else _MUTED)
-            self.text(right - _width(value, size, strong), self.y, value, size, strong)
-            self.y -= 16
-        self.y -= 6
-
-    # -- output
-    def bytes(self, footer: str) -> bytes:
-        count = len(self.pages)
-        for n, ops in enumerate(self.pages, start=1):
-            self.ops = ops
-            self.line(_MARGIN, 44, _PAGE_W - _MARGIN, 44)
-            self.text(_MARGIN, 32, footer, 7.5, False, _MUTED)
-            label = f"Page {n} of {count}"
-            self.text(_PAGE_W - _MARGIN - _width(label, 7.5), 32, label, 7.5, False, _MUTED)
-        objects: list[bytes] = [b"<< /Type /Catalog /Pages 2 0 R >>", b"",
-                                b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
-                                b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>",
-                                f"<< /Producer (BRT 360) /Title ({_enc(self.title)}) >>".encode("cp1252", "replace")]
-        kids = []
-        for ops in self.pages:
-            stream = "\n".join(ops).encode("cp1252", "replace")
-            page_id = len(objects) + 1
-            objects.append(f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {_PAGE_W} {_PAGE_H}] /Resources << /Font << /F1 3 0 R "
-                           f"/F2 4 0 R >> >> /Contents {page_id + 1} 0 R >>".encode())
-            objects.append(b"<< /Length " + str(len(stream)).encode() + b" >>\nstream\n" + stream + b"\nendstream")
-            kids.append(f"{page_id} 0 R")
-        objects[1] = f"<< /Type /Pages /Kids [{' '.join(kids)}] /Count {count} >>".encode()
-        out = io.BytesIO()
-        out.write(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n")
-        offsets = []
-        for number, obj in enumerate(objects, start=1):
-            offsets.append(out.tell())
-            out.write(f"{number} 0 obj\n".encode() + obj + b"\nendobj\n")
-        xref = out.tell()
-        out.write(f"xref\n0 {len(objects) + 1}\n0000000000 65535 f \n".encode())
-        for offset in offsets:
-            out.write(f"{offset:010d} 00000 n \n".encode())
-        out.write(f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R /Info 5 0 R >>\nstartxref\n{xref}\n%%EOF".encode())
-        return out.getvalue()
+# The house style shared by every document the platform generates (app/documents.py).
+from app.documents import Pdf as _Pdf  # noqa: E402
 
 
 # ---------------------------------------------------------------- templates

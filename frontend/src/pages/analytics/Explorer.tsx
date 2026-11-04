@@ -281,7 +281,9 @@ export default function Explorer({ catalog, open, onSaved }: { catalog: ACatalog
               <button type="button" className={btnPrimary} onClick={() => doSave(false)}>{saved?.can_edit ? "Save" : "Save report"}</button>
               {saved && <button type="button" className={btn} onClick={() => doSave(true)}>Save as new</button>}
               <button type="button" className={btn} onClick={() => setShowTable((v) => !v)}>{showTable ? "Hide data" : "Show data"}</button>
-              <button type="button" className={btn} onClick={() => exportCsv("query", spec, spec.title || "report").catch((e) => setErr(cleanErr(e)))}>⬇ CSV</button>
+              <button type="button" className={btn} onClick={() => exportCsv("query", spec, spec.title || "report", "pdf").catch((e) => setErr(cleanErr(e)))}>📄 PDF</button>
+              <button type="button" className={btn} onClick={() => exportCsv("query", spec, spec.title || "report", "xlsx").catch((e) => setErr(cleanErr(e)))}>⬇ Excel</button>
+              <button type="button" className={btn} onClick={() => exportCsv("query", spec, spec.title || "report").catch((e) => setErr(cleanErr(e)))}>CSV</button>
               <button type="button" className={btn} onClick={() => setDrill([])}>Records</button>
             </div>
           }

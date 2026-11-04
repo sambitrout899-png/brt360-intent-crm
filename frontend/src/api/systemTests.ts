@@ -1,4 +1,4 @@
-import { API_BASE, getAccessToken, request } from "./client";
+import { API_BASE, downloadFile, getAccessToken, request } from "./client";
 
 /** The system test suite: cases generated from the tenant's own system, background runs, evidence. */
 export interface SuiteSummary {
@@ -85,11 +85,6 @@ export async function openReport(runId: number): Promise<void> {
   window.open(URL.createObjectURL(new Blob([html], { type: "text/html" })), "_blank", "noopener");
 }
 
-export async function download(path: string, filename: string, type: string): Promise<void> {
-  const text = await fetchText(path);
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(new Blob([text], { type }));
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(a.href);
+export function download(path: string, filename: string): Promise<void> {
+  return downloadFile(path, filename);
 }

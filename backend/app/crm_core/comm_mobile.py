@@ -496,7 +496,7 @@ def lines(db: Session, tenant_id: int, query: str = "", status: str = "", paymen
 
 
 def _parse_range(text: str) -> tuple[int, int] | None:
-    m = re.match(r"^\s*(\d{6,15})\s*(?:-|â€“|to)\s*(\d{6,15})\s*$", str(text or ""))
+    m = re.match(r"^\s*(\d{6,15})\s*(?:-|–|to)\s*(\d{6,15})\s*$", str(text or ""))
     if not m or len(m.group(1)) != len(m.group(2)) or int(m.group(1)) > int(m.group(2)):
         return None
     return int(m.group(1)), int(m.group(2))

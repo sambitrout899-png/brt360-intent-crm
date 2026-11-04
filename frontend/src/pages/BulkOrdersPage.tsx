@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { bulkApi, bulkResultsCsv, bulkSendFile } from "../api/client";
+import { bulkApi, bulkResultsCsv, bulkSendFile, downloadFile } from "../api/client";
 import { useIntentRefresh } from "../workspace";
 import { BTN, BTN_DANGER, BTN_PRIMARY, CARD, Chip, Empty, Field, INPUT, Notice, Panel, Section, Stat } from "./fieldservice/ui";
 
@@ -142,7 +142,11 @@ export default function BulkOrdersPage() {
                 {open.status === "running" && <button type="button" className={BTN_DANGER} disabled={busy}
                   onClick={() => act("/cancel", (r) => `${r.cancelled} queued row(s) cancelled`)}>Cancel queued</button>}
                 <button type="button" className={BTN} onClick={() => bulkResultsCsv(open.id).then((t) => download(`${open.number}-results.csv`, t))
-                  .catch((e) => setError(errorText(e, "Could not download")))}>Results CSV</button>
+                  .catch((e) => setError(errorText(e, "Could not download")))}>CSV</button>
+                <button type="button" className={BTN} onClick={() => downloadFile(`/api/bulk-orders/${open.id}/results.xlsx`, `${open.number}-results.xlsx`)
+                  .catch((e) => setError(errorText(e, "Could not download")))}>Excel</button>
+                <button type="button" className={BTN_PRIMARY} onClick={() => downloadFile(`/api/bulk-orders/${open.id}/results.pdf`, `${open.number}-results.pdf`)
+                  .catch((e) => setError(errorText(e, "Could not download")))}>📄 PDF report</button>
               </div>
             }>
               <p className="text-sm text-slate-300">{open.name}</p>
@@ -236,8 +240,8 @@ function NewBulk({ processes, onCancel, onCreated, onError }: { processes: Proce
 
   const pick = (f: File | undefined) => {
     if (!f) return;
-    if (!/\.(csv|txt)$/i.test(f.name) && f.type && !/csv|text\/plain|excel/.test(f.type)) {
-      onError(`${f.name} isn't a CSV file - in Excel use File -> Save As -> CSV`);
+    if (!/\.(csv|txt|xlsx)$/i.test(f.name) && f.type && !/csv|text\/plain|excel|spreadsheetml/.test(f.type)) {
+      onError(`${f.name} isn't a CSV or Excel (.xlsx) file`);
       return;
     }
     onError(null);
@@ -272,7 +276,11 @@ function NewBulk({ processes, onCancel, onCreated, onError }: { processes: Proce
           <div className="flex flex-wrap gap-x-4 gap-y-1">
             {info.columns.map((c) => <span key={c.name} title={c.help}><b className={c.required ? "text-slate-100" : ""}>{c.name}</b>{c.required ? "*" : ""}</span>)}
           </div>
-          <button type="button" className={`${BTN} mt-2`} onClick={() => download(`${info.process}-template.csv`, `${info.csv_header}\n`)}>Download the CSV template</button>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <button type="button" className={BTN_PRIMARY} onClick={() => downloadFile(`/api/bulk-orders/processes/${info.process}/template.xlsx`, `bulk-${info.process}-template.xlsx`)
+              .catch((e) => onError(errorText(e, "Could not download the template")))}>⬇ Excel template</button>
+            <button type="button" className={BTN} onClick={() => download(`${info.process}-template.csv`, `${info.csv_header}\n`)}>CSV template</button>
+          </div>
         </div>
       )}
 
@@ -286,10 +294,10 @@ function NewBulk({ processes, onCancel, onCreated, onError }: { processes: Proce
         {file ? (
           <span className="text-sm text-slate-200">{file.name} <span className="text-slate-500">({(file.size / 1024).toFixed(1)} KB)</span></span>
         ) : (
-          <span className="text-sm text-slate-300">Drop a CSV file here, or <span className="text-sky-300 underline">choose a file</span></span>
+          <span className="text-sm text-slate-300">Drop the filled-in Excel template or a CSV file here, or <span className="text-sky-300 underline">choose a file</span></span>
         )}
-        <span className="text-xs text-slate-500">CSV with a header row · comma, semicolon or tab separated · up to 5 MB / 5,000 rows</span>
-        <input type="file" accept=".csv,text/csv,.txt" className="hidden" onChange={(e) => { pick(e.target.files?.[0]); e.target.value = ""; }} />
+        <span className="text-xs text-slate-500">Excel (.xlsx - its first sheet) or CSV with a header row · up to 5 MB / 5,000 rows</span>
+        <input type="file" accept=".csv,text/csv,.txt,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" className="hidden" onChange={(e) => { pick(e.target.files?.[0]); e.target.value = ""; }} />
       </label>
       <div className="mt-2 flex flex-wrap gap-3 text-xs">
         {file && <button type="button" className="text-slate-400 underline" onClick={() => setFile(null)}>Remove the file</button>}

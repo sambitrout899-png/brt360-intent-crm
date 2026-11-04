@@ -136,10 +136,17 @@ ALIASES = {"customer": "customer_name", "name": "customer_name", "customer_id": 
 
 def decode_file(raw: bytes) -> str:
     """An uploaded CSV file's text: UTF-8 (with or without the byte-order mark Excel adds), else Windows-1252."""
+    from app.documents import is_xlsx, xlsx_to_csv
+
     if not raw or not raw.strip():
         raise ValueError("The file is empty")
     if len(raw) > MAX_FILE_BYTES:
         raise ValueError(f"The file is {len(raw) / 1024 / 1024:.1f} MB - at most {MAX_FILE_BYTES // 1024 // 1024} MB")
+    if is_xlsx(raw):  # the Excel template, filled in - its first sheet, read like a CSV
+        try:
+            return xlsx_to_csv(raw)
+        except Exception as exc:  # noqa: BLE001 - a damaged workbook is the user's to fix
+            raise ValueError("That Excel file can't be read - save it again, or as CSV") from exc
     if b"\x00" in raw[:4096]:
         raise ValueError("That isn't a CSV file (it looks like a spreadsheet or binary file) - save it as CSV first")
     for encoding in ("utf-8-sig", "cp1252"):
@@ -620,17 +627,70 @@ def detail(db: Session, bulk: BulkOrder, stage: str = "", limit: int = 1000) -> 
     return {**summary(db, bulk), "row_items": [row_out(r) for r in q.order_by(BulkOrderRow.row_no).limit(limit)]}
 
 
-def results_csv(db: Session, bulk: BulkOrder) -> str:
-    buf = io.StringIO()
+def _result_rows(db: Session, bulk: BulkOrder) -> tuple[list[str], list[list[Any]]]:
     columns = [c for c, _, _ in PROCESS_INFO[bulk.process]["columns"]]
-    w = csv.writer(buf)
-    w.writerow(["row", *columns, "stage", "party_id", "order_ids", "asset_ids", "billing", "message"])
+    rows = []
     for r in db.query(BulkOrderRow).filter(BulkOrderRow.bulk_order_id == bulk.id).order_by(BulkOrderRow.row_no):
         d = r.data or {}
-        w.writerow([r.row_no, *[json.dumps(d[c]) if isinstance(d.get(c), (dict, list)) else d.get(c, "") for c in columns], r.stage, r.party_id or "",
-                    " ".join(str(i) for i in r.order_ids or []), " ".join(str(i) for i in r.asset_ids or []),
-                    json.dumps(r.billing or {}) if r.billing else "", r.message])
+        rows.append([r.row_no, *[json.dumps(d[c]) if isinstance(d.get(c), (dict, list)) else d.get(c, "") for c in columns], r.stage, r.party_id or "",
+                     " ".join(str(i) for i in r.order_ids or []), " ".join(str(i) for i in r.asset_ids or []),
+                     json.dumps(r.billing or {}) if r.billing else "", r.message])
+    return ["row", *columns, "stage", "party_id", "order_ids", "asset_ids", "billing", "message"], rows
+
+
+def results_csv(db: Session, bulk: BulkOrder) -> str:
+    buf = io.StringIO()
+    headers, rows = _result_rows(db, bulk)
+    w = csv.writer(buf)
+    w.writerow(headers)
+    w.writerows(rows)
     return buf.getvalue()
+
+
+def results_xlsx(db: Session, bulk: BulkOrder) -> bytes:
+    from app.documents import xlsx
+
+    headers, rows = _result_rows(db, bulk)
+    s = summary(db, bulk)
+    overview = [["Item", "Value"], ["Bulk order", bulk.number], ["Name", bulk.name], ["Process", PROCESS_INFO[bulk.process]["label"]],
+                ["Status", bulk.status], *[[k.replace("_", " "), v] for k, v in (s.get("counts") or {}).items()]]
+    return xlsx([("Rows", [headers, *rows]), ("Overview", overview)])
+
+
+def results_pdf(db: Session, bulk: BulkOrder) -> bytes:
+    """The request as a PDF report: its counts, then every row with its stage, orders, assets and outcome."""
+    from app.documents import STATUS, Pdf
+
+    s = summary(db, bulk)
+    counts = s.get("counts") or {}
+    doc = Pdf(f"Bulk order {bulk.number}", f"{bulk.name} · {PROCESS_INFO[bulk.process]['label']} · {str(bulk.created_at)[:16]} UTC")
+    done = sum(v for k, v in counts.items() if k in FINAL_STAGES)
+    doc.tiles([("Rows", sum(counts.values()), None), ("Completed", counts.get("completed", 0), STATUS["completed"]),
+               ("Failed", counts.get("failed", 0) + counts.get("invalid", 0), STATUS["failed"]),
+               ("In progress", sum(counts.values()) - done, STATUS["running"])])
+    doc.facts([("Status", bulk.status), ("Process", PROCESS_INFO[bulk.process]["label"]), ("Steps", " -> ".join(PROCESS_INFO[bulk.process]["intents"])),
+               ("Approve each order", "yes" if bulk.auto_approve else "no"), ("Send to fulfillment", "yes" if bulk.send_to_fulfillment else "no"),
+               ("Source", bulk.source)])
+    doc.heading("By stage")
+    doc.table(["Stage", "Rows"], [[k.replace("_", " "), v] for k, v in sorted(counts.items())], widths=[3, 1], right={1})
+    doc.heading("Rows")
+    rows = db.query(BulkOrderRow).filter(BulkOrderRow.bulk_order_id == bulk.id).order_by(BulkOrderRow.row_no).all()
+    key_cols = [c for c, required, _ in PROCESS_INFO[bulk.process]["columns"] if required][:2]
+    doc.table(["Row", *key_cols, "Stage", "Orders", "Assets", "Outcome"],
+              [[r.row_no, *[str((r.data or {}).get(c, ""))[:40] for c in key_cols], r.stage.replace("_", " "),
+                " ".join(str(i) for i in r.order_ids or []), " ".join(str(i) for i in r.asset_ids or []), r.message[:160]] for r in rows],
+              widths=[0.5, *[1.4] * len(key_cols), 1.1, 0.9, 0.9, 3], status_col=1 + len(key_cols), size=7.5)
+    return doc.bytes(f"BRT 360 · Bulk order {bulk.number}")
+
+
+def template_xlsx(process: str) -> bytes:
+    """The process's upload template as Excel: the header row to fill in, and a guide to every column."""
+    from app.documents import template_xlsx as build
+
+    if process not in PROCESS_INFO:
+        raise ValueError(f"Processes: {', '.join(PROCESS_INFO)}")
+    info = PROCESS_INFO[process]
+    return build(info["label"], [{"name": c, "required": r, "help": h} for c, r, h in info["columns"]])
 
 
 def of(db: Session, tenant_id: int, ref: Any) -> BulkOrder:

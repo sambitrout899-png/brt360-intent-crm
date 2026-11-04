@@ -7,6 +7,7 @@ import {
   bimLoad,
   bimRecord,
   bimTemplate,
+  downloadFile,
   reserveBrtIds,
   saveBimInterface,
   type BimEntity,
@@ -75,7 +76,7 @@ export default function AdminBimSection() {
   const [jobs, setJobs] = useState<BimJob[]>([]);
   const [count, setCount] = useState(10);
   const [ids, setIds] = useState<string[]>([]);
-  const [file, setFile] = useState<{ name: string; content: string; format: "csv" | "json" } | null>(null);
+  const [file, setFile] = useState<{ name: string; content: string; format: "csv" | "json" | "xlsx" } | null>(null);
   const [interfaceId, setInterfaceId] = useState("");
   const [dryRun, setDryRun] = useState(true);
   const [pageRules, setPageRules] = useState(true);
@@ -174,10 +175,17 @@ export default function AdminBimSection() {
             </button>
             <button
               type="button"
-              onClick={() => bimTemplate(entity, count).then((csv) => download(`${entity}_template.csv`, csv)).catch((e) => setError(clean(e)))}
+              onClick={() => downloadFile(`/api/bim/template/${encodeURIComponent(entity)}?rows=${count}&format=xlsx`, `${entity}_template.xlsx`).catch((e) => setError(clean(e)))}
               className="rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-semibold text-white"
             >
-              ⬇ Template with {count} BRT_IDs
+              ⬇ Excel template with {count} BRT_IDs
+            </button>
+            <button
+              type="button"
+              onClick={() => bimTemplate(entity, count).then((csv) => download(`${entity}_template.csv`, csv)).catch((e) => setError(clean(e)))}
+              className="rounded-lg border border-slate-600 px-3 py-1.5 text-xs font-semibold text-slate-200"
+            >
+              CSV
             </button>
           </div>
           {ids.length > 0 && (
@@ -216,15 +224,24 @@ export default function AdminBimSection() {
               ))}
             </select>
             <label className="cursor-pointer rounded-lg border border-dashed border-slate-600 px-3 py-1.5 text-xs text-slate-300 hover:border-sky-500">
-              {file ? `📄 ${file.name}` : "Choose CSV / JSON…"}
+              {file ? `📄 ${file.name}` : "Choose Excel / CSV / JSON…"}
               <input
                 type="file"
-                accept=".csv,.json,text/csv,application/json"
+                accept=".xlsx,.csv,.json,text/csv,application/json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 className="hidden"
                 onChange={(e) => {
                   const f = e.target.files?.[0];
                   if (!f) return;
-                  f.text().then((content) => setFile({ name: f.name, content, format: f.name.toLowerCase().endsWith(".json") ? "json" : "csv" }));
+                  if (f.name.toLowerCase().endsWith(".xlsx")) {
+                    // the Excel template, filled in - sent base64-encoded, its first sheet is read like a CSV
+                    f.arrayBuffer().then((buf) => {
+                      let binary = "";
+                      new Uint8Array(buf).forEach((b) => { binary += String.fromCharCode(b); });
+                      setFile({ name: f.name, content: btoa(binary), format: "xlsx" });
+                    });
+                  } else {
+                    f.text().then((content) => setFile({ name: f.name, content, format: f.name.toLowerCase().endsWith(".json") ? "json" : "csv" }));
+                  }
                   setResult(null);
                 }}
               />

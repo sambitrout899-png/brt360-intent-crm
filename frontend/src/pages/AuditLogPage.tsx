@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { auditFeed, auditStory, intentCatalog, type AuditFeed, type AuditItem, type AuditStory } from "../api/client";
+import { auditFeed, auditStory, downloadFile, intentCatalog, type AuditFeed, type AuditItem, type AuditStory } from "../api/client";
 import type { EntityType } from "../api/types";
 import { humanizeCodes } from "../intentLabels";
 import { useIntentRefresh, useWorkspace } from "../workspace";
@@ -277,6 +277,13 @@ export default function AuditLogPage() {
     URL.revokeObjectURL(url);
   };
 
+  // the same filters, as a PDF report or a formatted Excel sheet (server-side, up to 2,000 entries)
+  const exportFile = (format: "pdf" | "xlsx") => {
+    const params = new URLSearchParams({ format });
+    Object.entries(filters).forEach(([k, v]) => v !== undefined && params.set(k, String(v)));
+    downloadFile(`/api/audit/feed/export?${params}`, `audit-trail-${new Date().toISOString().slice(0, 10)}.${format}`).catch(() => undefined);
+  };
+
   // group by day
   const groups: [string, AuditItem[]][] = [];
   for (const i of items) {
@@ -294,8 +301,14 @@ export default function AuditLogPage() {
           <h1 className="text-2xl font-bold text-slate-100">Audit trail</h1>
           <p className="mt-1 text-sm text-slate-400">Everything anyone asked the CRM to do - who, when, what it understood, every step it took and what it changed.</p>
         </div>
+        <button type="button" onClick={() => exportFile("pdf")} disabled={!items.length} className="rounded-lg bg-sky-600 px-3 py-2 text-xs font-semibold text-white hover:bg-sky-500 disabled:opacity-40">
+          📄 PDF report
+        </button>
+        <button type="button" onClick={() => exportFile("xlsx")} disabled={!items.length} className="rounded-lg border border-slate-700 px-3 py-2 text-xs text-slate-300 hover:border-slate-500 disabled:opacity-40">
+          ⬇ Excel
+        </button>
         <button type="button" onClick={exportCsv} disabled={!items.length} className="rounded-lg border border-slate-700 px-3 py-2 text-xs text-slate-300 hover:border-slate-500 disabled:opacity-40">
-          ⬇ Export CSV
+          CSV
         </button>
         <button type="button" onClick={load} className="rounded-lg border border-slate-700 px-3 py-2 text-xs text-slate-300 hover:border-slate-500">
           ↻ Refresh

@@ -410,10 +410,10 @@ export default function UseCaseStudio({ setId, initial, intents, processes, onCl
               <span className="text-slate-400">
                 {set.test_cases.length} test cases · {set.test_cases.filter((t) => t.automation === "automated").length} automated · {set.test_cases.filter((t) => t.automation === "scaffolded").length} scaffolded for automation · generated {set.tests.generated_at?.replace("T", " ")}
               </span>
-              {(["manual.docx", "manual.csv", "automation.py"] as const).map((k) => (
+              {(["manual.docx", "manual.xlsx", "manual.csv", "automation.py"] as const).map((k) => (
                 <button key={k} disabled={busy !== ""} onClick={() => job("download", () => downloadUseCaseTests(set, k))}
                   className="rounded-lg border border-slate-600 px-2.5 py-1 font-semibold text-slate-200 hover:border-sky-500">
-                  ⬇ {k === "manual.docx" ? "Manual (Word)" : k === "manual.csv" ? "Manual (CSV / Excel)" : "Automation (pytest)"}
+                  ⬇ {{ "manual.docx": "Manual (Word)", "manual.xlsx": "Manual (Excel)", "manual.csv": "CSV", "automation.py": "Automation (pytest)" }[k]}
                 </button>
               ))}
               <button onClick={() => setShowTests((v) => !v)} className="ml-auto text-slate-400 hover:text-slate-200">{showTests ? "Hide" : "Show"} them</button>

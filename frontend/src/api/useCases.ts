@@ -159,7 +159,7 @@ async function download(path: string, filename: string): Promise<void> {
 
 export const downloadUseCaseTemplate = () => download("/api/process-builder/use-case-template", "BRT360-use-case-template.docx");
 
-export function downloadUseCaseTests(set: UseCaseSetBrief, kind: "manual.docx" | "manual.csv" | "automation.py"): Promise<void> {
+export function downloadUseCaseTests(set: UseCaseSetBrief, kind: "manual.docx" | "manual.xlsx" | "manual.csv" | "automation.py"): Promise<void> {
   const stem = set.name.replace(/[^\w-]+/g, "-").toLowerCase() || "use-cases";
   const name = kind === "automation.py" ? `test_${stem.replace(/-/g, "_")}.py` : `test-cases-${stem}.${kind.split(".")[1]}`;
   return download(`${BASE}/${set.id}/tests/${kind}`, name);

@@ -17,7 +17,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException
-from fastapi.responses import HTMLResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse, Response
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.access import get_access
@@ -130,6 +130,35 @@ def report(run_id: int, download: bool = False, db: Session = Depends(get_db), t
     found = _run(db, tenant_id, run_id)
     headers = {"Content-Disposition": f'attachment; filename="{found.number}-evidence.html"'} if download else {}
     return HTMLResponse(st.report_html(db, found), headers=headers)
+
+
+@router.get("/runs/{run_id}/report.pdf")
+def report_pdf(run_id: int, all_steps: bool = False, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> Response:
+    """The evidence report as a PDF (all_steps: the steps of passed cases too)."""
+    found = _run(db, tenant_id, run_id)
+    return Response(st.report_pdf(db, found, all_steps), media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="{found.number}-evidence.pdf"'})
+
+
+@router.get("/runs/{run_id}/results.xlsx")
+def results_xlsx(run_id: int, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> Response:
+    found = _run(db, tenant_id, run_id)
+    return Response(st.results_xlsx(db, found), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": f'attachment; filename="{found.number}-results.xlsx"'})
+
+
+@router.get("/suites/{suite_id}/cases.xlsx")
+def cases_xlsx(suite_id: int, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> Response:
+    """The suite as a formatted manual test script."""
+    from app.documents import xlsx
+
+    found = _suite(db, tenant_id, suite_id)
+    rows = [["Case", "Area", "Kind", "Priority", "Title", "Steps", "Expected", "Target", "Active", "Actual result", "Pass / Fail", "Tested by"]]
+    for c in db.query(SystemTestCase).filter(SystemTestCase.suite_id == found.id).order_by(SystemTestCase.id):
+        rows.append([c.code, c.area, c.kind, c.priority, c.title, "\n".join(f"{i}. {s.get('say') or s.get('do')}" for i, s in enumerate(c.steps or [], 1)),
+                     c.expected, c.target, "yes" if c.is_active else "no", "", "", ""])
+    return Response(xlsx([("Test cases", rows)]), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": f'attachment; filename="test-cases-suite-{found.id}.xlsx"'})
 
 
 @router.post("/runs/{run_id}/cancel")

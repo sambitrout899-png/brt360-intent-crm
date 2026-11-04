@@ -104,8 +104,14 @@ export function RecordsDrawer({ entity, filters, drill, title, onClose }: { enti
               {data ? ` · ${data.total.toLocaleString()} records` : ""}
             </p>
           </div>
+          <button type="button" className={btn} onClick={() => exportCsv("records", { entity, filters, drill, columns: data?.columns.map((c) => c.key) }, `${entity}-records`, "pdf")}>
+            📄 PDF
+          </button>
+          <button type="button" className={btn} onClick={() => exportCsv("records", { entity, filters, drill, columns: data?.columns.map((c) => c.key) }, `${entity}-records`, "xlsx")}>
+            ⬇ Excel
+          </button>
           <button type="button" className={btn} onClick={() => exportCsv("records", { entity, filters, drill, columns: data?.columns.map((c) => c.key) }, `${entity}-records`)}>
-            ⬇ CSV
+            CSV
           </button>
           <button type="button" className={btn} onClick={onClose}>Close</button>
         </div>

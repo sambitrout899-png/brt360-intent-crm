@@ -327,6 +327,7 @@ def _record_type_cases(db: Session, tenant_id: int, cases: _Cases) -> list[str]:
 
 
 def _flow_cases(db: Session, tenant_id: int, cases: _Cases) -> int:
+    from app.crm_core.custom_record_service import label_of
     from app.models.flows import FlowDefinition
 
     flows = db.query(FlowDefinition).filter(FlowDefinition.tenant_id == tenant_id, FlowDefinition.is_active.is_(True)).order_by(FlowDefinition.id).all()
@@ -334,7 +335,8 @@ def _flow_cases(db: Session, tenant_id: int, cases: _Cases) -> int:
         trigger = {"state_enter": f"when a record enters {f.trigger_state}", "intent": f"{f.timing} {f.trigger_intent_type}",
                    "custom_intent": "started by people", "validation": "a validation"}.get(f.trigger_type, f.trigger_type)
         cases.add("Flows", "flow", f"Flow “{f.name}” ({trigger}) - dry run", [
-            {"do": "flow", "flow_id": f.id, "say": f"Dry-run the flow on the latest {f.entity_type or 'record'}", "expect": {"ok": True}}],
+            {"do": "flow", "flow_id": f.id, "say": f"Dry-run the flow on the latest {label_of(db, tenant_id, f.entity_type) or 'record'}",
+             "expect": {"ok": True}}],
             "Runs to its end without an unexpected error (a Reject step counts as a decision)", f"FLOW-{f.id}")
     return len(flows)
 
@@ -754,6 +756,88 @@ def cases_csv(db: Session, suite: SystemTestSuite) -> str:
         w.writerow([c.code, c.area, c.kind, c.priority, c.title, " | ".join(f"{i}. {s.get('say') or s.get('do')}" for i, s in enumerate(c.steps or [], 1)),
                     c.expected, c.target, "yes" if c.is_active else "no"])
     return out.getvalue()
+
+
+def report_pdf(db: Session, run: SystemTestRun, passed_detail: bool = False) -> bytes:
+    """The run's evidence as a PDF: summary tiles, results by area, then every failure, error and skip with each
+    step's checks (expected / actual), request and response - and the full list of cases. passed_detail: the
+    steps of passed cases too."""
+    from app.documents import STATUS, Pdf
+    from app.models.auth import User
+    from app.models.tenant import Tenant
+
+    suite = db.get(SystemTestSuite, run.suite_id)
+    tenant = db.get(Tenant, run.tenant_id)
+    starter = db.get(User, run.started_by) if run.started_by else None
+    rows = results(db, run)
+    seconds = run_out(run)["seconds"]
+    doc = Pdf(f"System test evidence - {run.number}",
+              f"{tenant.name if tenant else ''} · suite: {suite.name if suite else ''} · started by "
+              f"{(starter.name or starter.email) if starter else 'unknown'} · {str(run.started_at or run.created_at)[:16]} UTC"
+              + (f" · {seconds} s" if seconds is not None else ""))
+    doc.tiles([("Cases", run.total, None), ("Passed", run.passed, STATUS["passed"]), ("Failed", run.failed, STATUS["failed"]),
+               ("Errors", run.errors, STATUS["error"]), ("Skipped", run.skipped, STATUS["skipped"])])
+    doc.note(f"Status: {run.status.upper()}. Every case ran through the real platform - the intent pipeline with its checks, flows and rules - as "
+             "the person who started the run, inside a transaction that was rolled back: nothing was kept. Plain-English cases were understood by "
+             + ("the tenant's AI model." if (run.selection or {}).get("use_ai") else "the built-in rules (no AI model)."))
+    areas: dict[str, dict[str, int]] = {}
+    for r in rows:
+        bucket = areas.setdefault(r["case"]["area"], {"passed": 0, "failed": 0, "error": 0, "skipped": 0})
+        bucket[r["status"]] += 1
+    doc.heading("Results by area")
+    doc.table(["Area", "Passed", "Failed", "Errors", "Skipped"],
+              [[a, b["passed"], b["failed"], b["error"], b["skipped"]] for a, b in sorted(areas.items())], widths=[4, 1, 1, 1, 1], right={1, 2, 3, 4})
+    order = {"failed": 0, "error": 1, "skipped": 2, "passed": 3}
+    detailed = [r for r in sorted(rows, key=lambda x: (order.get(x["status"], 9), x["case"]["code"]))
+                if r["status"] != "passed" or passed_detail]
+    if detailed:
+        doc.heading("Evidence - " + ("every case" if passed_detail else "failures, errors and skips"))
+    for r in detailed:
+        c = r["case"]
+        doc.subheading(f"{c['code']} · {c['title']}", STATUS.get(r["status"]))
+        doc.facts([("Result", r["status"].upper()), ("Area", c["area"]), ("Kind", c["kind"].replace("_", " ")), ("Time", f"{r['duration_ms']} ms"),
+                   ("Expected", c["expected"]), ("Outcome", r["message"])])
+        for s in r["evidence"]:
+            doc.paragraph(f"Step {s.get('step')}: {s.get('say') or ''}  [{s.get('status', '')}{', ' + str(s['ms']) + ' ms' if s.get('ms') is not None else ''}]",
+                          9.5, STATUS.get(s.get("status", ""), (0.1, 0.12, 0.16)))
+            if s.get("checks"):
+                doc.table(["Check", "Expected", "Actual", "Result"],
+                          [[k["check"], json.dumps(k["expected"], default=str)[:200] if not isinstance(k["expected"], str) else k["expected"][:200],
+                            json.dumps(k["actual"], default=str)[:300] if not isinstance(k["actual"], str) else k["actual"][:300],
+                            "passed" if k["passed"] else "failed"] for k in s["checks"]], widths=[1.3, 2, 3, 0.8], status_col=3, size=7.5)
+            if s.get("note") or s.get("error"):
+                doc.note(s.get("note") or s.get("error"), (0.6, 0.45, 0.04), (1.0, 0.97, 0.9))
+            if s.get("request") is not None:
+                doc.code(json.dumps(s["request"], indent=1, default=str, ensure_ascii=False)[:1500], label="REQUEST")
+            if s.get("response") is not None:
+                doc.code(json.dumps(s["response"], indent=1, default=str, ensure_ascii=False)[:2500], label="RESPONSE")
+            if s.get("writes"):
+                doc.code(", ".join(f"{k}: {v}" for k, v in s["writes"].items()), label="WOULD HAVE WRITTEN (ROLLED BACK)")
+    doc.heading("All cases")
+    doc.table(["Case", "Title", "Area", "Kind", "Result", "ms"],
+              [[r["case"]["code"], r["case"]["title"], r["case"]["area"], r["case"]["kind"].replace("_", " "), r["status"], r["duration_ms"]]
+               for r in sorted(rows, key=lambda x: x["case"]["code"])], widths=[0.9, 4, 1.8, 1.2, 0.9, 0.6], right={5}, status_col=4, size=7.5)
+    return doc.bytes(f"BRT 360 · System test evidence {run.number}")
+
+
+def results_xlsx(db: Session, run: SystemTestRun) -> bytes:
+    from app.documents import xlsx
+
+    rows = results(db, run)
+    flat = [["Case", "Area", "Kind", "Priority", "Title", "Result", "Message", "ms", "Expected", "Steps"]]
+    for r in rows:
+        c = r["case"]
+        flat.append([c["code"], c["area"], c["kind"], c["priority"], c["title"], r["status"], r["message"], r["duration_ms"], c["expected"],
+                     " | ".join(f"{s.get('step')}. {s.get('say') or ''} [{s.get('status')}]" for s in r["evidence"])])
+    checks = [["Case", "Step", "Check", "Expected", "Actual", "Passed"]]
+    for r in rows:
+        for s in r["evidence"]:
+            for k in s.get("checks") or []:
+                checks.append([r["case"]["code"], s.get("step"), k["check"], json.dumps(k["expected"], default=str), json.dumps(k["actual"], default=str)[:500],
+                               "yes" if k["passed"] else "no"])
+    summary_rows = [["Item", "Value"], ["Run", run.number], ["Status", run.status], ["Cases", run.total], ["Passed", run.passed], ["Failed", run.failed],
+                    ["Errors", run.errors], ["Skipped", run.skipped], ["Started", str(run.started_at or "")], ["Finished", str(run.finished_at or "")]]
+    return xlsx([("Summary", summary_rows), ("Results", flat), ("Checks", checks)])
 
 
 _STYLE = """

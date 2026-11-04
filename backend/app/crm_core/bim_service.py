@@ -151,6 +151,16 @@ def reserve_ids(db: Session, entity: str, count: int) -> list[str]:
 
 def parse(content: str, fmt: str) -> list[dict[str, Any]]:
     fmt = (fmt or "csv").lower()
+    if fmt == "xlsx":  # the Excel template, filled in - sent base64-encoded; its first sheet is the data
+        import base64
+
+        from app.documents import xlsx_to_csv
+
+        try:
+            content = xlsx_to_csv(base64.b64decode(content))
+        except Exception as exc:  # noqa: BLE001 - not base64, not a zip, not a workbook: all the sender's to fix
+            raise ValueError("That Excel file can't be read - send it base64-encoded, or save it as CSV") from exc
+        fmt = "csv"
     if fmt == "json":
         data = json.loads(content)
         rows = data.get("records") if isinstance(data, dict) else data

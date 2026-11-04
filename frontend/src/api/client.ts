@@ -1801,7 +1801,7 @@ export async function bimTemplate(entity: string, rows: number): Promise<string>
   return res.text();
 }
 
-export function bimLoad(body: { entity?: string; interface_id?: number | null; content: string; format: "csv" | "json"; file_name?: string; dry_run?: boolean; apply_page_rules?: boolean }): Promise<BimJob> {
+export function bimLoad(body: { entity?: string; interface_id?: number | null; content: string; format: "csv" | "json" | "xlsx"; file_name?: string; dry_run?: boolean; apply_page_rules?: boolean }): Promise<BimJob> {
   return request<BimJob>("/api/bim/load", { method: "POST", body: JSON.stringify(body) });
 }
 
@@ -2341,6 +2341,23 @@ export async function bulkSendFile<T>(path: "/preview" | "/upload", file: Blob, 
 }
 
 /** A bulk order's results as CSV. */
+/** Downloads a generated file (PDF, Excel, Word, CSV) as it is - binary-safe, with the sign-in. */
+export async function downloadFile(path: string, filename: string, init?: { method?: string; body?: unknown }): Promise<void> {
+  const token = getAccessToken();
+  const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+  if (init?.body !== undefined) headers["Content-Type"] = "application/json";
+  const res = await fetch(`${API_BASE}${path}`, { method: init?.method ?? "GET", headers, body: init?.body !== undefined ? JSON.stringify(init.body) : undefined });
+  if (!res.ok) throw new Error(`${res.status}: ${await res.text().catch(() => "")}`);
+  const url = URL.createObjectURL(await res.blob());
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
 export async function bulkResultsCsv(id: number): Promise<string> {
   const token = getAccessToken();
   const res = await fetch(`${API_BASE}/api/bulk-orders/${id}/results.csv`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });

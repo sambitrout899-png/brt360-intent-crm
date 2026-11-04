@@ -403,39 +403,43 @@ def document(analysis: dict[str, Any]) -> bytes:
     """The solution design as a Word document - for review and sign-off."""
     from app.orchestration.process_brd import docx
 
-    blocks: list[tuple[str, str]] = [("Title", f"Solution design - {analysis.get('name') or 'New process'}"),
+    blocks: list[tuple[str, Any]] = [("Title", f"Solution design - {analysis.get('name') or 'New process'}"),
                                      ("", analysis.get("summary") or ""),
-                                     ("", f"Designed by: {analysis.get('model') or analysis.get('by') or ''}")]
+                                     ("Guidance", f"Designed by: {analysis.get('model') or analysis.get('by') or ''}")]
     where = analysis.get("placement") or {}
     blocks.append(("Heading1", "Where it goes"))
     blocks.append(("", ("Extends “" if where.get("mode") == "append" else "A new process “") + f"{where.get('label') or ''}”. {where.get('why') or ''}"))
-    blocks.append(("Heading1", "Requirements and how each is met"))
-    for c in analysis.get("coverage") or []:
-        blocks.append(("", f"{c['requirement']} - {c['text']}"))
-        blocks.append(("", "    → " + ("; ".join(c["by"]) if c["by"] else "NOT COVERED")))
+    if analysis.get("coverage"):
+        blocks.append(("Heading1", "Requirements and how each is met"))
+        blocks.append(("Table", [["Requirement", "What it asks", "Met by"]]
+                       + [[c["requirement"], c["text"], "; ".join(c["by"]) if c["by"] else "NOT COVERED"] for c in analysis["coverage"]]))
     if analysis.get("steps"):
         blocks.append(("Heading1", "Process steps"))
-        blocks += [("", f"{i}. {s['label']} ({s['code']}) - {s.get('why') or ''}") for i, s in enumerate(analysis["steps"], start=1)]
+        blocks.append(("Table", [["#", "Step", "Action", "Why"]]
+                       + [[str(i), s["label"], s["code"], s.get("why") or ""] for i, s in enumerate(analysis["steps"], start=1)]))
     if analysis.get("links"):
         blocks.append(("Heading1", "Hand-offs"))
-        blocks += [("", f"{link['from_label']} → {link['to_label']} ({'runs by itself' if link['kind'] == 'auto' else 'offered next'})"
-                        + (" - replaces what came next" if link.get("replaces_existing") else "") + (f" - {link['why']}" if link.get("why") else ""))
-                   for link in analysis["links"]]
+        blocks.append(("Table", [["From", "To", "How", "Why"]]
+                       + [[link["from_label"], link["to_label"], ("runs by itself" if link["kind"] == "auto" else "offered next")
+                           + (" - replaces what came next" if link.get("replaces_existing") else ""), link.get("why") or ""]
+                          for link in analysis["links"]]))
     comps = (analysis.get("builder") or {}).get("components") or []
     if comps:
         blocks.append(("Heading1", "Configuration"))
         for c in comps:
-            blocks.append(("", f"{c['engine']}: {c['title']}"))
-            blocks += [("", f"    - {line}") for line in c.get("lines") or []]
+            blocks.append(("Heading2", f"{c['engine']}: {c['title']}"))
+            blocks += [("Bullet", line) for line in c.get("lines") or []]
     gaps = (analysis.get("gaps") or []) + [{"need": e["need"], "why": e["why"], "effort": e["effort"], "workaround": e["workaround"], "requirement": ""}
                                            for e in (analysis.get("builder") or {}).get("engineering") or []]
     if gaps:
         blocks.append(("Heading1", "Gaps - engineering changes"))
-        blocks += [("", f"{g['need']} (effort {g['effort']}): {g['why']}" + (f" Meanwhile: {g['workaround']}" if g.get("workaround") else "")) for g in gaps]
+        blocks.append(("Table", [["Need", "Effort", "Why", "Meanwhile"]] + [[g["need"], g["effort"], g["why"], g.get("workaround") or ""] for g in gaps]))
     for title, key, fmt in (("Assumptions", "assumptions", lambda a: a["text"]), ("Alternatives considered", "alternatives",
                                                                                   lambda a: f"{a['option']} - not chosen: {a['why_not']}"),
                             ("Notes from the verification", "notes", str)):
         if analysis.get(key):
             blocks.append(("Heading1", title))
-            blocks += [("", fmt(a)) for a in analysis[key]]
+            blocks += [("Bullet", fmt(a)) for a in analysis[key]]
+    blocks += [("Heading1", "Sign-off"), ("Table", [["Role", "Name", "Signature", "Date"], ["Business owner", "", "", ""],
+                                                     ["Solution architect", "", "", ""], ["Administrator", "", "", ""]])]
     return docx(blocks)

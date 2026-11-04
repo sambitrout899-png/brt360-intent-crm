@@ -54,14 +54,27 @@ def reserve(payload: ReserveIn, db: Session = Depends(get_db)) -> dict[str, Any]
 
 
 @router.get("/template/{entity}", response_class=PlainTextResponse)
-def template(entity: str, rows: int = 0, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> str:
-    """A CSV to fill in: the entity's columns, and (rows > 0) that many lines with fresh BRT_IDs."""
+def template(entity: str, rows: int = 0, format: str = "csv", db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)):
+    """A file to fill in: the entity's columns, and (rows > 0) that many lines with fresh BRT_IDs. format=xlsx: an Excel
+    workbook - a coloured header row to fill in (loaded back as it is) and a guide to every column."""
     try:
         columns = bim_service.template_columns(db, tenant_id, entity)
         ids = bim_service.reserve_ids(db, entity, min(rows, 1000)) if rows > 0 else []
     except ValueError as exc:
         raise _bad(exc)
     db.commit()
+    if format == "xlsx":
+        from fastapi.responses import Response
+
+        from app.documents import MEDIA, xlsx
+
+        spec = next((e for e in bim_service.entities() if e["key"] == entity), {"label": entity, "columns": []})
+        helps = {c["name"]: c for c in spec["columns"]}
+        guide = [["Column", "Required", "What to put in it"]] + [
+            [c, "Yes" if helps.get(c, {}).get("required") else "", helps.get(c, {}).get("help") or "Your own field"] for c in columns]
+        data = [columns] + [[code] + [""] * (len(columns) - 1) for code in ids]
+        return Response(xlsx([(spec["label"][:31], data), ("Guide", guide)]), media_type=MEDIA["xlsx"],
+                        headers={"Content-Disposition": f'attachment; filename="bim-{entity}-template.xlsx"'})
     out = io.StringIO()
     writer = csv.writer(out)
     writer.writerow(columns)
@@ -74,7 +87,7 @@ class LoadIn(BaseModel):
     entity: str | None = None
     interface_id: int | None = None
     content: str = Field(min_length=1)
-    format: str = "csv"  # csv | json
+    format: str = "csv"  # csv | json | xlsx (the Excel template, base64-encoded)
     file_name: str | None = None
     dry_run: bool = False
     apply_page_rules: bool = True
