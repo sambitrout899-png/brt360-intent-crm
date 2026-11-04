@@ -24,9 +24,9 @@ def to_xlsx(headers: list[str], rows: list[list], sheet: str = "Report") -> byte
     return xlsx([(sheet, [headers, *rows])])
 
 
-def to_pdf(title: str, lines: list[str], headers: list[str] | None = None, rows: list[list] | None = None) -> bytes:
-    """An A4 report: the summary lines in a call-out, then the rows as a styled table."""
-    doc = Pdf(title, "Training report")
+def to_pdf(title: str, lines: list[str], headers: list[str] | None = None, rows: list[list] | None = None, brand=None) -> bytes:
+    """An A4 report: the summary lines in a call-out, then the rows as a styled table (brand: the tenant's look)."""
+    doc = Pdf(title, "Training report", brand)
     if lines:
         doc.note("\n".join(lines))
     if headers:
@@ -37,11 +37,11 @@ def to_pdf(title: str, lines: list[str], headers: list[str] | None = None, rows:
 MEDIA = {"csv": _MEDIA["csv"], "xlsx": _MEDIA["xlsx"], "pdf": _MEDIA["pdf"]}
 
 
-def export(fmt: str, title: str, headers: list[str], rows: list[list], summary: list[str]) -> tuple[bytes, str]:
+def export(fmt: str, title: str, headers: list[str], rows: list[list], summary: list[str], brand=None) -> tuple[bytes, str]:
     if fmt == "csv":
         return to_csv(headers, rows), MEDIA["csv"]
     if fmt == "xlsx":
         return to_xlsx(headers, rows), MEDIA["xlsx"]
     if fmt == "pdf":
-        return to_pdf(title, summary, headers, rows), MEDIA["pdf"]
+        return to_pdf(title, summary, headers, rows, brand), MEDIA["pdf"]
     raise ValueError("format must be csv, xlsx or pdf")

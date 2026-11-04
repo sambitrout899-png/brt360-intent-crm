@@ -103,7 +103,9 @@ def export_csv(payload: ExportIn, db: Session = Depends(get_db), access: Access 
             summary = [f"{len(rows)} row{'s' if len(rows) != 1 else ''}" + (f" · {out['total']} in all" if out.get("total") and out["total"] != len(rows) else "")]
             if out.get("narrative"):
                 summary.append(str(out["narrative"]))
-            content = table_pdf(title, f"Analytics · {payload.kind}", headers, rows[:2000], summary)
+            from app.report_design import brand
+
+            content = table_pdf(title, f"Analytics · {payload.kind}", headers, rows[:2000], summary, brand=brand(db, access.tenant_id))
         return Response(content, media_type=MEDIA[payload.format],
                         headers={"Content-Disposition": f'attachment; filename="{name}.{payload.format}"'})
     return Response(engine.to_csv(out["columns"], out["rows"]), media_type="text/csv",

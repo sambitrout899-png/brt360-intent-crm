@@ -677,7 +677,9 @@ def export(format: Literal["csv", "xlsx", "pdf"] = "csv", session_id: int | None
                  g["confidence_pre"], g["confidence_post"], g["confidence_change"]] for g in d["groups"]]
         summary = [f"Groups shown: {len(rows)}; hidden below the anonymity threshold: {d['hidden_small_groups']}"]
         name = f"compare-{group_by}"
-    content, media = exporter.export(format, title, headers, rows, summary)
+    from app.report_design import brand
+
+    content, media = exporter.export(format, title, headers, rows, summary, brand(db, user.tenant_id) if format == "pdf" else None)
     policy.audit(db, user.tenant_id, user.id, "analytics.export", "training_report", name, None, {"format": format})
     db.commit()
     return Response(content, media_type=media, headers={"Content-Disposition": f'attachment; filename="{name}.{format}"'})

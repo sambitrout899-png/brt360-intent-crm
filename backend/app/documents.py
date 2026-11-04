@@ -397,11 +397,228 @@ def wrap(text: str, avail: float, size: float, bold: bool = False, mono: bool = 
 _wrap = wrap
 
 
-class Pdf:
-    """A paginated A4 document in the house style. Blocks keep their own space (need) and break pages cleanly."""
+# ---------------------------------------------------------------- the tenant's look (Admin -> Report Design)
 
-    def __init__(self, title: str, subtitle: str = ""):
+PAGE_SIZES = {"A4": (595, 842), "Letter": (612, 792)}
+HEADER_STYLES = ("band", "tint", "clean")  # a solid colour band / a pale tint with a coloured edge / white with a coloured rule
+
+
+def rgb_of(hex_colour: str | None, default: tuple[float, float, float] = ACCENT) -> tuple[float, float, float]:
+    value = (hex_colour or "").strip().lstrip("#")
+    if not re.fullmatch(r"[0-9a-fA-F]{6}", value):
+        return default
+    return tuple(int(value[i:i + 2], 16) / 255 for i in (0, 2, 4))  # type: ignore[return-value]
+
+
+def _mix(a: tuple[float, float, float], b: tuple[float, float, float], t: float) -> tuple[float, float, float]:
+    return tuple(x + (y - x) * t for x, y in zip(a, b))  # type: ignore[return-value]
+
+
+def _luminance(rgb: tuple[float, float, float]) -> float:
+    return 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]
+
+
+class Image:
+    """A logo ready for a PDF page: the image XObject (and its alpha mask) and its pixel size."""
+
+    def __init__(self, width: int, height: int, colour_space: str, bits: int, data: bytes, filters: str,
+                 parms: str = "", smask: bytes | None = None, extra: str = ""):
+        self.width, self.height = width, height
+        self.colour_space, self.bits, self.data, self.filters, self.parms, self.smask, self.extra = colour_space, bits, data, filters, parms, smask, extra
+
+    def objects(self, own_number: int) -> list[bytes]:
+        """[smask?, image] as PDF objects; the image is the last one (number own_number, its mask own_number - 1)."""
+        out: list[bytes] = []
+        mask_ref = ""
+        if self.smask is not None:
+            out.append(f"<< /Type /XObject /Subtype /Image /Width {self.width} /Height {self.height} /ColorSpace /DeviceGray "
+                       f"/BitsPerComponent 8 /Filter /FlateDecode /Length {len(self.smask)} >>\nstream\n".encode() + self.smask + b"\nendstream")
+            mask_ref = f" /SMask {own_number - 1} 0 R"
+        parms = f" /DecodeParms {self.parms}" if self.parms else ""
+        out.append(f"<< /Type /XObject /Subtype /Image /Width {self.width} /Height {self.height} /ColorSpace {self.colour_space} "
+                   f"/BitsPerComponent {self.bits} /Filter {self.filters}{parms}{mask_ref}{self.extra} /Length {len(self.data)} >>\nstream\n".encode()
+                   + self.data + b"\nendstream")
+        return out
+
+    def fit(self, max_w: float, max_h: float) -> tuple[float, float]:
+        scale = min(max_w / self.width, max_h / self.height)
+        return self.width * scale, self.height * scale
+
+
+def _jpeg(data: bytes) -> Image:
+    pos = 2
+    while pos + 9 < len(data):
+        if data[pos] != 0xFF:
+            pos += 1
+            continue
+        marker = data[pos + 1]
+        if marker in (0xD8, 0x01) or 0xD0 <= marker <= 0xD7 or marker == 0xFF:
+            pos += 1 if marker == 0xFF else 2
+            continue
+        length = int.from_bytes(data[pos + 2:pos + 4], "big")
+        if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
+            height, width_px, comps = int.from_bytes(data[pos + 5:pos + 7], "big"), int.from_bytes(data[pos + 7:pos + 9], "big"), data[pos + 9]
+            space = {1: "/DeviceGray", 3: "/DeviceRGB", 4: "/DeviceCMYK"}.get(comps)
+            if not space or not width_px or not height:
+                break
+            decode = " /Decode [1 0 1 0 1 0 1 0]" if comps == 4 else ""  # Adobe CMYK JPEGs are stored inverted
+            return Image(width_px, height, space, 8, data, "/DCTDecode", extra=decode)
+        pos += 2 + length
+    raise ValueError("the JPEG image could not be read")
+
+
+def _unfilter(raw: bytes, stride: int, bpp: int, rows: int) -> bytearray:
+    out = bytearray(stride * rows)
+    prev = bytearray(stride)
+    p = 0
+    for y in range(rows):
+        kind = raw[p]
+        line = bytearray(raw[p + 1:p + 1 + stride])
+        p += 1 + stride
+        if kind == 1:
+            for i in range(bpp, stride):
+                line[i] = (line[i] + line[i - bpp]) & 255
+        elif kind == 2:
+            line = bytearray((a + b) & 255 for a, b in zip(line, prev))
+        elif kind == 3:
+            for i in range(stride):
+                line[i] = (line[i] + (((line[i - bpp] if i >= bpp else 0) + prev[i]) >> 1)) & 255
+        elif kind == 4:
+            for i in range(stride):
+                a = line[i - bpp] if i >= bpp else 0
+                b = prev[i]
+                c = prev[i - bpp] if i >= bpp else 0
+                pa, pb, pc = abs(b - c), abs(a - c), abs(a + b - 2 * c)
+                line[i] = (line[i] + (a if pa <= pb and pa <= pc else b if pb <= pc else c)) & 255
+        out[y * stride:(y + 1) * stride] = line
+        prev = line
+    return out
+
+
+def _png(data: bytes) -> Image:
+    import zlib
+
+    pos, idat, palette, trns = 8, [], b"", None
+    width_px = height = depth = ctype = interlace = 0
+    while pos + 8 <= len(data):
+        length = int.from_bytes(data[pos:pos + 4], "big")
+        kind, body = data[pos + 4:pos + 8], data[pos + 8:pos + 8 + length]
+        pos += 12 + length
+        if kind == b"IHDR":
+            width_px, height = int.from_bytes(body[0:4], "big"), int.from_bytes(body[4:8], "big")
+            depth, ctype, interlace = body[8], body[9], body[12]
+        elif kind == b"PLTE":
+            palette = body
+        elif kind == b"tRNS":
+            trns = body
+        elif kind == b"IDAT":
+            idat.append(body)
+        elif kind == b"IEND":
+            break
+    if not width_px or not height or not idat:
+        raise ValueError("the PNG image could not be read")
+    if interlace:
+        raise ValueError("interlaced PNGs aren't supported - save the logo again without interlacing")
+    if width_px * height > 4_000_000:
+        raise ValueError("the logo is too large - at most 4 megapixels (a logo of 1000 x 400 is plenty)")
+    channels = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}.get(ctype)
+    if channels is None:
+        raise ValueError("unknown PNG colour type")
+    stream = b"".join(idat)
+    colours = {0: 1, 2: 3, 3: 1, 4: 1, 6: 3}[ctype]
+    space = "/DeviceGray" if colours == 1 else "/DeviceRGB"
+    if ctype == 3:
+        space = f"[/Indexed /DeviceRGB {len(palette) // 3 - 1} <{palette.hex()}>]"
+    # no transparency: the compressed data goes in as it is (PDF undoes the PNG row filters itself)
+    if ctype in (0, 2, 3) and depth <= 8 and (trns is None or ctype != 3):
+        parms = f"<< /Predictor 15 /Colors {colours} /BitsPerComponent {depth} /Columns {width_px} >>"
+        return Image(width_px, height, space, depth, stream, "/FlateDecode", parms)
+    # transparency: decode, then the colour and the alpha go in separately (the alpha as a soft mask)
+    bits_pp = channels * depth
+    stride = (width_px * bits_pp + 7) // 8
+    px = _unfilter(zlib.decompress(stream), stride, max(1, bits_pp // 8), height)
+    if depth == 16:
+        px, depth = px[0::2], 8
+        stride //= 2
+    if ctype == 3:
+        if depth < 8:  # unpack 1/2/4-bit palette indices to one byte each
+            per, mask, unpacked = 8 // depth, (1 << depth) - 1, bytearray()
+            for y in range(height):
+                row = px[y * stride:(y + 1) * stride]
+                unpacked += bytes((row[i // per] >> (8 - depth * (i % per + 1))) & mask for i in range(width_px))
+            px = unpacked
+        table = bytes((trns[i] if i < len(trns or b"") else 255) for i in range(256))
+        return Image(width_px, height, space, 8, zlib.compress(bytes(px)), "/FlateDecode", smask=zlib.compress(bytes(px).translate(table)))
+    if ctype in (0, 2):  # 16-bit without alpha
+        return Image(width_px, height, space, 8, zlib.compress(bytes(px)), "/FlateDecode")
+    if ctype == 4:
+        return Image(width_px, height, space, 8, zlib.compress(bytes(px[0::2])), "/FlateDecode", smask=zlib.compress(bytes(px[1::2])))
+    rgb = bytearray(width_px * height * 3)
+    rgb[0::3], rgb[1::3], rgb[2::3] = px[0::4], px[1::4], px[2::4]
+    return Image(width_px, height, space, 8, zlib.compress(bytes(rgb)), "/FlateDecode", smask=zlib.compress(bytes(px[3::4])))
+
+
+_IMAGES: dict[int, Image] = {}
+
+
+def image(data: bytes) -> Image:
+    """A PNG or JPEG for a PDF page (ValueError with the reason otherwise). Decoded once per image."""
+    key = hash(data)
+    if key not in _IMAGES:
+        if data[:8] == b"\x89PNG\r\n\x1a\n":
+            found = _png(data)
+        elif data[:2] == b"\xff\xd8":
+            found = _jpeg(data)
+        elif data[:4] == b"GIF8" or data[8:12] == b"WEBP" or b"<svg" in data[:500]:
+            raise ValueError("PDF reports can show a PNG or JPEG logo - this one is a GIF, WebP or SVG")
+        else:
+            raise ValueError("the logo isn't a PNG or JPEG image")
+        if len(_IMAGES) > 32:
+            _IMAGES.clear()
+        _IMAGES[key] = found
+    return _IMAGES[key]
+
+
+def image_from_data_url(data_url: str | None) -> Image:
+    import base64
+
+    match = re.match(r"^data:image/[\w.+-]+;base64,(.*)$", (data_url or "").strip(), re.S)
+    if not match:
+        raise ValueError("no image")
+    return image(base64.b64decode(match.group(1)))
+
+
+class Brand:
+    """How a tenant's PDF reports look. Brand() is the BRT 360 house look."""
+
+    def __init__(self, company: str = "BRT 360", accent: tuple[float, float, float] = ACCENT, logo: Image | None = None,
+                 header: str = "band", logo_position: str = "left", tagline: str = "", footer: str = "",
+                 confidentiality: str = "", watermark: str = "", generated: bool = True, page_size: str = "A4"):
+        self.company, self.accent, self.logo = plain(company) or "BRT 360", accent, logo
+        self.header = header if header in HEADER_STYLES else "band"
+        self.logo_position = "right" if logo_position == "right" else "left"
+        self.tagline, self.footer, self.confidentiality, self.watermark = plain(tagline), plain(footer), plain(confidentiality), plain(watermark)
+        self.generated = generated
+        self.size = PAGE_SIZES.get(page_size, PAGE_SIZES["A4"])
+        dark_accent = _luminance(accent) < 0.6
+        self.dark = _mix(accent, (0, 0, 0), 0.32) if dark_accent else _mix(accent, (0, 0, 0), 0.55)
+        self.light = _mix(accent, (1, 1, 1), 0.88)
+        self.on_accent = (1, 1, 1) if dark_accent else TEXT  # text on an accent fill stays readable for a pale accent
+        self.ink = accent if dark_accent else self.dark  # accent-coloured text on white
+
+
+HOUSE = Brand()
+
+
+class Pdf:
+    """A paginated A4 (or Letter) document in the house style - or the tenant's (brand). Blocks keep their own
+    space (need) and break pages cleanly."""
+
+    def __init__(self, title: str, subtitle: str = "", brand: Brand | None = None):
         self.title, self.subtitle = plain(title), plain(subtitle)
+        self.brand = brand or HOUSE
+        self.W, self.H = self.brand.size
+        self.accent, self.dark, self.light = self.brand.accent, self.brand.dark, self.brand.light
         self.pages: list[list[str]] = []
         self.y = 0.0
         self._page()
@@ -410,17 +627,77 @@ class Pdf:
     def _page(self) -> None:
         self.ops: list[str] = []
         self.pages.append(self.ops)
+        b = self.brand
         first = len(self.pages) == 1
-        height = 70 if first else 34
-        self.rect(0, _PAGE_H - height, _PAGE_W, height, ACCENT)
-        self.rect(0, _PAGE_H - height - 3, _PAGE_W, 3, ACCENT_DARK)
-        if first:
-            self.text(_MARGIN, _PAGE_H - 38, self.title, 18, True, (1, 1, 1))
-            self.text(_MARGIN, _PAGE_H - 56, self.subtitle, 9, False, (0.85, 0.92, 0.97))
-            self.y = _PAGE_H - 100
+        logo = b.logo
+        height = (84 if logo else 70) if first else 34
+        top = self.H
+        if b.header == "band":
+            self.rect(0, top - height, self.W, height, self.accent)
+            self.rect(0, top - height - 3, self.W, 3, self.dark)
+            title_rgb, sub_rgb = b.on_accent, _mix(b.on_accent, self.accent, 0.25)
+        elif b.header == "tint":
+            self.rect(0, top - height, self.W, height, self.light)
+            self.rect(0, top - height - 3, self.W, 3, self.accent)
+            title_rgb, sub_rgb = self.dark, MUTED
         else:
-            self.text(_MARGIN, _PAGE_H - 22, self.title, 10, True, (1, 1, 1))
-            self.y = _PAGE_H - 62
+            self.rect(_MARGIN, top - height - 2, self.W - 2 * _MARGIN, 1.5, self.accent)
+            title_rgb, sub_rgb = self.dark, MUTED
+        left, right = _MARGIN, self.W - _MARGIN
+        # the logo (on a white plate over a colour band, so any logo reads)
+        if logo:
+            box_h = 44 if first else 20
+            w, h = logo.fit(150 if first else 80, box_h)
+            x = left if b.logo_position == "left" else right - w
+            y = top - (height + h) / 2
+            if b.header == "band":
+                pad = 5 if first else 3
+                self.rect(x - pad, y - pad, w + 2 * pad, h + 2 * pad, (1, 1, 1))
+            self.ops.append(f"q {w:.2f} 0 0 {h:.2f} {x:.2f} {y:.2f} cm /Logo Do Q")
+            if b.logo_position == "left":
+                left = x + w + (18 if first else 12)
+            else:
+                right = x - (18 if first else 12)
+        # the company (and tagline): top right - or, with the logo on the right, a line under the subtitle
+        company_w, under = 0.0, ""
+        if logo and b.logo_position == "right" and first:
+            under = " · ".join(t for t in (b.company, b.tagline) if t)
+            title_top = top - 34
+        else:
+            if first or not logo:
+                lines = [(b.company, 9 if first else 7.5, True)] + ([(b.tagline, 7.5, False)] if b.tagline and first else [])
+                for i, (value, size, bold) in enumerate(lines):
+                    value = _clip(value, 220, size, bold)
+                    w = width(value, size, bold)
+                    company_w = max(company_w, w)
+                    self.text(right - w, top - (30 if first else 21) - i * 12, value, size, bold, title_rgb if i == 0 else sub_rgb)
+            title_top = (top - (44 if logo else 38)) if first else top - 22
+        title_avail = right - left - (company_w + 16 if company_w else 0)
+        if first:
+            size = 18
+            while size > 11 and width(self.title, size, True) > title_avail:
+                size -= 1
+            self.text(left, title_top, _clip(self.title, title_avail, size, True), size, True, title_rgb)
+            self.text(left, title_top - 18, _clip(self.subtitle, right - left, 9), 9, False, sub_rgb)
+            if under:
+                self.text(left, title_top - 34, _clip(under, title_avail, 7.5, True), 7.5, True, sub_rgb)
+            self.y = top - height - 30
+        else:
+            self.text(left, title_top, _clip(self.title, title_avail, 10, True), 10, True, title_rgb)
+            self.y = top - 62
+
+    def _watermark(self, value: str) -> None:
+        """Large diagonal text across the page, drawn see-through over the content."""
+        size = 72
+        while size > 24 and width(value, size, True) > self.H * 0.75:
+            size -= 4
+        w = width(value, size, True)
+        c = 0.7071
+        cx, cy = self.W / 2, self.H / 2
+        x0, y0 = cx - c * w / 2 + c * size / 3, cy - c * w / 2 - c * size / 3
+        r, g, bl = self.dark
+        self.ops.append(f"q /Seethrough gs {r:.3f} {g:.3f} {bl:.3f} rg BT /F2 {size} Tf {c} {c} {-c} {c} {x0:.1f} {y0:.1f} Tm "
+                        f"({_enc(value)}) Tj ET Q")
 
     def rect(self, x: float, y: float, w: float, h: float, rgb: tuple[float, float, float]) -> None:
         self.ops.append(f"{rgb[0]:.3f} {rgb[1]:.3f} {rgb[2]:.3f} rg {x:.1f} {y:.1f} {w:.1f} {h:.1f} re f")
@@ -446,17 +723,17 @@ class Pdf:
     def heading(self, value: str) -> None:
         self.need(40)
         self.y -= 10
-        self.rect(_MARGIN, self.y - 4, 4, 16, ACCENT)
-        self.text(_MARGIN + 10, self.y, value, 13, True, ACCENT_DARK)
+        self.rect(_MARGIN, self.y - 4, 4, 16, self.accent)
+        self.text(_MARGIN + 10, self.y, value, 13, True, self.dark)
         self.y -= 8
-        self.line(_MARGIN, self.y, _PAGE_W - _MARGIN, self.y, ACCENT)
+        self.line(_MARGIN, self.y, self.W - _MARGIN, self.y, self.accent)
         self.y -= 16
 
-    def subheading(self, value: str, rgb=ACCENT) -> None:
+    def subheading(self, value: str, rgb=None) -> None:
         self.need(30)
         self.y -= 4
-        for line in wrap(value, _PAGE_W - 2 * _MARGIN, 11, True):
-            self.text(_MARGIN, self.y, line, 11, True, rgb)
+        for line in wrap(value, self.W - 2 * _MARGIN, 11, True):
+            self.text(_MARGIN, self.y, line, 11, True, rgb or self.brand.ink)
             self.y -= 14
         self.y -= 2
 
@@ -465,28 +742,28 @@ class Pdf:
             if not raw.strip():
                 self.y -= size * 0.7
                 continue
-            for line in wrap(raw, _PAGE_W - 2 * _MARGIN - indent, size):
+            for line in wrap(raw, self.W - 2 * _MARGIN - indent, size):
                 self.need(size + 4)
                 self.text(_MARGIN + indent, self.y, line, size, False, rgb)
                 self.y -= size + 4
         self.y -= 4
 
-    def note(self, value: str, rgb=ACCENT, fill=ACCENT_LIGHT) -> None:
+    def note(self, value: str, rgb=None, fill=None) -> None:
         """A shaded call-out with a coloured edge."""
-        lines = wrap(value, _PAGE_W - 2 * _MARGIN - 20, 9.5)
+        lines = wrap(value, self.W - 2 * _MARGIN - 20, 9.5)
         height = 10 + 13 * len(lines)
         self.need(height + 6)
-        self.rect(_MARGIN, self.y - height + 12, _PAGE_W - 2 * _MARGIN, height, fill)
-        self.rect(_MARGIN, self.y - height + 12, 3, height, rgb)
+        self.rect(_MARGIN, self.y - height + 12, self.W - 2 * _MARGIN, height, fill or self.light)
+        self.rect(_MARGIN, self.y - height + 12, 3, height, rgb or self.accent)
         for n, line in enumerate(lines):
             self.text(_MARGIN + 12, self.y - n * 13, line, 9.5, False, TEXT)
         self.y -= height + 8
 
     def bullets(self, items: Iterable[str], size: float = 10) -> None:
         for item in items:
-            lines = wrap(str(item), _PAGE_W - 2 * _MARGIN - 14, size)
+            lines = wrap(str(item), self.W - 2 * _MARGIN - 14, size)
             self.need(len(lines) * (size + 4))
-            self.rect(_MARGIN + 2, self.y + 2.5, 3.5, 3.5, ACCENT)
+            self.rect(_MARGIN + 2, self.y + 2.5, 3.5, 3.5, self.accent)
             for line in lines:
                 self.text(_MARGIN + 14, self.y, line, size)
                 self.y -= size + 4
@@ -495,7 +772,7 @@ class Pdf:
     def facts(self, rows: list[tuple[str, Any]]) -> None:
         """Two columns of label / value pairs."""
         rows = [(k, v) for k, v in rows if v not in (None, "")]
-        col_w = (_PAGE_W - 2 * _MARGIN) / 2
+        col_w = (self.W - 2 * _MARGIN) / 2
         for i in range(0, len(rows), 2):
             pair = rows[i:i + 2]
             wrapped = [wrap(str(value), col_w - 12, 10) for _, value in pair]
@@ -514,12 +791,12 @@ class Pdf:
         if not items:
             return
         gap = 8
-        w = (_PAGE_W - 2 * _MARGIN - gap * (len(items) - 1)) / len(items)
+        w = (self.W - 2 * _MARGIN - gap * (len(items) - 1)) / len(items)
         self.need(56)
         for i, (label, value, rgb) in enumerate(items):
             x = _MARGIN + i * (w + gap)
             self.rect(x, self.y - 40, w, 50, BAND)
-            self.rect(x, self.y + 7, w, 3, rgb or ACCENT)
+            self.rect(x, self.y + 7, w, 3, rgb or self.accent)
             self.text(x + 8, self.y - 4, str(label).upper(), 7, True, MUTED)
             self.text(x + 8, self.y - 28, value, 18, True, rgb or TEXT)
         self.y -= 62
@@ -528,10 +805,11 @@ class Pdf:
               status_col: int | None = None, size: float = 9) -> None:
         """A table with a coloured header row (repeated on a new page), banded rows; status_col colours that column."""
         right = right or set()
-        total = _PAGE_W - 2 * _MARGIN
+        total = self.W - 2 * _MARGIN
         widths = widths or [1.0] * len(headers)
         scale = total / sum(widths)
         widths = [w * scale for w in widths]
+        head = self.accent
 
         def row(cells: list[Any], bold: bool, shade=None) -> None:
             wrapped = [wrap(str(cell if cell is not None else ""), widths[i] - 8, size, bold) for i, cell in enumerate(cells)]
@@ -539,12 +817,12 @@ class Pdf:
             if self.y - height - 2 < 60:
                 self._page()
                 if not bold:
-                    row(headers, True, ACCENT)
+                    row(headers, True, head)
             if shade:
                 self.rect(_MARGIN, self.y - height + size + 3, total, height, shade)
             x = _MARGIN
             for i, lines in enumerate(wrapped):
-                colour = (1, 1, 1) if shade == ACCENT else TEXT
+                colour = self.brand.on_accent if shade is head else TEXT
                 cell_bold = bold
                 if status_col == i and not bold:
                     colour = STATUS.get(str(cells[i]).lower(), TEXT)
@@ -555,10 +833,10 @@ class Pdf:
                 x += widths[i]
             self.y -= height
 
-        row(headers, True, ACCENT)
+        row(headers, True, head)
         for n, cells in enumerate(rows):
             row(list(cells), False, BAND if n % 2 else None)
-        self.line(_MARGIN, self.y + size, _PAGE_W - _MARGIN, self.y + size)
+        self.line(_MARGIN, self.y + size, self.W - _MARGIN, self.y + size)
         self.y -= 6
 
     def code(self, value: str, size: float = 7.5, label: str = "") -> None:
@@ -568,7 +846,7 @@ class Pdf:
             self.text(_MARGIN, self.y, label, 7.5, True, MUTED)
             self.y -= 11
         lines: list[str] = []
-        avail = _PAGE_W - 2 * _MARGIN - 16
+        avail = self.W - 2 * _MARGIN - 16
         for raw in str(value or "").replace("\t", "  ").split("\n"):
             indent = " " * (len(raw) - len(raw.lstrip(" ")))  # keep the indentation of JSON and code
             body = wrap(raw.strip(" "), avail - width(indent, size, mono=True), size, mono=True) or [""]
@@ -579,7 +857,7 @@ class Pdf:
                 fit = max(1, int((self.y - 70) // (size + 2.5)))
                 part, chunk = chunk[:fit], chunk[fit:]
                 height = 8 + (size + 2.5) * len(part)
-                self.rect(_MARGIN, self.y - height + size + 3, _PAGE_W - 2 * _MARGIN, height, BAND)
+                self.rect(_MARGIN, self.y - height + size + 3, self.W - 2 * _MARGIN, height, BAND)
                 for n, line in enumerate(part):
                     self.text(_MARGIN + 8, self.y - n * (size + 2.5), line, size, False, (0.2, 0.24, 0.3), mono=True)
                 self.y -= height + 2
@@ -591,33 +869,62 @@ class Pdf:
         for label, value, strong in rows:
             self.need(18)
             size = 11 if strong else 9.5
-            right_edge = _PAGE_W - _MARGIN - 4
+            right_edge = self.W - _MARGIN - 4
             self.text(right_edge - 170, self.y, label, size, strong, TEXT if strong else MUTED)
             self.text(right_edge - width(value, size, strong), self.y, value, size, strong)
             self.y -= 16
         self.y -= 6
 
     # -- output
+    def footer_text(self, footer: str = "") -> str:
+        """The tenant's footer (placeholders {company} {title} {date}), else the document's own, else "company · title"."""
+        import datetime as _dt
+
+        b = self.brand
+        now = _dt.datetime.now(_dt.timezone.utc)
+        if b.footer:
+            text = b.footer
+            for key, value in (("{company}", b.company), ("{title}", self.title), ("{date}", now.strftime("%d %b %Y"))):
+                text = text.replace(key, value)
+        else:
+            text = plain(footer) or f"{b.company} · {self.title}"
+            if b is not HOUSE and text.startswith("BRT 360 · ") and b.company != "BRT 360":
+                text = f"{b.company} · {text[len('BRT 360 · '):]}"
+        if b.generated:
+            text += f" · Generated {now.strftime('%d %b %Y %H:%M')} UTC"
+        return text
+
     def bytes(self, footer: str = "") -> bytes:
-        footer = plain(footer or f"BRT 360 · {self.title}")
+        footer = self.footer_text(footer)
         count = len(self.pages)
+        b = self.brand
         for n, ops in enumerate(self.pages, start=1):
             self.ops = ops
-            self.line(_MARGIN, 44, _PAGE_W - _MARGIN, 44)
-            self.text(_MARGIN, 32, footer, 7.5, False, MUTED)
+            self.line(_MARGIN, 44, self.W - _MARGIN, 44, self.accent if b is not HOUSE else RULE)
             label = f"Page {n} of {count}"
-            self.text(_PAGE_W - _MARGIN - width(label, 7.5), 32, label, 7.5, False, MUTED)
+            self.text(_MARGIN, 32, _clip(footer, self.W - 2 * _MARGIN - width(label, 7.5) - 16, 7.5), 7.5, False, MUTED)
+            self.text(self.W - _MARGIN - width(label, 7.5), 32, label, 7.5, False, MUTED)
+            if b.confidentiality:
+                self.text(_MARGIN, 21, _clip(b.confidentiality, self.W - 2 * _MARGIN, 7, True), 7, True, self.dark)
+            if b.watermark:
+                self._watermark(b.watermark)
         objects: list[bytes] = [b"<< /Type /Catalog /Pages 2 0 R >>", b"",
                                 b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
                                 b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>",
                                 b"<< /Type /Font /Subtype /Type1 /BaseFont /Courier /Encoding /WinAnsiEncoding >>",
-                                f"<< /Producer (BRT 360) /Title ({_enc(self.title)}) >>".encode("cp1252", "replace")]
+                                f"<< /Producer ({_enc(b.company)} - BRT 360) /Author ({_enc(b.company)}) /Title ({_enc(self.title)}) >>".encode("cp1252", "replace")]
+        xobjects = ""
+        if b.logo is not None:
+            for obj in b.logo.objects(len(objects) + (2 if b.logo.smask is not None else 1)):
+                objects.append(obj)
+            xobjects = f" /XObject << /Logo {len(objects)} 0 R >>"
+        states = " /ExtGState << /Seethrough << /Type /ExtGState /ca 0.09 >> >>" if b.watermark else ""
         kids = []
         for ops in self.pages:
             stream = "\n".join(ops).encode("cp1252", "replace")
             page_id = len(objects) + 1
-            objects.append(f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {_PAGE_W} {_PAGE_H}] /Resources << /Font << /F1 3 0 R "
-                           f"/F2 4 0 R /F3 5 0 R >> >> /Contents {page_id + 1} 0 R >>".encode())
+            objects.append(f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {self.W} {self.H}] /Resources << /Font << /F1 3 0 R "
+                           f"/F2 4 0 R /F3 5 0 R >>{xobjects}{states} >> /Contents {page_id + 1} 0 R >>".encode())
             objects.append(b"<< /Length " + str(len(stream)).encode() + b" >>\nstream\n" + stream + b"\nendstream")
             kids.append(f"{page_id} 0 R")
         objects[1] = f"<< /Type /Pages /Kids [{' '.join(kids)}] /Count {count} >>".encode()
@@ -635,10 +942,20 @@ class Pdf:
         return out.getvalue()
 
 
+def _clip(text: str, avail: float, size: float, bold: bool = False) -> str:
+    """The text cut with "..." to fit one line."""
+    text = plain(text)
+    if width(text, size, bold) <= avail:
+        return text
+    while text and width(text + "...", size, bold) > avail:
+        text = text[:-1]
+    return text.rstrip() + "..."
+
+
 def table_pdf(title: str, subtitle: str, headers: list[str], rows: list[list[Any]], summary: list[str] | None = None,
-              status_col: int | None = None, widths: list[float] | None = None) -> bytes:
+              status_col: int | None = None, widths: list[float] | None = None, brand: Brand | None = None) -> bytes:
     """A report as a PDF: a summary, then the rows as a styled table."""
-    doc = Pdf(title, subtitle)
+    doc = Pdf(title, subtitle, brand)
     if summary:
         doc.note("\n".join(summary))
     doc.table(headers, [["" if v is None else v for v in r] for r in rows], widths=widths, status_col=status_col, size=8)

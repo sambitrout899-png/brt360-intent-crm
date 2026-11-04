@@ -660,10 +660,12 @@ def results_xlsx(db: Session, bulk: BulkOrder) -> bytes:
 def results_pdf(db: Session, bulk: BulkOrder) -> bytes:
     """The request as a PDF report: its counts, then every row with its stage, orders, assets and outcome."""
     from app.documents import STATUS, Pdf
+    from app.report_design import brand
 
     s = summary(db, bulk)
     counts = s.get("counts") or {}
-    doc = Pdf(f"Bulk order {bulk.number}", f"{bulk.name} · {PROCESS_INFO[bulk.process]['label']} · {str(bulk.created_at)[:16]} UTC")
+    doc = Pdf(f"Bulk order {bulk.number}", f"{bulk.name} · {PROCESS_INFO[bulk.process]['label']} · {str(bulk.created_at)[:16]} UTC",
+              brand(db, bulk.tenant_id))
     done = sum(v for k, v in counts.items() if k in FINAL_STAGES)
     doc.tiles([("Rows", sum(counts.values()), None), ("Completed", counts.get("completed", 0), STATUS["completed"]),
                ("Failed", counts.get("failed", 0) + counts.get("invalid", 0), STATUS["failed"]),

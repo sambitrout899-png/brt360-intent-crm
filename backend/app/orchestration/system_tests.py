@@ -765,6 +765,7 @@ def report_pdf(db: Session, run: SystemTestRun, passed_detail: bool = False) -> 
     from app.documents import STATUS, Pdf
     from app.models.auth import User
     from app.models.tenant import Tenant
+    from app.report_design import brand
 
     suite = db.get(SystemTestSuite, run.suite_id)
     tenant = db.get(Tenant, run.tenant_id)
@@ -774,7 +775,7 @@ def report_pdf(db: Session, run: SystemTestRun, passed_detail: bool = False) -> 
     doc = Pdf(f"System test evidence - {run.number}",
               f"{tenant.name if tenant else ''} · suite: {suite.name if suite else ''} · started by "
               f"{(starter.name or starter.email) if starter else 'unknown'} · {str(run.started_at or run.created_at)[:16]} UTC"
-              + (f" · {seconds} s" if seconds is not None else ""))
+              + (f" · {seconds} s" if seconds is not None else ""), brand(db, run.tenant_id))
     doc.tiles([("Cases", run.total, None), ("Passed", run.passed, STATUS["passed"]), ("Failed", run.failed, STATUS["failed"]),
                ("Errors", run.errors, STATUS["error"]), ("Skipped", run.skipped, STATUS["skipped"])])
     doc.note(f"Status: {run.status.upper()}. Every case ran through the real platform - the intent pipeline with its checks, flows and rules - as "

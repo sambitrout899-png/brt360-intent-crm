@@ -81,7 +81,9 @@ def audit_export(
     else:
         filters = ", ".join(f"{k}: {v}" for k, v in (("search", q), ("status", status), ("action", code), ("channel", channel), ("record", record),
                                                      ("last days", days)) if v)
-        doc = Pdf("Audit trail", f"{len(rows)} entries · {filters or 'no filters'} · exported {stamp}")
+        from app.report_design import brand
+
+        doc = Pdf("Audit trail", f"{len(rows)} entries · {filters or 'no filters'} · exported {stamp}", brand(db, tenant_id))
         counts = {s: sum(1 for r in rows if r[5] == s) for s in ("done", "failed", "review")}
         doc.tiles([("Entries", len(rows), None), ("Done", counts["done"], STATUS["passed"]), ("Failed", counts["failed"], STATUS["failed"]),
                    ("Review", counts["review"], STATUS["skipped"])])

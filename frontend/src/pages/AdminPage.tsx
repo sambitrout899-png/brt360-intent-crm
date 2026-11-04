@@ -85,8 +85,9 @@ import AdminCommsSection from "./AdminCommsSection";
 import AdminProductModelSection from "./AdminProductModelSection";
 import AdminLicensesSection from "./AdminLicensesSection";
 import AttributeLibrary from "./AdminAttributeLibrary";
+import AdminReportDesignSection from "./AdminReportDesignSection";
 
-type Section = "releases" | "functionmap" | "conflicts" | "org" | "access" | "intents" | "pages" | "bim" | "productmodel" | "lifecycle" | "assignment" | "customfields" | "recordtypes" | "flows" | "approvals" | "broadcasts" | "roles" | "pricelists" | "productconfig" | "sla" | "attributes" | "identity" | "ponr" | "feasibility" | "orchestration" | "ai" | "users" | "tests" | "ordermgmt" | "fulfillment" | "comms" | "quotedocs" | "licenses";
+type Section = "releases" | "functionmap" | "conflicts" | "org" | "access" | "intents" | "pages" | "bim" | "productmodel" | "lifecycle" | "assignment" | "customfields" | "recordtypes" | "flows" | "approvals" | "broadcasts" | "roles" | "pricelists" | "productconfig" | "sla" | "attributes" | "identity" | "ponr" | "feasibility" | "orchestration" | "ai" | "users" | "tests" | "ordermgmt" | "fulfillment" | "comms" | "quotedocs" | "licenses" | "reportdesign";
 
 const CLOCK_STATUS_STYLES: Record<string, string> = {
   running: "bg-sky-500/15 text-sky-400 border-sky-500/30",
@@ -1252,6 +1253,7 @@ const NAV: NavGroup[] = [
     items: [
       { id: "licenses", label: "Licenses & Billing", icon: "💳", hint: "Your subscription, seats and who holds them, limits, invoices - ask for more", wide: "lg" },
       { id: "releases", label: "Releases & Workspaces", icon: "🚀", hint: "Admins' workspaces, locks, and the releases the root administrator deploys or rolls back", wide: "lg" },
+      { id: "reportdesign", label: "Report Design", icon: "📑", hint: "Your logo, colours, header, footer and watermark on every PDF report", wide: "xl" },
       { id: "ai", label: "AI Settings", icon: "🤖", hint: "Which AI model the platform uses" },
       { id: "identity", label: "Identity Providers", icon: "🪪", hint: "KYC / ID verification services" },
       { id: "tests", label: "Test Suite", icon: "🧪", hint: "Run the platform's checks" },
@@ -1306,7 +1308,7 @@ export default function AdminPage({ onAccessChanged }: { onAccessChanged?: () =>
   const [moduleError, setModuleError] = useState('');
   useEffect(() => { request<{key:string; enabled:boolean}[]>('/api/modules').then(rows => setModules(rows.filter(r => r.enabled).map(r => r.key))).catch(e => setModuleError(String(e))); }, []);
   const allowed = (id: Section) => {
-    if (['org','access','users','ai','broadcasts','approvals','roles','lifecycle','assignment','releases'].includes(id)) return true;
+    if (['org','access','users','ai','broadcasts','approvals','roles','lifecycle','assignment','releases','reportdesign'].includes(id)) return true;
     const module = id==='flows' ? 'flow_studio' : id==='pages' ? 'page_designer' : ['intents','customfields','recordtypes','functionmap','conflicts'].includes(id) ? 'custom_development' : 'telecom_crm';
     return modules.includes(module);
   };
@@ -1449,6 +1451,7 @@ export default function AdminPage({ onAccessChanged }: { onAccessChanged?: () =>
           {section === "users" && <UsersSection />}
           {section === "licenses" && <AdminLicensesSection />}
           {section === "tests" && <TestSuiteSection />}
+          {section === "reportdesign" && <AdminReportDesignSection />}
         </main>
       </div>
     </div>

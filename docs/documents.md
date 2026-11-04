@@ -37,3 +37,26 @@ Modeller exports, training exports.
 
 PDFs use the standard fonts (Helvetica / Courier, Windows-1252): characters outside it (₹, →, ✔) are written as
 INR, ->, OK.
+
+## Report Design - the organization's look on every PDF
+
+**Admin -> Platform -> Report Design** (any organization admin, whichever modules it holds). One setting per
+organization (`tenants.report_design`, migration `b6d8f0a2c4e7`) that every PDF above reads, as well as quote
+proposals and agreements:
+
+| Setting | What it does |
+| --- | --- |
+| Logo | The app's logo (set by the platform administrator), a logo just for reports (PNG or JPEG, ≤ 512 KB - transparency kept), or none; left or right. Over a colour band it sits on a white plate so any logo reads |
+| Accent colour | Header, headings, table header rows, call-outs, rules. Blank = the app's brand colour, else the BRT 360 blue. A pale colour gets dark text automatically |
+| Header style | Colour band / light tint / clean (white with a coloured rule) |
+| Company line | Company name (blank = the organization's display name) and a tagline (address, website ...) |
+| Footer | Its text with `{company}` `{title}` `{date}` (blank = "company · title"), a confidentiality line, the "Generated ..." stamp on or off |
+| Watermark | Large see-through diagonal text on every page (DRAFT, CONFIDENTIAL ...) |
+| Page size | A4 or Letter |
+
+The screen shows a live preview of a sample report as you change it; nothing changes until *Save design*.
+*Reset to standard* goes back to the app's logo and colour.
+
+API: `GET / PUT / DELETE /api/admin/report-design`, `POST /api/admin/report-design/preview` (a sample PDF for unsaved
+settings). Code: `app/report_design.py` (`brand(db, tenant_id)` -> `documents.Brand`, passed to `Pdf(title, subtitle, brand)`).
+A logo a PDF can't show (SVG, GIF, WebP, damaged) is left out with the reason shown on the screen; a report always comes out.

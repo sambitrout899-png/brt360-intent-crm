@@ -205,7 +205,9 @@ def render(db: Session, tenant_id: int, quote, kind: str, extra: dict[str, Any] 
     tpl = template(db, tenant_id, kind)
     v = deal["values"]
     title = _fill(tpl["title"], v)
-    pdf = _Pdf(title, f"{v['company']}  ·  {v['quote_number']}  ·  {v['date']}")
+    from app.report_design import brand
+
+    pdf = _Pdf(title, f"{v['company']}  ·  {v['quote_number']}  ·  {v['date']}", brand(db, tenant_id))
     if tpl["intro"].strip():
         pdf.paragraph(_fill(tpl["intro"], v))
     _common(pdf, deal, quote, "Services" if kind == "agreement" else "What we propose")

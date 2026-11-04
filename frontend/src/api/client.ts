@@ -2358,6 +2358,16 @@ export async function downloadFile(path: string, filename: string, init?: { meth
   window.setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
 
+/** A binary response (a PDF to show in a frame, ...) as a Blob. */
+export async function fetchBlob(path: string, init?: { method?: string; body?: unknown }): Promise<Blob> {
+  const token = getAccessToken();
+  const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+  if (init?.body !== undefined) headers["Content-Type"] = "application/json";
+  const res = await fetch(`${API_BASE}${path}`, { method: init?.method ?? "GET", headers, body: init?.body !== undefined ? JSON.stringify(init.body) : undefined });
+  if (!res.ok) throw new Error(`${res.status}: ${await res.text().catch(() => "")}`);
+  return res.blob();
+}
+
 export async function bulkResultsCsv(id: number): Promise<string> {
   const token = getAccessToken();
   const res = await fetch(`${API_BASE}/api/bulk-orders/${id}/results.csv`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });

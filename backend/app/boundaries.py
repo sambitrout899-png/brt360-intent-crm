@@ -44,7 +44,7 @@ MODULES: tuple[Module, ...] = (
     # scope, ids, metrics, events out, licensing, the capability registry.
     Module("chassis", (
         "config", "db", "auth", "tenancy", "rls", "observability", "timeutils", "brt_id",
-        "capabilities", "boundaries", "licensing", "service", "ratelimit", "services", "documents", "",
+        "capabilities", "boundaries", "licensing", "service", "ratelimit", "services", "documents", "report_design", "experience.routes_report_design", "",
         "data_intelligence.event_bus", "data_intelligence", "models.auth", "models.tenant",
         "schemas", "experience", "orchestration", "intent_engine", "crm_core", "integration",
         "experience.routes_modules", "crm_core.subscription_service", "models.subscriptions",

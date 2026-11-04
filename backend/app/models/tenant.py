@@ -42,6 +42,8 @@ class Tenant(Base):
     display_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     logo_data_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     brand_color: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # How the tenant's PDF reports look (app/report_design.py): logo, colours, header, footer, watermark.
+    report_design: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[dt.datetime] = mapped_column(default=utcnow)
     # NULL preserves pre-licensing installations; [] explicitly disables all modules.
     licensed_modules: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
