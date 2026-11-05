@@ -103,6 +103,12 @@ html[data-docked] [data-pane-root] { margin-right: calc(var(--dock-w) / var(--ap
   background: linear-gradient(90deg, color-mix(in oklab, var(--color-sky-500) 20%, transparent), color-mix(in oklab, var(--a2-500) 6%, transparent)) !important;
 }
 
+/* a card with an open menu (role="menu") rises above the cards after it - a blurred or animated card is its own
+   stacking layer, so a menu's own z-index would otherwise lose to the next card in the page */
+[data-pane-root] :is(section, article, aside, details, [data-pk-pane], .c360-pane, .account-applet):has([role="menu"]):not([data-pk-max]):not([data-pk-dock]) {
+  position: relative; z-index: 19; /* below the sticky top bar (z-20) */
+}
+
 /* cards: every pane PaneKit finds */
 [data-pk-pane] { box-shadow: var(--card-shadow); transition: border-color .18s, box-shadow .18s; }
 [data-pk-pane]:not([class*="bg-gradient"]):not([class*="bg-linear"]):not([data-pk-dock]) {

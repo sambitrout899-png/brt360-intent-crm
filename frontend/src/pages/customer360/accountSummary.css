@@ -62,7 +62,9 @@
 .account-back { display: none; }
 
 /* ---------- identity header + tabs (one card) */
-.account-identity { border: 1px solid var(--c-border); border-radius: var(--account-radius); background: var(--account-card-bg); }
+/* position + z-index: the glass card style blurs every card (backdrop-filter), which makes each one its own
+   stacking layer painted in page order - without this, the cards below cover the "More actions" menu */
+.account-identity { position: relative; z-index: 6; border: 1px solid var(--c-border); border-radius: var(--account-radius); background: var(--account-card-bg); }
 .account-workspace[data-header-style=hero] .account-identity-top { background: var(--c-hero); border-radius: var(--account-radius) var(--account-radius) 0 0; }
 .account-identity-top { display: flex; flex-wrap: wrap; align-items: center; gap: 14px 16px; padding: var(--account-header-padding); }
 .account-avatar-large { width: 48px; height: 48px; border-radius: 10px; font-size: 16px; color: #fff; background: color-mix(in srgb, var(--c-accent) 70%, #0b1220); }
