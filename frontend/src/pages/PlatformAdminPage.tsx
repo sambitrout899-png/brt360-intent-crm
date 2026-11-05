@@ -7,7 +7,7 @@ import { BrtLogo } from "../components/shell/BrtBrand";
 import PlatformLicensing from "../components/licensing/PlatformLicensing";
 import ThemePicker, { UserThemeButton } from "../components/ThemePicker";
 import { applyOrganizationTheme } from "../theme";
-import type { AppTheme } from "../theme";
+import type { AppAccent, AppTheme } from "../theme";
 
 const MAX_LOGO_KB = 512;
 const FIELD = "mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200";
@@ -35,6 +35,7 @@ function TenantEditor({ tenant, onSaved, onCancel }: { tenant: Tenant; onSaved: 
     logo_data_url: tenant.logo_data_url ?? "",
     theme: (tenant.theme ?? "dark") as AppTheme,
     theme_user_choice: !!tenant.theme_user_choice,
+    accent: (tenant.accent ?? "sky") as AppAccent,
   });
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -74,6 +75,7 @@ function TenantEditor({ tenant, onSaved, onCancel }: { tenant: Tenant; onSaved: 
         logo_data_url: form.logo_data_url,
         theme: form.theme,
         theme_user_choice: form.theme_user_choice,
+        accent: form.accent,
       });
       onSaved();
     } catch (e) {
@@ -128,7 +130,7 @@ function TenantEditor({ tenant, onSaved, onCancel }: { tenant: Tenant; onSaved: 
           <p className="mt-1 text-[11px] text-slate-500">PNG, JPEG, GIF, WebP or SVG, up to {MAX_LOGO_KB} KB. A square or wide logo works best.</p>
         </div>
         <label className="text-xs text-slate-400">
-          Accent colour
+          Brand colour
           <div className="mt-1 flex items-center gap-2">
             <input type="color" value={form.brand_color || "#0ea5e9"} onChange={(e) => setForm({ ...form, brand_color: e.target.value })} className="h-9 w-12 cursor-pointer rounded border border-slate-700 bg-slate-950" />
             <span className="font-mono text-xs text-slate-400">{form.brand_color || "default"}</span>
@@ -142,7 +144,8 @@ function TenantEditor({ tenant, onSaved, onCancel }: { tenant: Tenant; onSaved: 
       </div>
 
       <ThemePicker value={form.theme} onChange={(theme) => setForm({ ...form, theme })}
-        userChoice={form.theme_user_choice} onUserChoice={(theme_user_choice) => setForm({ ...form, theme_user_choice })} />
+        userChoice={form.theme_user_choice} onUserChoice={(theme_user_choice) => setForm({ ...form, theme_user_choice })}
+        accent={form.accent} onAccent={(accent) => setForm({ ...form, accent })} brandColor={form.brand_color || null} />
 
       <div data-theme={form.theme === "system" ? undefined : form.theme} className="rounded-lg border border-slate-800 bg-slate-950 px-4 py-3">
         <p className="mb-2 text-[10px] font-bold uppercase tracking-wide text-slate-500">How users will see it</p>
@@ -171,7 +174,7 @@ function TenantEditor({ tenant, onSaved, onCancel }: { tenant: Tenant; onSaved: 
 
 function emptyForm() {
   return { licensed_modules: ["telecom_crm"], name: "", slug: "", vertical: TENANT_VERTICALS[2] as string, adminEmail: "", adminPassword: "", adminName: "Admin",
-           theme: "dark" as AppTheme, themeUserChoice: false };
+           theme: "dark" as AppTheme, themeUserChoice: false, accent: "sky" as AppAccent };
 }
 
 export default function PlatformAdminPage({ onLoggedOut }: { onLoggedOut: () => void }) {
@@ -212,6 +215,7 @@ export default function PlatformAdminPage({ onLoggedOut }: { onLoggedOut: () => 
         admin_name: form.adminName.trim() || "Admin",
         theme: form.theme,
         theme_user_choice: form.themeUserChoice,
+        accent: form.accent,
       });
       setForm(emptyForm());
       load();
@@ -331,7 +335,8 @@ export default function PlatformAdminPage({ onLoggedOut }: { onLoggedOut: () => 
           <ModuleSelector value={form.licensed_modules} onChange={licensed_modules => setForm({ ...form, licensed_modules })} />
           <div className="mt-4">
             <ThemePicker value={form.theme} onChange={(theme) => setForm((f) => ({ ...f, theme }))}
-              userChoice={form.themeUserChoice} onUserChoice={(themeUserChoice) => setForm((f) => ({ ...f, themeUserChoice }))} />
+              userChoice={form.themeUserChoice} onUserChoice={(themeUserChoice) => setForm((f) => ({ ...f, themeUserChoice }))}
+              accent={form.accent} onAccent={(accent) => setForm((f) => ({ ...f, accent }))} />
           </div>
         {error && <p className="mt-3 text-xs text-red-400">{error}</p>}
           <button onClick={submit} className="mt-4 rounded-lg bg-sky-600 px-4 py-2 text-sm font-bold text-white hover:bg-sky-500">

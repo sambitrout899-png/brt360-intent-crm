@@ -1,0 +1,140 @@
+/* The workspace: density, page width, pages side by side, the section dock (src/layoutPrefs.ts,
+   components/layout/PaneKit.tsx) and the design layer that gives every theme and accent its colour. */
+
+/* ---------------------------------------------------------------- density
+   Every Tailwind padding, gap and size is a multiple of --spacing, and every text size a --text-* variable,
+   so one switch on the page area tightens or loosens the whole page. The menu and top bar keep their size. */
+html[data-density="compact"] [data-pane-root] {
+  --spacing: 0.2rem;
+  --text-xs: 0.71875rem; --text-xs--line-height: 1.05rem;
+  --text-sm: 0.8125rem; --text-sm--line-height: 1.2rem;
+  --text-base: 0.9375rem;
+  --text-lg: 1.0625rem;
+  --text-xl: 1.1875rem;
+  --text-2xl: 1.375rem;
+  --text-3xl: 1.625rem;
+}
+html[data-density="spacious"] [data-pane-root] {
+  --spacing: 0.3rem;
+  --text-sm: 0.90625rem;
+  --text-base: 1.0625rem;
+}
+
+/* ---------------------------------------------------------------- page width */
+html[data-width="full"] [data-pane-root] .page { max-width: none; }
+
+/* ---------------------------------------------------------------- two pages side by side */
+.split-view {
+  display: grid; grid-template-columns: minmax(0, var(--split-a, 1fr)) 10px minmax(0, var(--split-b, 1fr));
+  height: calc((100vh - var(--header-h, 64px)) / var(--app-zoom, 1));
+}
+.split-view > [data-page] { min-width: 0; overflow: auto; overscroll-behavior: contain; }
+.split-view > [data-page] > .split-pad { padding: calc(var(--spacing) * 6) calc(var(--spacing) * 6) calc(var(--spacing) * 10); }
+.split-gutter { position: relative; cursor: col-resize; touch-action: none; }
+.split-gutter::before { content: ""; position: absolute; inset: 0 4px; border-radius: 2px; background: var(--color-slate-800); transition: background .15s; }
+.split-gutter:hover::before, .split-gutter:active::before { background: var(--color-sky-500); }
+.split-gutter::after { content: ""; position: absolute; top: 50%; left: 2px; width: 6px; height: 36px; margin-top: -18px; border-radius: 3px;
+  background: var(--color-slate-600); box-shadow: 0 0 0 2px var(--app-bg); }
+.split-head { position: sticky; top: 0; z-index: 12; display: flex; align-items: center; gap: 8px; padding: 8px 16px;
+  background: color-mix(in oklab, var(--app-bg) 88%, transparent); backdrop-filter: blur(8px); border-bottom: 1px solid var(--color-slate-800); }
+.split-head-title { font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--color-sky-400); }
+.split-head button, .split-head select { font-size: 12px; font-weight: 600; color: var(--color-slate-300); border: 1px solid var(--color-slate-700); border-radius: 7px; padding: 3px 9px; background: transparent; }
+.split-head button:hover { color: var(--color-slate-100); border-color: var(--color-sky-500); }
+.split-head select { background: var(--color-slate-900); }
+@media (max-width: 1023px) {
+  .split-view { display: block; height: auto; }
+  .split-view > [data-page] { overflow: visible; }
+  .split-gutter { display: none; }
+}
+
+/* ---------------------------------------------------------------- the section dock
+   A docked section leaves the page flow and is stacked in a rail on the right, so it stays in view next to
+   whatever the page scrolls to. The page gives up the rail's width. Positions come from PaneKit. */
+html[data-docked] [data-pane-root] { margin-right: calc(var(--dock-w) / var(--app-zoom, 1)); }
+[data-pk-dock]:not([data-pk-max]) {
+  position: fixed !important; z-index: 15 !important; right: 0 !important; left: auto !important; margin: 0 !important;
+  top: calc(var(--pk-dock-top, 64px) / var(--app-zoom, 1)) !important;
+  width: calc((var(--dock-w) - 12px) / var(--app-zoom, 1)) !important; max-width: none !important;
+  height: calc((var(--pk-dock-h, 300px) - 10px) / var(--app-zoom, 1)) !important; max-height: none !important; min-height: 0 !important;
+  overflow: auto !important; translate: -6px 0;
+  background-color: var(--app-card) !important;
+  box-shadow: 0 10px 30px -12px rgb(0 0 0 / .45), 0 0 0 1px color-mix(in oklab, var(--color-sky-500) 30%, transparent) !important;
+}
+[data-pk-dock][data-pk-collapsed] { height: auto !important; }
+.pk-rail { position: fixed; z-index: 14; right: 0; bottom: 0; width: var(--dock-w);
+  background: linear-gradient(180deg, color-mix(in oklab, var(--color-sky-500) 7%, var(--app-panel)), var(--app-panel));
+  border-left: 1px solid var(--color-slate-800); }
+.pk-rail-grip { position: fixed; z-index: 16; bottom: 0; width: 10px; cursor: col-resize; touch-action: none; }
+.pk-rail-grip::after { content: ""; position: absolute; top: 50%; left: 2px; width: 5px; height: 44px; margin-top: -22px; border-radius: 3px; background: var(--color-slate-600); }
+.pk-rail-grip:hover::after, .pk-rail-grip:active::after { background: var(--color-sky-500); }
+.pk-rail-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 24px; text-align: center; font-size: 12px; color: var(--color-slate-500); }
+@media (max-width: 1023px) {
+  html[data-docked] [data-pane-root] { margin-right: 0; }
+  [data-pk-dock]:not([data-pk-max]) { position: static !important; width: auto !important; height: auto !important; translate: none; }
+  .pk-rail, .pk-rail-grip { display: none; }
+}
+
+/* ---------------------------------------------------------------- design layer
+   Colour that follows the theme and the accent: an ambient glow behind the page, elevated cards with a
+   sheen and an accent edge on hover, gradient primary buttons, accent focus rings, tinted table heads. */
+:root, [data-theme] {
+  --card-shadow: 0 1px 0 rgb(255 255 255 / .035) inset, 0 10px 30px -18px rgb(0 0 0 / .7);
+  --card-shadow-hover: 0 1px 0 rgb(255 255 255 / .05) inset, 0 16px 40px -18px color-mix(in oklab, var(--color-sky-500) 35%, rgb(0 0 0 / .8));
+  --glow-a: 17%; --glow-b: 12%;
+}
+[data-theme="light"] {
+  --card-shadow: 0 1px 2px rgb(15 23 42 / .05), 0 6px 20px -10px rgb(15 23 42 / .12);
+  --card-shadow-hover: 0 2px 4px rgb(15 23 42 / .05), 0 14px 32px -14px color-mix(in oklab, var(--color-sky-600) 40%, rgb(15 23 42 / .3));
+  --glow-a: 14%; --glow-b: 10%;
+}
+
+/* the page's ambient colour */
+[data-app-body] {
+  background:
+    radial-gradient(1200px 620px at 95% -60px, color-mix(in oklab, var(--color-sky-500) var(--glow-a), transparent), transparent 70%),
+    radial-gradient(1000px 560px at 25% -120px, color-mix(in oklab, var(--a2-500) var(--glow-b), transparent), transparent 70%),
+    var(--app-bg);
+  background-attachment: fixed;
+}
+[data-app-nav] {
+  background: linear-gradient(180deg, color-mix(in oklab, var(--color-sky-500) 6%, var(--app-panel)) 0%, var(--app-panel) 45%) !important;
+}
+[data-app-nav] [aria-current="page"] {
+  background: linear-gradient(90deg, color-mix(in oklab, var(--color-sky-500) 20%, transparent), color-mix(in oklab, var(--a2-500) 6%, transparent)) !important;
+}
+
+/* cards: every pane PaneKit finds */
+[data-pk-pane] { box-shadow: var(--card-shadow); transition: border-color .18s, box-shadow .18s; }
+[data-pk-pane]:not([class*="bg-gradient"]):not([class*="bg-linear"]):not([data-pk-dock]) {
+  background-image: linear-gradient(180deg, color-mix(in oklab, var(--color-sky-500) 3.5%, transparent), transparent 140px);
+}
+[data-pk-pane]:hover:not([data-pk-max]) { border-color: color-mix(in oklab, var(--color-sky-500) 38%, var(--color-slate-800)); box-shadow: var(--card-shadow-hover); }
+[data-pk-pane] [data-pk-pane]:not([data-pk-dock]) { box-shadow: none; } /* cards inside cards stay flat */
+
+/* primary actions: accent gradient with a soft glow */
+:is(button, a, label).bg-sky-600, :is(button, a, label).bg-sky-500 {
+  background-image: linear-gradient(135deg, var(--color-sky-500), color-mix(in oklab, var(--color-sky-600) 55%, var(--a2-600)));
+  box-shadow: 0 1px 0 rgb(255 255 255 / .18) inset, 0 6px 16px -8px color-mix(in oklab, var(--color-sky-500) 80%, transparent);
+  transition: filter .15s, box-shadow .15s, transform .15s;
+}
+:is(button, a, label).bg-sky-600:hover:not(:disabled), :is(button, a, label).bg-sky-500:hover:not(:disabled) {
+  filter: brightness(1.08) saturate(1.05);
+  box-shadow: 0 1px 0 rgb(255 255 255 / .2) inset, 0 10px 22px -8px color-mix(in oklab, var(--color-sky-500) 90%, transparent);
+}
+:is(button, a).bg-sky-600:active:not(:disabled) { transform: translateY(1px); }
+:is(button).bg-emerald-600 { box-shadow: 0 6px 16px -8px color-mix(in oklab, var(--color-emerald-500) 80%, transparent); }
+
+/* fields: the accent ring on focus */
+[data-pane-root] :is(input:not([type=checkbox]):not([type=radio]):not([type=color]):not([type=range]), select, textarea):focus {
+  border-color: var(--color-sky-500) !important;
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--color-sky-500) 22%, transparent);
+  outline: none;
+}
+[data-pane-root] :is(input[type=checkbox], input[type=radio]) { accent-color: var(--color-sky-600); }
+
+/* tables: a tinted head row */
+[data-pane-root] thead tr { background: color-mix(in oklab, var(--color-sky-500) 5%, color-mix(in oklab, var(--color-slate-800) 35%, transparent)); }
+
+@media (prefers-reduced-motion: reduce) {
+  [data-pk-pane], :is(button, a).bg-sky-600 { transition: none; }
+}

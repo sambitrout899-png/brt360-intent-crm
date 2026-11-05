@@ -68,7 +68,7 @@ def create_tenant(payload: TenantCreate, db: Session = Depends(get_db)) -> Tenan
 
     tenant = Tenant(name=payload.name, slug=payload.slug, vertical=TenantVertical(payload.vertical),
                     licensed_modules=validate_modules(payload.licensed_modules),
-                    theme=payload.theme, theme_user_choice=payload.theme_user_choice)
+                    theme=payload.theme, theme_user_choice=payload.theme_user_choice, accent=payload.accent)
     db.add(tenant)
     db.flush()
     # A new tenant needs its own reference data immediately - the same
@@ -122,6 +122,8 @@ def update_tenant(tenant_id: int, payload: TenantUpdate, db: Session = Depends(g
         tenant.theme = payload.theme
     if payload.theme_user_choice is not None:
         tenant.theme_user_choice = payload.theme_user_choice
+    if payload.accent is not None:
+        tenant.accent = payload.accent
     db.commit()
     db.refresh(tenant)
     return tenant

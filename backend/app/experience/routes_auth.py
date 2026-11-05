@@ -202,6 +202,7 @@ def branding(user: User = Depends(get_current_user), db: Session = Depends(get_d
         brand_color=tenant.brand_color,
         theme=tenant.theme or "dark",
         theme_user_choice=bool(tenant.theme_user_choice),
+        accent=tenant.accent or "sky",
     )
 
 

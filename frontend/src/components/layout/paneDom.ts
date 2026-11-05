@@ -10,7 +10,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-export type PaneState = { c?: 1; h?: number; w?: number; row?: 1 };
+/** c collapsed · h/w size · row full row width · d docked in the side rail */
+export type PaneState = { c?: 1; h?: number; w?: number; row?: 1; d?: 1 };
 type Saved = Record<string, PaneState>;
 
 const HEADING = /^H[1-4]$/;
@@ -37,7 +38,7 @@ export function isPane(el: Element): el is HTMLElement {
   if (!(el instanceof HTMLElement)) return false;
   const flag = el.dataset.pane;
   if (flag === "off") return false;
-  if (el.hasAttribute("data-pk-max")) return true;
+  if (el.hasAttribute("data-pk-max") || el.hasAttribute("data-pk-dock")) return true;
   if (flag !== undefined) return !!headOf(el);
   if (!CARD_TAGS.test(el.tagName) || !headOf(el)) return false;
   const cs = getComputedStyle(el);
@@ -83,10 +84,16 @@ function store(page: string, saved: Saved) {
   } catch { /* storage unavailable - the layout just isn't remembered */ }
 }
 
+/** The page a pane belongs to - with two pages side by side, each remembers its own layout. */
+export function pageOf(el: Element, fallback: string): string {
+  return el.closest<HTMLElement>("[data-page]")?.dataset.page ?? fallback;
+}
+
 export function readState(el: HTMLElement): PaneState {
   const s: PaneState = {};
   if (el.hasAttribute("data-pk-collapsed")) s.c = 1;
   if (el.hasAttribute("data-pk-row")) s.row = 1;
+  if (el.hasAttribute("data-pk-dock")) s.d = 1;
   const h = parseFloat(el.style.getPropertyValue("--pk-h"));
   const w = parseFloat(el.style.getPropertyValue("--pk-w"));
   if (h) s.h = h;
@@ -98,6 +105,7 @@ export function applyState(el: HTMLElement, s: PaneState) {
   headOf(el)?.setAttribute("data-pk-head", "");
   el.toggleAttribute("data-pk-collapsed", !!s.c);
   el.toggleAttribute("data-pk-row", !!s.row);
+  el.toggleAttribute("data-pk-dock", !!s.d);
   for (const [key, value] of [["h", s.h], ["w", s.w]] as const) {
     el.toggleAttribute(`data-pk-${key}`, !!value);
     if (value) el.style.setProperty(`--pk-${key}`, `${Math.round(value)}px`);
@@ -109,21 +117,48 @@ export function setPane(page: string, el: HTMLElement, patch: Partial<Record<key
   const next = { ...readState(el), ...patch } as PaneState;
   for (const k of Object.keys(next) as (keyof PaneState)[]) if (!next[k]) delete next[k];
   applyState(el, next);
-  const saved = load(page);
+  const key = pageOf(el, page);
+  const saved = load(key);
   const id = paneId(el);
   if (Object.keys(next).length) saved[id] = next;
   else delete saved[id];
-  store(page, saved);
+  store(key, saved);
+  layoutDock();
 }
 
 /** Re-apply remembered layout after the page (re)renders. */
 export function restore(page: string, root: HTMLElement) {
-  const saved = load(page);
-  if (!Object.keys(saved).length) return;
+  const cache = new Map<string, Saved>();
   for (const el of allPanes(root)) {
-    const s = saved[paneId(el)];
+    el.setAttribute("data-pk-pane", ""); // styled as a card (workspace.css)
+    const key = pageOf(el, page);
+    if (!cache.has(key)) cache.set(key, load(key));
+    const s = cache.get(key)![paneId(el)];
     if (s) applyState(el, s);
   }
+  layoutDock();
+}
+
+/** Stack the docked panes in the side rail: collapsed ones take their title row, the rest share the height. */
+export function layoutDock(): number {
+  const html = document.documentElement;
+  const header = document.querySelector("[data-app-header]")?.getBoundingClientRect().bottom ?? 64;
+  html.style.setProperty("--header-h", `${Math.round(header)}px`);
+  const docked = Array.from(document.querySelectorAll<HTMLElement>("[data-pk-dock]")).filter((el) => !el.hasAttribute("data-pk-max"));
+  html.toggleAttribute("data-docked", docked.length > 0);
+  if (!docked.length) return 0;
+  const gap = 10;
+  let top = header + gap;
+  const open = docked.filter((el) => !el.hasAttribute("data-pk-collapsed"));
+  const closedHeight = docked.filter((el) => el.hasAttribute("data-pk-collapsed")).reduce((sum, el) => sum + el.getBoundingClientRect().height + gap, 0);
+  const share = Math.max(140, (window.innerHeight - header - gap - closedHeight) / Math.max(1, open.length));
+  for (const el of docked) {
+    el.style.setProperty("--pk-dock-top", `${Math.round(top)}px`);
+    const collapsed = el.hasAttribute("data-pk-collapsed");
+    if (!collapsed) el.style.setProperty("--pk-dock-h", `${Math.round(share)}px`);
+    top += collapsed ? el.getBoundingClientRect().height + gap : share;
+  }
+  return docked.length;
 }
 
 /** Collapse or expand every pane on the page (collapse: outermost panes only,
@@ -137,9 +172,20 @@ export function setAll(page: string, root: HTMLElement, collapsed: boolean) {
 }
 
 export function resetAll(page: string, root: HTMLElement) {
-  for (const el of allPanes(root)) applyState(el, {});
+  const pages = new Set([page]);
+  for (const el of allPanes(root)) {
+    applyState(el, {});
+    pages.add(pageOf(el, page));
+  }
   root.querySelectorAll("[data-pk-max]").forEach(el => el.removeAttribute("data-pk-max"));
-  store(page, {});
+  pages.forEach((p) => store(p, {}));
+  layoutDock();
+}
+
+/** Return every docked pane to its page. */
+export function undockAll(page: string, root: HTMLElement) {
+  root.querySelectorAll<HTMLElement>("[data-pk-dock]").forEach((el) => setPane(page, el, { d: undefined }));
+  layoutDock();
 }
 
 // ---------------------------------------------------------------- zoom

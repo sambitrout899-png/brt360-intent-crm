@@ -1,5 +1,5 @@
 import { rememberIntentLabels } from "../intentLabels";
-import type { AppTheme } from "../theme";
+import type { AppAccent, AppTheme } from "../theme";
 import type {
   C360Connector,
   C360ConnectorDraft,
@@ -385,6 +385,7 @@ export function createTenant(payload: {
   admin_name: string;
   theme?: AppTheme;
   theme_user_choice?: boolean;
+  accent?: AppAccent;
 }): Promise<Tenant> {
   return request<Tenant>("/api/platform/tenants", { method: "POST", body: JSON.stringify(payload) });
 }

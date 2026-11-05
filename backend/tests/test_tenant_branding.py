@@ -28,7 +28,7 @@ def test_platform_admin_edits_tenant_and_branding_reaches_its_users(client):
 
     seen = client.get("/api/auth/branding").json()  # as the tenant's own admin
     assert seen == {"name": "Salam Telecom", "display_name": "Salam", "logo_data_url": PNG, "brand_color": "#0ea5e9",
-                    "theme": "dark", "theme_user_choice": False}
+                    "theme": "dark", "theme_user_choice": False, "accent": "sky"}
 
     # removing the logo and the display name falls back to the plain name
     client.put(f"/api/platform/tenants/{tenant_id}", json={"logo_data_url": "", "display_name": ""}, headers=_as_platform_admin(client))
@@ -50,13 +50,14 @@ def test_branding_input_is_validated(client):
 def test_theme_is_set_at_creation_and_edited_later(client):
     headers = _as_platform_admin(client)
     created = client.post("/api/platform/tenants", headers=headers, json={
-        "name": "Daylight Telecom", "slug": "daylight", "licensed_modules": [], "theme": "light",
+        "name": "Daylight Telecom", "slug": "daylight", "licensed_modules": [], "theme": "light", "accent": "violet",
         "admin_email": "admin@daylight.example", "admin_password": "Daylight-admin-2026"})
     assert created.status_code == 201, created.text
-    assert created.json()["theme"] == "light" and created.json()["theme_user_choice"] is False
+    assert created.json()["theme"] == "light" and created.json()["theme_user_choice"] is False and created.json()["accent"] == "violet"
     tenant_id = created.json()["id"]
-    edited = client.put(f"/api/platform/tenants/{tenant_id}", json={"theme": "dim", "theme_user_choice": True}, headers=headers).json()
-    assert edited["theme"] == "dim" and edited["theme_user_choice"] is True
+    edited = client.put(f"/api/platform/tenants/{tenant_id}", json={"theme": "dim", "theme_user_choice": True, "accent": "brand"}, headers=headers).json()
+    assert edited["theme"] == "dim" and edited["theme_user_choice"] is True and edited["accent"] == "brand"
+    assert client.put(f"/api/platform/tenants/{tenant_id}", json={"accent": "plaid"}, headers=headers).status_code == 422
     assert client.put(f"/api/platform/tenants/{tenant_id}", json={"name": "Daylight"}, headers=headers).json()["theme"] == "dim"
     assert client.put(f"/api/platform/tenants/{tenant_id}", json={"theme": "neon"}, headers=headers).status_code == 422
     # the default organization was never given a theme: dark, as before
@@ -70,7 +71,7 @@ def test_theme_is_set_at_creation_and_edited_later(client):
         db.commit()
         uid = user.id
     seen = client.get("/api/auth/branding", headers={"X-Test-User-Id": str(uid)}).json()
-    assert seen["theme"] == "dim" and seen["theme_user_choice"] is True
+    assert seen["theme"] == "dim" and seen["theme_user_choice"] is True and seen["accent"] == "brand"
 
 
 def test_only_the_platform_admin_can_edit_tenants(client):

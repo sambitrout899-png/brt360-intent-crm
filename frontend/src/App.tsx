@@ -34,6 +34,7 @@ import PipelinePage from "./pages/PipelinePage";
 import PlatformAdminPage from "./pages/PlatformAdminPage";
 import { UserThemeButton } from "./components/ThemePicker";
 import { applyOrganizationTheme } from "./theme";
+import { setLayout, toggleGroup, useLayout } from "./layoutPrefs";
 import RecordsPage from "./pages/RecordsPage";
 import TicketsPage from "./pages/TicketsPage";
 import { currentUser, getAccessToken, getBranding, getWorkContext, intentCatalog, logout, myAccess, setWorkContext } from "./api/client";
@@ -126,7 +127,7 @@ function CrmApp({ user, onLoggedOut }: { user: CurrentUser; onLoggedOut: () => v
       .then((b) => {
         setBranding(b);
         document.title = `${b.display_name} · Intent CRM | BRT 360`;
-        applyOrganizationTheme(b.theme, b.theme_user_choice); // the organization's theme (Platform Admin sets it)
+        applyOrganizationTheme(b.theme, b.theme_user_choice, b.accent, b.brand_color); // the organization's theme and accent (Platform Admin sets them)
       })
       .catch(() => setBranding(null));
   }, []);
@@ -203,6 +204,47 @@ function CrmApp({ user, onLoggedOut }: { user: CurrentUser; onLoggedOut: () => v
   // built-in admin level, since the admin APIs require it.
   const tabs = access ? TABS.filter((t) => access.pages.includes(t.id) && (t.id !== "admin" || user.role === "admin")) : [];
   const activeTab = tabs.some((t) => t.id === tab) ? tab : tabs[0]?.id;
+  // A second page docked beside the first (Layout menu, or "open beside" in the menu) - never the same page twice.
+  const layout = useLayout();
+  const besideTab = layout.split && layout.split !== activeTab && tabs.some((t) => t.id === layout.split) ? (layout.split as Tab) : null;
+  function renderPage(id: Tab | undefined) {
+    return (
+      <>
+        {(id === "dashboard" || id === "mywork") && <NoticeTicker place={id} onOpenTab={openTab} />}
+        {id === "training" && <TrainingPage pages={access?.pages ?? []} onOpen={openTab} />}
+        {id?.startsWith("training_") && <LearningPage key={id} page={id as LearningPageKey} />}
+        {id === "dashboard" && <DashboardPage />}
+        {id === "mywork" && <MyWorkPage />}
+        {id === "customer" && <CustomerPage onRequestIntent={requestIntent} />}
+        {id === "pipeline" && <PipelinePage onRequestIntent={requestIntent} />}
+        {id === "orders" && <OrdersPage onRequestIntent={requestIntent} />}
+        {id === "tickets" && <TicketsPage onRequestIntent={requestIntent} onOpenFieldService={tabs.some((t) => t.id === "field") ? () => setTab("field") : undefined} />}
+        {id === "field" && <FieldServicePage onRequestIntent={requestIntent} />}
+        {id === "inventory" && <InventoryPage onRequestIntent={requestIntent} />}
+        {id === "mobile" && <MobilePage />}
+        {id === "bulk_orders" && <BulkOrdersPage />}
+        {id === "catalog" && <CatalogPage />}
+        {id === "analytics" && <AnalyticsPage />}
+        {id === "records" && <RecordsPage />}
+        {id === "intent" && <IntentCommandBar />}
+        {id === "audit" && <AuditLogPage />}
+        {id === "admin" && <AdminPage onAccessChanged={loadAccess} />}
+      </>
+    );
+  }
+
+  // the divider between the two pages
+  const dragSplit = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const handle = e.currentTarget;
+    const box = handle.parentElement!.getBoundingClientRect();
+    handle.setPointerCapture(e.pointerId);
+    const move = (ev: PointerEvent) => setLayout({ splitRatio: (ev.clientX - box.left) / box.width });
+    const up = () => { handle.removeEventListener("pointermove", move); handle.removeEventListener("pointerup", up); };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", up);
+  };
   const activePosition = access?.positions.find((p) => p.id === access.active_position_id);
   // Approvals live in My Work; without that page the bell/notice opens the first page instead.
   const openTab = (id: string) => {
@@ -223,10 +265,11 @@ function CrmApp({ user, onLoggedOut }: { user: CurrentUser; onLoggedOut: () => v
 
   return (
     <WorkspaceContext.Provider value={workspace}>
-    <div className="flex min-h-screen bg-[var(--app-bg)]">
+    <div data-app-body className="flex min-h-screen bg-[var(--app-bg)]">
       {/* ---------- sidebar: grouped navigation (overlay below lg) ---------- */}
       {navOpen && <div className="fixed inset-0 z-30 bg-black/60 lg:hidden" onClick={() => setNavOpen(false)} aria-hidden="true" />}
       <aside
+        data-app-nav
         className={`fixed inset-y-0 left-0 z-40 flex flex-col border-r border-slate-800/80 bg-[var(--app-panel)] transition-[width,transform] duration-200 lg:sticky lg:top-0 lg:h-screen lg:translate-x-0 ${
           navOpen ? "translate-x-0" : "-translate-x-full"
         } ${collapsed ? "w-[76px]" : "w-64"}`}
@@ -247,15 +290,28 @@ function CrmApp({ user, onLoggedOut }: { user: CurrentUser; onLoggedOut: () => v
         </div>
 
         <nav className="flex-1 overflow-y-auto px-3 py-5" aria-label="Main">
-          {groups.map(([group, items]) => (
-            <div key={group} className="mb-5 last:mb-0">
-              {!collapsed && <p className="mb-2 px-3 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">{group}</p>}
+          {groups.map(([group, items]) => {
+            // a folded group keeps showing the page you are on
+            const folded = !collapsed && layout.foldedGroups.includes(group);
+            const shown = folded ? items.filter((t) => t.id === activeTab || t.id === besideTab) : items;
+            return (
+            <div key={group} className="mb-4 last:mb-0">
+              {!collapsed && (
+                <button type="button" onClick={() => toggleGroup(group)} aria-expanded={!folded}
+                  className="group/g mb-1.5 flex w-full items-center gap-1.5 rounded-md px-3 py-0.5 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500 hover:text-slate-300"
+                  title={folded ? `Show ${group}` : `Fold ${group} away`}>
+                  <span className="flex-1">{group}</span>
+                  {folded && <span className="rounded-full bg-slate-800 px-1.5 text-[10px] tracking-normal text-slate-400">{items.length}</span>}
+                  <svg viewBox="0 0 20 20" className={`h-3.5 w-3.5 transition-transform ${folded ? "-rotate-90" : ""} opacity-60 group-hover/g:opacity-100`} fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d="M5 8l5 5 5-5" /></svg>
+                </button>
+              )}
               {collapsed && <div className="mx-auto mb-2 h-px w-8 bg-slate-800" />}
-              <ul className="space-y-1">
-                {items.map((t) => {
+              <ul className="space-y-0.5">
+                {shown.map((t) => {
                   const active = activeTab === t.id;
+                  const beside = besideTab === t.id;
                   return (
-                    <li key={t.id}>
+                    <li key={t.id} className="group/item relative">
                       <button
                         onClick={() => {
                           setTab(t.id);
@@ -264,20 +320,30 @@ function CrmApp({ user, onLoggedOut }: { user: CurrentUser; onLoggedOut: () => v
                         }}
                         title={collapsed ? t.label : undefined}
                         aria-current={active ? "page" : undefined}
-                        className={`group relative flex w-full items-center gap-3 rounded-lg py-2 text-sm font-medium transition ${collapsed ? "justify-center px-0" : "px-3"} ${
-                          active ? "bg-sky-500/10 text-sky-300" : "text-slate-400 hover:bg-slate-800/60 hover:text-slate-100"
+                        className={`group relative flex w-full items-center gap-3 rounded-lg py-[7px] text-sm font-medium transition ${collapsed ? "justify-center px-0" : "pl-3 pr-9"} ${
+                          active ? "bg-sky-500/10 text-sky-300" : beside ? "bg-slate-800/50 text-slate-200" : "text-slate-400 hover:bg-slate-800/60 hover:text-slate-100"
                         }`}
                       >
                         {active && <span className="absolute left-0 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-r-full bg-sky-400" />}
-                        <NavIcon name={t.id} className={`h-[18px] w-[18px] shrink-0 ${active ? "text-sky-400" : "text-slate-500 group-hover:text-slate-300"}`} />
+                        {beside && <span className="absolute left-0 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-r-full bg-[var(--a2-400)]" />}
+                        <NavIcon name={t.id} className={`h-[18px] w-[18px] shrink-0 ${active ? "text-sky-400" : beside ? "text-[var(--a2-400)]" : "text-slate-500 group-hover:text-slate-300"}`} />
                         {!collapsed && <span className="truncate">{t.label}</span>}
                       </button>
+                      {/* open this page beside the current one (wide screens) */}
+                      {!collapsed && !active && (
+                        <button type="button" onClick={() => setLayout({ split: beside ? null : t.id })}
+                          className={`absolute right-1.5 top-1/2 hidden h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md text-slate-500 hover:bg-slate-700/60 hover:text-slate-100 lg:flex ${beside ? "!flex text-[var(--a2-400)]" : "opacity-0 group-hover/item:opacity-100 focus:opacity-100"}`}
+                          title={beside ? `Close ${t.label} beside` : `Open ${t.label} beside this page`} aria-label={beside ? `Close ${t.label} beside` : `Open ${t.label} beside`}>
+                          <svg viewBox="0 0 20 20" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><rect x="2.5" y="4" width="15" height="12" rx="1.5" />{beside ? <path d="M10 4v12M12.5 8.5l3 3M15.5 8.5l-3 3" /> : <path d="M10 4v12M13.75 7.5v5M11.25 10h5" />}</svg>
+                        </button>
+                      )}
                     </li>
                   );
                 })}
               </ul>
             </div>
-          ))}
+            );
+          })}
         </nav>
 
         <div className={`shrink-0 border-t border-slate-800/80 py-4 ${collapsed ? "flex justify-center px-2" : "px-5"}`}>
@@ -298,7 +364,7 @@ function CrmApp({ user, onLoggedOut }: { user: CurrentUser; onLoggedOut: () => v
 
       {/* ---------- top bar + page ---------- */}
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-20 border-b border-slate-800/80 bg-[var(--app-bg)]/85 backdrop-blur-md">
+        <header data-app-header className="sticky top-0 z-20 border-b border-slate-800/80 bg-[var(--app-bg)]/85 backdrop-blur-md">
           <div className="flex h-16 items-center gap-4 px-4 sm:px-6 lg:px-8">
             <button onClick={() => setNavOpen(true)} className="rounded-lg p-2 text-slate-400 hover:bg-slate-800 hover:text-slate-100 lg:hidden" aria-label="Open the menu">
               <NavIcon name="menu" className="h-5 w-5" />
@@ -318,7 +384,7 @@ function CrmApp({ user, onLoggedOut }: { user: CurrentUser; onLoggedOut: () => v
             </button>
 
             <div className="flex shrink-0 items-center gap-2 sm:gap-3">
-              {access && <PaneKit page={activeTab ?? "home"} />}
+              {access && <PaneKit page={activeTab ?? "home"} pages={tabs} />}
               {access && <ApprovalBell onOpenMyWork={openMyWork} />}
               {access && access.positions.length === 1 && (
                 <span
@@ -388,7 +454,7 @@ function CrmApp({ user, onLoggedOut }: { user: CurrentUser; onLoggedOut: () => v
           </div>
         </header>
 
-        <main key={generation} data-pane-root className="flex-1 px-4 py-6 sm:px-6 lg:px-10 lg:py-8">
+        <main key={generation} data-pane-root className={besideTab ? "flex-1" : "flex-1 px-4 py-6 sm:px-6 lg:px-10 lg:py-8"}>
           <div className="page">
             {accessError && <p className="text-sm text-red-400">{accessError}</p>}
             {!access && !accessError && <p className="text-sm text-slate-500">Loading your workspace…</p>}
@@ -400,28 +466,39 @@ function CrmApp({ user, onLoggedOut }: { user: CurrentUser; onLoggedOut: () => v
               </p>
             )}
           </div>
-          {(activeTab === "dashboard" || activeTab === "mywork") && <NoticeTicker place={activeTab} onOpenTab={openTab} />}
-          {activeTab === "training" && <TrainingPage pages={access?.pages ?? []} onOpen={openTab} />}
-          {activeTab?.startsWith("training_") && <LearningPage key={activeTab} page={activeTab as LearningPageKey} />}
-          {activeTab === "dashboard" && <DashboardPage />}
-          {activeTab === "mywork" && <MyWorkPage />}
-          {activeTab === "customer" && <CustomerPage onRequestIntent={requestIntent} />}
-          {activeTab === "pipeline" && <PipelinePage onRequestIntent={requestIntent} />}
-          {activeTab === "orders" && <OrdersPage onRequestIntent={requestIntent} />}
-          {activeTab === "tickets" && <TicketsPage onRequestIntent={requestIntent} onOpenFieldService={tabs.some((t) => t.id === "field") ? () => setTab("field") : undefined} />}
-          {activeTab === "field" && <FieldServicePage onRequestIntent={requestIntent} />}
-          {activeTab === "inventory" && <InventoryPage onRequestIntent={requestIntent} />}
-          {activeTab === "mobile" && <MobilePage />}
-          {activeTab === "bulk_orders" && <BulkOrdersPage />}
-          {activeTab === "catalog" && <CatalogPage />}
-          {activeTab === "analytics" && <AnalyticsPage />}
-          {activeTab === "records" && <RecordsPage />}
-          {activeTab === "intent" && <IntentCommandBar />}
-          {activeTab === "audit" && <AuditLogPage />}
-          {activeTab === "admin" && <AdminPage onAccessChanged={loadAccess} />}
-          <div className="page">
-            <BrtFooter />
-          </div>
+          {besideTab ? (
+            <div className="split-view" style={{ "--split-a": `${layout.splitRatio}fr`, "--split-b": `${1 - layout.splitRatio}fr` } as React.CSSProperties}>
+              <div data-page={activeTab}>
+                <div className="split-head">
+                  <span className="split-head-title">{activeMeta?.label}</span>
+                  <span className="ml-auto" />
+                  <button type="button" onClick={() => { setLayout({ split: activeTab ?? null }); if (besideTab) setTab(besideTab); }} title="Swap the two pages">⇄ Swap</button>
+                </div>
+                <div className="split-pad">{renderPage(activeTab)}</div>
+              </div>
+              <div className="split-gutter" onPointerDown={dragSplit} onDoubleClick={() => setLayout({ splitRatio: 0.5 })} role="separator" aria-orientation="vertical"
+                title="Drag to share the width · double-click for half and half" />
+              <div data-page={besideTab}>
+                <div className="split-head">
+                  <span className="split-head-title">Beside</span>
+                  <select value={besideTab} onChange={(e) => setLayout({ split: e.target.value })} aria-label="Page shown beside">
+                    {tabs.filter((t) => t.id !== activeTab).map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
+                  </select>
+                  <span className="ml-auto" />
+                  <button type="button" onClick={() => { setTab(besideTab); setLayout({ split: null }); }} title="Make this the only page">Open alone</button>
+                  <button type="button" onClick={() => setLayout({ split: null })} title="Close this page" aria-label="Close the page beside">✕</button>
+                </div>
+                <div className="split-pad">{renderPage(besideTab)}</div>
+              </div>
+            </div>
+          ) : (
+            <div data-page={activeTab}>
+              {renderPage(activeTab)}
+              <div className="page">
+                <BrtFooter />
+              </div>
+            </div>
+          )}
         </main>
         {access && <PopupMessages />}
       </div>

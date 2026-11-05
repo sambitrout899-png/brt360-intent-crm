@@ -12,6 +12,9 @@ from app import password_policy
 # dark = Midnight, light = Daylight, dim = Dusk (a softer dark), system = follows each device's light/dark setting.
 APP_THEMES = ("dark", "light", "dim", "system")
 AppTheme = Literal["dark", "light", "dim", "system"]
+# The accent palettes (frontend/src/theme.ts ACCENTS): Tailwind colour families, or "brand" = the nearest to brand_color.
+APP_ACCENTS = ("sky", "blue", "indigo", "violet", "teal", "emerald", "rose", "amber", "brand")
+AppAccent = Literal["sky", "blue", "indigo", "violet", "teal", "emerald", "rose", "amber", "brand"]
 
 
 class TenantCreate(BaseModel):
@@ -27,6 +30,7 @@ class TenantCreate(BaseModel):
     admin_name: str = Field(default="Admin", max_length=200)
     theme: AppTheme = "dark"
     theme_user_choice: bool = False
+    accent: AppAccent = "sky"
 
     @model_validator(mode="after")
     def _strong(self):
@@ -50,6 +54,7 @@ class TenantOut(BaseModel):
     brand_color: str | None = None
     theme: AppTheme = "dark"
     theme_user_choice: bool = False
+    accent: AppAccent = "sky"
     created_at: dt.datetime
 
     model_config = {"from_attributes": True}
@@ -58,6 +63,11 @@ class TenantOut(BaseModel):
     @classmethod
     def _default_theme(cls, value):
         return value if value in APP_THEMES else "dark"
+
+    @field_validator("accent", mode="before")
+    @classmethod
+    def _default_accent(cls, value):
+        return value if value in APP_ACCENTS else "sky"
 
     @field_validator("theme_user_choice", mode="before")
     @classmethod
@@ -76,6 +86,7 @@ class TenantUpdate(BaseModel):
     licensed_modules: list[str] | None = None
     theme: AppTheme | None = None
     theme_user_choice: bool | None = None
+    accent: AppAccent | None = None
 
 
 class BrandingOut(BaseModel):
@@ -85,6 +96,7 @@ class BrandingOut(BaseModel):
     brand_color: str | None = None
     theme: AppTheme = "dark"
     theme_user_choice: bool = False
+    accent: AppAccent = "sky"
 
 
 class ApprovalChainTierIn(BaseModel):

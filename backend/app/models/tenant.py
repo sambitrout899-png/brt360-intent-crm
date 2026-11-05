@@ -46,6 +46,9 @@ class Tenant(Base):
     # and whether each user may switch to another theme for themselves.
     theme: Mapped[str | None] = mapped_column(String(20), nullable=True)
     theme_user_choice: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    # The accent palette of buttons, links and highlights (schemas/admin.APP_ACCENTS; NULL = "sky");
+    # "brand" follows brand_color.
+    accent: Mapped[str | None] = mapped_column(String(20), nullable=True)
     # How the tenant's PDF reports look (app/report_design.py): logo, colours, header, footer, watermark.
     report_design: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[dt.datetime] = mapped_column(default=utcnow)
