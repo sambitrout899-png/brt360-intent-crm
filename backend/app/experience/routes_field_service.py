@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.access import check_party, require_page, visible_parties
@@ -569,7 +569,7 @@ def part_browser(q: str = "", db: Session = Depends(get_db), tenant_id: int = De
 
 
 @router.get("/inventory/transactions")
-def list_transactions(limit: int = 100, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)):
+def list_transactions(limit: int = Query(100, ge=1, le=1000), db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)):
     return fs_inventory.transactions(db, tenant_id, max(1, min(limit, 500)))
 
 

@@ -33,6 +33,14 @@ _write = Depends(require_roles(UserRole.admin, UserRole.agent))
 Payload = dict[str, Any]
 
 
+def _found(db: Session, tenant_id: int, bulk_id: int):
+    """The organization's own bulk request - 404 for any other id."""
+    try:
+        return bulk.of(db, tenant_id, bulk_id)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
 def _do(db: Session, fn: Callable[[], Any]) -> Any:
     try:
         result = fn()
@@ -151,20 +159,20 @@ def cancel(bulk_id: int, db: Session = Depends(get_db), tenant_id: int = Depends
 @router.get("/{bulk_id}/results.pdf")
 def results_pdf(bulk_id: int, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> Response:
     """The request as a PDF report - counts by stage and every row's outcome."""
-    found = bulk.of(db, tenant_id, bulk_id)
+    found = _found(db, tenant_id, bulk_id)
     return Response(bulk.results_pdf(db, found), media_type="application/pdf",
                     headers={"Content-Disposition": f'attachment; filename="{found.number}-results.pdf"'})
 
 
 @router.get("/{bulk_id}/results.xlsx")
 def results_xlsx(bulk_id: int, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> Response:
-    found = bulk.of(db, tenant_id, bulk_id)
+    found = _found(db, tenant_id, bulk_id)
     return Response(bulk.results_xlsx(db, found), media_type=_XLSX,
                     headers={"Content-Disposition": f'attachment; filename="{found.number}-results.xlsx"'})
 
 
 @router.get("/{bulk_id}/results.csv", response_class=PlainTextResponse)
 def results(bulk_id: int, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> PlainTextResponse:
-    found = bulk.of(db, tenant_id, bulk_id)
+    found = _found(db, tenant_id, bulk_id)
     return PlainTextResponse(bulk.results_csv(db, found), media_type="text/csv",
                              headers={"Content-Disposition": f'attachment; filename="{found.number}-results.csv"'})

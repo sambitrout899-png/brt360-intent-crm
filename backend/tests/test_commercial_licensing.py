@@ -105,10 +105,10 @@ def test_per_user_service_needs_a_seat_and_new_users_need_a_core_licence(client)
     assert low.status_code == 400 and "assigned" in low.json()["detail"]
     client.put(f"{P}/tenants/{tid}/lines", json={"product_code": "telecom_crm", "quantity": used}, headers=pa)
     assert client.put(f"{P}/tenants/{tid}/lines", json={"product_code": "core_user", "quantity": used}, headers=pa).status_code == 200
-    refused = client.post("/api/admin/users", json={"email": "extra@default.local", "password": "password123", "name": "Extra", "role": "agent"})
+    refused = client.post("/api/admin/users", json={"email": "extra@default.local", "password": "Licence-seat-2026", "name": "Extra", "role": "agent"})
     assert refused.status_code == 400 and "Core user licences are in use" in refused.json()["detail"]
     client.put(f"{P}/tenants/{tid}/lines", json={"product_code": "core_user", "quantity": used + 1}, headers=pa)
-    ok = client.post("/api/admin/users", json={"email": "extra@default.local", "password": "password123", "name": "Extra", "role": "agent"})
+    ok = client.post("/api/admin/users", json={"email": "extra@default.local", "password": "Licence-seat-2026", "name": "Extra", "role": "agent"})
     assert ok.status_code == 201, ok.text
     seats = {s["product"]: s for s in client.get("/api/licensing").json()["subscription"]["seats"]}
     assert seats["core_user"]["free"] == 0
@@ -189,5 +189,5 @@ def test_a_tenant_without_a_subscription_is_unchanged(client):
     mine = client.get("/api/licensing").json()
     assert mine["subscription"] is None and "telecom_crm" in mine["modules"]
     assert client.get("/api/admin/product-model").status_code == 200
-    ok = client.post("/api/admin/users", json={"email": "free@default.local", "password": "password123", "name": "Free", "role": "agent"})
+    ok = client.post("/api/admin/users", json={"email": "free@default.local", "password": "Licence-seat-2026", "name": "Free", "role": "agent"})
     assert ok.status_code == 201

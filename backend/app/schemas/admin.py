@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import datetime as dt
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+from app import password_policy
 
 
 class TenantCreate(BaseModel):
@@ -14,8 +16,13 @@ class TenantCreate(BaseModel):
     # tenant is actually loggable-into the moment it's created, not an
     # account-less shell someone has to provision separately.
     admin_email: str = Field(pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-    admin_password: str = Field(min_length=8)
+    admin_password: str = Field(min_length=1)
     admin_name: str = Field(default="Admin", max_length=200)
+
+    @model_validator(mode="after")
+    def _strong(self):
+        password_policy.check(self.admin_password, self.admin_email, self.admin_name)  # app/password_policy.py
+        return self
 
     @field_validator("slug", mode="before")
     @classmethod

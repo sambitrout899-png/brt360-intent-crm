@@ -130,8 +130,8 @@ function PasswordSection() {
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setMessage(null);
-    if (next.length < 8) {
-      setMessage({ ok: false, text: "The new password needs at least 8 characters." });
+    if (next.length < 12) {
+      setMessage({ ok: false, text: "The new password needs at least 12 characters - a short phrase is easiest to remember." });
       return;
     }
     setBusy(true);

@@ -2,14 +2,16 @@ from __future__ import annotations
 
 import datetime as dt
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+
+from app import password_policy
 
 _EMAIL_PATTERN = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
 
 
 class LoginRequest(BaseModel):
-    email: str = Field(pattern=_EMAIL_PATTERN)
-    password: str = Field(min_length=1)
+    email: str = Field(pattern=_EMAIL_PATTERN, max_length=320)
+    password: str = Field(min_length=1, max_length=1024)
 
 
 class LoginResponse(BaseModel):
@@ -72,15 +74,25 @@ class CurrentUserOut(BaseModel):
 
 
 class ChangePasswordRequest(BaseModel):
-    current_password: str = Field(min_length=1)
-    new_password: str = Field(min_length=8)
+    current_password: str = Field(min_length=1, max_length=1024)
+    new_password: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _strong(self):
+        password_policy.check(self.new_password)  # app/password_policy.py: 12+ characters, not a common password
+        return self
 
 
 class UserCreate(BaseModel):
     email: str = Field(pattern=_EMAIL_PATTERN)
-    password: str = Field(min_length=8)
+    password: str = Field(min_length=1)
     name: str = Field(min_length=1, max_length=200)
     role: str = Field(default="agent")
+
+    @model_validator(mode="after")
+    def _strong(self):
+        password_policy.check(self.password, self.email, self.name)
+        return self
 
 
 class UserOut(BaseModel):

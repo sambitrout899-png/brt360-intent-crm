@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -87,7 +87,7 @@ deliveries_router = APIRouter(prefix="/api/admin/notification-deliveries", tags=
 
 
 @deliveries_router.get("")
-def notification_deliveries(status: str | None = None, limit: int = 100, db: Session = Depends(get_db),
+def notification_deliveries(status: str | None = None, limit: int = Query(100, ge=1, le=1000), db: Session = Depends(get_db),
                             tenant_id: int = Depends(get_current_tenant_id)) -> list[dict[str, Any]]:
     from app.crm_core import notification_delivery
 

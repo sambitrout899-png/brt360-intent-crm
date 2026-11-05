@@ -20,7 +20,7 @@ from __future__ import annotations
 import datetime as dt
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Response, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -509,7 +509,7 @@ def my_approvals(
 
 @router.get("/log", dependencies=[Depends(require_roles(UserRole.admin))])
 def approval_log(
-    limit: int = 500, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)
+    limit: int = Query(500, ge=1, le=2000), db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)
 ) -> list[dict[str, Any]]:
     """Audit trail: every approval decision, who asked, who decided, why and when."""
     return approval_service.audit_log(db, tenant_id, max(1, min(limit, 5000)))

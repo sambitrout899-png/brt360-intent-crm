@@ -13,7 +13,7 @@ import json
 import re
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Query
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -134,7 +134,7 @@ def load(payload: LoadIn, background: BackgroundTasks, db: Session = Depends(get
 
 
 @router.get("/jobs")
-def jobs(limit: int = 50, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> list[dict[str, Any]]:
+def jobs(limit: int = Query(50, ge=1, le=500), db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)) -> list[dict[str, Any]]:
     rows = db.query(BimJob).filter(BimJob.tenant_id == tenant_id).order_by(BimJob.id.desc()).limit(min(limit, 200))
     return [bim_service.job_out(j) for j in rows]
 

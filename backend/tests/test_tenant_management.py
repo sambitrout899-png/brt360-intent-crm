@@ -63,7 +63,7 @@ def test_create_tenant_seeds_reference_data_and_first_admin(client):
 
 def test_create_tenant_rejects_duplicate_slug(client):
     headers = _as_platform_admin(client)
-    payload = {"name": "First", "slug": "dupe-slug", "vertical": "both", "admin_email": "a@dupe.test", "admin_password": "password123"}
+    payload = {"name": "First", "slug": "dupe-slug", "vertical": "both", "admin_email": "a@dupe.test", "admin_password": "Tenant-admin-2026"}
     client.post("/api/platform/tenants", json=payload, headers=headers)
     payload["admin_email"] = "b@dupe.test"
     resp = client.post("/api/platform/tenants", json=payload, headers=headers)
@@ -78,7 +78,7 @@ def test_create_tenant_rejects_invalid_vertical(client):
             "slug": "bad-vertical",
             "vertical": "nonsense",
             "admin_email": "a@bad-vertical.test",
-            "admin_password": "password123",
+            "admin_password": "Tenant-admin-2026",
         },
         headers=_as_platform_admin(client),
     )
@@ -93,7 +93,7 @@ def test_new_tenant_user_is_fully_isolated_from_default(client):
             "slug": "isolated-co",
             "vertical": "both",
             "admin_email": "admin@isolated-co.test",
-            "admin_password": "password123",
+            "admin_password": "Tenant-admin-2026",
         },
         headers=_as_platform_admin(client),
     )
@@ -117,7 +117,7 @@ def test_new_tenant_user_is_fully_isolated_from_default(client):
 
 def test_uppercase_slug_is_normalized_before_duplicate_check(client):
     payload = {'name': 'CWMA Training', 'slug': ' CWMA-TRAINING ',
-               'admin_email': 'cwma@example.test', 'admin_password': 'password123',
+               'admin_email': 'cwma@example.test', 'admin_password': 'Tenant-admin-2026',
                'licensed_modules': ['training_management']}
     headers = _as_platform_admin(client)
     response = client.post('/api/platform/tenants', json=payload, headers=headers)

@@ -16,6 +16,7 @@ from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
+from app.secret_box import Encrypted
 from app.timeutils import utcnow
 
 
@@ -24,7 +25,7 @@ class AiSettings(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id"), unique=True)
-    api_key: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    api_key: Mapped[str | None] = mapped_column(Encrypted(), nullable=True)  # encrypted at rest (app/secret_box.py)
     model: Mapped[str] = mapped_column(String(100), default="gpt-4o-mini")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     # Which model powers this tenant's AI: external (api_key/model above),

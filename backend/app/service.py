@@ -55,7 +55,28 @@ def new_app(title: str, **kwargs: Any) -> FastAPI:
         finally:
             brt_id.current_user.reset(marker)
 
+    @app.middleware("http")
+    async def _security_headers(request, call_next):
+        """OWASP ASVS V14.4 response headers on every API answer (the web container adds its own for the pages):
+        no MIME sniffing, never framed, no referrer leaking, and nothing an API returns kept in a cache."""
+        response = await call_next(request)
+        headers = response.headers
+        for name, value in SECURITY_HEADERS.items():
+            headers.setdefault(name, value)
+        if request.url.path.startswith("/api/") and "cache-control" not in headers:
+            headers["Cache-Control"] = "no-store"
+        return response
+
     return app
+
+
+SECURITY_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "Referrer-Policy": "no-referrer",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=()",
+}
 
 
 def include(app: FastAPI, *routers: APIRouter) -> None:

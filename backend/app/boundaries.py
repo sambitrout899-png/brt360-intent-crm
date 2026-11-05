@@ -44,14 +44,16 @@ MODULES: tuple[Module, ...] = (
     # scope, ids, metrics, events out, licensing, the capability registry.
     Module("chassis", (
         "config", "db", "auth", "tenancy", "rls", "observability", "timeutils", "brt_id",
-        "capabilities", "boundaries", "licensing", "service", "ratelimit", "services", "documents", "report_design", "experience.routes_report_design", "",
+        "capabilities", "boundaries", "licensing", "service", "ratelimit", "services", "documents", "report_design", "experience.routes_report_design", "password_policy", "secret_box", "",
         "data_intelligence.event_bus", "data_intelligence", "models.auth", "models.tenant",
         "schemas", "experience", "orchestration", "intent_engine", "crm_core", "integration",
         "experience.routes_modules", "crm_core.subscription_service", "models.subscriptions",
     )),
     # Wires everything together - the one place allowed to import it all
     # (app.models gathers every table for the migrations).
-    Module("assembly", ("main", "seed", "scheduler", "models", "services.split_app", "services.training_app", "services.core")),
+    # The security assessment (orchestration/security_tests.py) serves the whole platform in its sandbox - so it is assembly too.
+    Module("assembly", ("main", "seed", "scheduler", "models", "services.split_app", "services.training_app", "services.core",
+                        "orchestration.security_tests", "orchestration.security_catalog", "experience.routes_security_tests", "models.security_tests")),
     Module("audit", ("data_intelligence.audit", "crm_core.audit_*", "models.audit_chain")),
     Module("ai", ("crm_core.llm", "crm_core.ai_settings_service", "models.ai_settings", "services.ai_*")),
     Module("notification", (

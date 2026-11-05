@@ -78,6 +78,7 @@ import { ApprovalsSection, BroadcastsSection, PriceListsSection, ProcessRolesSec
 import AdminPageDesignerSection from "./AdminPageDesignerSection";
 import AdminRecordTypesSection from "./AdminRecordTypesSection";
 import SystemTestsPanel from "../components/SystemTestsPanel";
+import SecurityTestsPanel from "../components/SecurityTestsPanel";
 import AdminBimSection from "./AdminBimSection";
 import AdminOrderMgmtSection from "./AdminOrderMgmtSection";
 import AdminFulfillmentSection from "./AdminFulfillmentSection";
@@ -1114,7 +1115,48 @@ const TEST_STATUS_STYLES: Record<string, string> = {
   error: "bg-red-500/15 text-red-400 border-red-500/30",
 };
 
+const TEST_TABS = [
+  { id: "functional", label: "Functional testing", hint: "Cases generated from your own system, run with evidence", icon: "🧪" },
+  { id: "security", label: "Security testing (VAPT)", hint: "OWASP / CVSS assessment of the platform, tenancy and AI", icon: "🛡️" },
+  { id: "code", label: "Platform code checks", hint: "The backend's own test suite", icon: "⚙️" },
+] as const;
+type TestTab = (typeof TEST_TABS)[number]["id"];
+
 function TestSuiteSection() {
+  const [tab, setTab] = useState<TestTab>(() => {
+    try {
+      const saved = localStorage.getItem("brt360.admin.tests.tab");
+      return TEST_TABS.some((t) => t.id === saved) ? (saved as TestTab) : "functional";
+    } catch {
+      return "functional";
+    }
+  });
+  const choose = (id: TestTab) => {
+    setTab(id);
+    try {
+      localStorage.setItem("brt360.admin.tests.tab", id);
+    } catch {
+      /* private window - just don't remember */
+    }
+  };
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap gap-1 border-b border-slate-800">
+        {TEST_TABS.map((t) => (
+          <button key={t.id} title={t.hint} onClick={() => choose(t.id)}
+            className={`-mb-px border-b-2 px-4 py-2 text-sm font-semibold ${tab === t.id ? "border-sky-500 text-sky-300" : "border-transparent text-slate-400 hover:text-slate-200"}`}>
+            {t.icon} {t.label}
+          </button>
+        ))}
+      </div>
+      {tab === "functional" && <SystemTestsPanel />}
+      {tab === "security" && <SecurityTestsPanel />}
+      {tab === "code" && <PlatformCodeChecks />}
+    </div>
+  );
+}
+
+function PlatformCodeChecks() {
   const [runs, setRuns] = useState<TestRunSummary[]>([]);
   const [selected, setSelected] = useState<TestRun | null>(null);
   const [running, setRunning] = useState(false);
@@ -1147,7 +1189,6 @@ function TestSuiteSection() {
 
   return (
     <div className="space-y-6">
-      <SystemTestsPanel />
       <h3 className="text-base font-bold text-slate-100">Platform code checks</h3>
       <p className="text-sm text-slate-400">
         Runs the real backend test suite as a subprocess and reports the result - no SSH access needed to verify a
@@ -1256,7 +1297,7 @@ const NAV: NavGroup[] = [
       { id: "reportdesign", label: "Report Design", icon: "📑", hint: "Your logo, colours, header, footer and watermark on every PDF report", wide: "xl" },
       { id: "ai", label: "AI Settings", icon: "🤖", hint: "Which AI model the platform uses" },
       { id: "identity", label: "Identity Providers", icon: "🪪", hint: "KYC / ID verification services" },
-      { id: "tests", label: "Test Suite", icon: "🧪", hint: "Run the platform's checks" },
+      { id: "tests", label: "Test Suite", icon: "🧪", hint: "Functional testing, security testing (VAPT) and the platform's own checks", wide: "xl" },
     ],
   },
 ];
@@ -1308,7 +1349,7 @@ export default function AdminPage({ onAccessChanged }: { onAccessChanged?: () =>
   const [moduleError, setModuleError] = useState('');
   useEffect(() => { request<{key:string; enabled:boolean}[]>('/api/modules').then(rows => setModules(rows.filter(r => r.enabled).map(r => r.key))).catch(e => setModuleError(String(e))); }, []);
   const allowed = (id: Section) => {
-    if (['org','access','users','ai','broadcasts','approvals','roles','lifecycle','assignment','releases','reportdesign'].includes(id)) return true;
+    if (['org','access','users','ai','broadcasts','approvals','roles','lifecycle','assignment','releases','reportdesign','tests'].includes(id)) return true;
     const module = id==='flows' ? 'flow_studio' : id==='pages' ? 'page_designer' : ['intents','customfields','recordtypes','functionmap','conflicts'].includes(id) ? 'custom_development' : 'telecom_crm';
     return modules.includes(module);
   };

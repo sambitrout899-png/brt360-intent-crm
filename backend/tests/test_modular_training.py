@@ -50,7 +50,7 @@ def test_platform_create_and_change_licenses(client):
     with client.TestSessionLocal() as db:
         platform = db.query(User).filter_by(role=UserRole.platform_admin).first().id
     headers={'X-Test-User-Id':str(platform)}
-    payload={'name':'Learning Org','slug':'learning','admin_email':'learn@example.test','admin_password':'password123','licensed_modules':['training_management']}
+    payload={'name':'Learning Org','slug':'learning','admin_email':'learn@example.test','admin_password':'Tenant-admin-2026','licensed_modules':['training_management']}
     response=client.post('/api/platform/tenants',json=payload,headers=headers)
     assert response.status_code == 201, response.text
     tid=response.json()['id']

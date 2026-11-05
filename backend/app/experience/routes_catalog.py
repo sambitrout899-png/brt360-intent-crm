@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
@@ -49,7 +49,7 @@ def offering_versions(
 @router.get("/audit/feed")
 def audit_feed(
     q: str | None = None, status: str | None = None, code: str | None = None, user_id: int | None = None, channel: str | None = None,
-    days: int | None = 30, record: str | None = None, limit: int = 50, offset: int = 0,
+    days: int | None = 30, record: str | None = None, limit: int = Query(50, ge=1, le=500), offset: int = Query(0, ge=0),
     db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id),
 ) -> dict:
     """The audit trail, filtered, with counts and one readable outcome per execution."""
