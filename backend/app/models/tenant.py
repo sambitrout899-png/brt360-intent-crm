@@ -42,6 +42,10 @@ class Tenant(Base):
     display_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     logo_data_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     brand_color: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # The application's colour theme for every user (schemas/admin.APP_THEMES; NULL = "dark"),
+    # and whether each user may switch to another theme for themselves.
+    theme: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    theme_user_choice: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     # How the tenant's PDF reports look (app/report_design.py): logo, colours, header, footer, watermark.
     report_design: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[dt.datetime] = mapped_column(default=utcnow)

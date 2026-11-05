@@ -4,7 +4,14 @@ import datetime as dt
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from typing import Literal
+
 from app import password_policy
+
+# The application's colour themes (frontend/src/theme.ts has the same list):
+# dark = Midnight, light = Daylight, dim = Dusk (a softer dark), system = follows each device's light/dark setting.
+APP_THEMES = ("dark", "light", "dim", "system")
+AppTheme = Literal["dark", "light", "dim", "system"]
 
 
 class TenantCreate(BaseModel):
@@ -18,6 +25,8 @@ class TenantCreate(BaseModel):
     admin_email: str = Field(pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
     admin_password: str = Field(min_length=1)
     admin_name: str = Field(default="Admin", max_length=200)
+    theme: AppTheme = "dark"
+    theme_user_choice: bool = False
 
     @model_validator(mode="after")
     def _strong(self):
@@ -39,9 +48,21 @@ class TenantOut(BaseModel):
     display_name: str | None = None
     logo_data_url: str | None = None
     brand_color: str | None = None
+    theme: AppTheme = "dark"
+    theme_user_choice: bool = False
     created_at: dt.datetime
 
     model_config = {"from_attributes": True}
+
+    @field_validator("theme", mode="before")
+    @classmethod
+    def _default_theme(cls, value):
+        return value if value in APP_THEMES else "dark"
+
+    @field_validator("theme_user_choice", mode="before")
+    @classmethod
+    def _default_choice(cls, value):
+        return bool(value)
 
 
 class TenantUpdate(BaseModel):
@@ -53,6 +74,8 @@ class TenantUpdate(BaseModel):
     logo_data_url: str | None = None
     brand_color: str | None = None
     licensed_modules: list[str] | None = None
+    theme: AppTheme | None = None
+    theme_user_choice: bool | None = None
 
 
 class BrandingOut(BaseModel):
@@ -60,6 +83,8 @@ class BrandingOut(BaseModel):
     display_name: str
     logo_data_url: str | None = None
     brand_color: str | None = None
+    theme: AppTheme = "dark"
+    theme_user_choice: bool = False
 
 
 class ApprovalChainTierIn(BaseModel):

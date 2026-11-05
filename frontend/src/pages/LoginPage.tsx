@@ -63,7 +63,7 @@ export default function LoginPage({ onLoggedIn, notice }: { onLoggedIn: () => vo
   }[stage.kind];
 
   return (
-    <div className="relative flex min-h-screen flex-col items-center justify-center overflow-hidden bg-[#070b14] px-4 py-10">
+    <div className="relative flex min-h-screen flex-col items-center justify-center overflow-hidden bg-[var(--app-bg)] px-4 py-10">
       <div className="pointer-events-none absolute -top-40 left-1/2 h-[28rem] w-[28rem] -translate-x-1/2 rounded-full bg-sky-500/10 blur-3xl" />
       <div className="relative w-full max-w-sm space-y-5 rounded-2xl border border-slate-800 bg-slate-900/70 p-8 shadow-2xl shadow-black/40 backdrop-blur">
         <div className="flex flex-col items-center text-center">

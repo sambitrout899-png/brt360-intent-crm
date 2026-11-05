@@ -18,7 +18,7 @@ export function BrtCopyright({ className = "" }: { className?: string }) {
 /** the full BlueRose Technologies logo on a white plate */
 export function BrtLogo({ className = "h-8" }: { className?: string }) {
   return (
-    <span className="inline-flex items-center rounded-lg bg-white px-2.5 py-1.5 shadow-sm ring-1 ring-black/5">
+    <span data-keep-white className="inline-flex items-center rounded-lg bg-white px-2.5 py-1.5 shadow-sm ring-1 ring-black/5">
       <img src={`${base}brt-logo.png`} alt={BRT_COMPANY} className={`w-auto object-contain ${className}`} draggable={false} />
     </span>
   );
@@ -27,7 +27,7 @@ export function BrtLogo({ className = "h-8" }: { className?: string }) {
 /** the swirl emblem on a white tile */
 export function BrtEmblem({ size = "h-9 w-9", rounded = "rounded-lg" }: { size?: string; rounded?: string }) {
   return (
-    <span className={`inline-flex shrink-0 items-center justify-center bg-white p-1 shadow-sm ring-1 ring-black/5 ${rounded} ${size}`}>
+    <span data-keep-white className={`inline-flex shrink-0 items-center justify-center bg-white p-1 shadow-sm ring-1 ring-black/5 ${rounded} ${size}`}>
       <img src={`${base}brt-emblem.png`} alt={BRT_COMPANY} className="h-full w-full object-contain" draggable={false} />
     </span>
   );

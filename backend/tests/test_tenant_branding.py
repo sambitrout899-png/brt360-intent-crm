@@ -27,7 +27,8 @@ def test_platform_admin_edits_tenant_and_branding_reaches_its_users(client):
     assert body["name"] == "Salam Telecom" and body["vertical"] == "b2b" and body["slug"] == "default"
 
     seen = client.get("/api/auth/branding").json()  # as the tenant's own admin
-    assert seen == {"name": "Salam Telecom", "display_name": "Salam", "logo_data_url": PNG, "brand_color": "#0ea5e9"}
+    assert seen == {"name": "Salam Telecom", "display_name": "Salam", "logo_data_url": PNG, "brand_color": "#0ea5e9",
+                    "theme": "dark", "theme_user_choice": False}
 
     # removing the logo and the display name falls back to the plain name
     client.put(f"/api/platform/tenants/{tenant_id}", json={"logo_data_url": "", "display_name": ""}, headers=_as_platform_admin(client))
@@ -44,6 +45,32 @@ def test_branding_input_is_validated(client):
     assert client.put(f"/api/platform/tenants/{tenant_id}", json={"logo_data_url": too_big}, headers=headers).status_code == 400
     assert client.put(f"/api/platform/tenants/{tenant_id}", json={"brand_color": "blue"}, headers=headers).status_code == 400
     assert client.put(f"/api/platform/tenants/{tenant_id}", json={"vertical": "b2x"}, headers=headers).status_code == 400
+
+
+def test_theme_is_set_at_creation_and_edited_later(client):
+    headers = _as_platform_admin(client)
+    created = client.post("/api/platform/tenants", headers=headers, json={
+        "name": "Daylight Telecom", "slug": "daylight", "licensed_modules": [], "theme": "light",
+        "admin_email": "admin@daylight.example", "admin_password": "Daylight-admin-2026"})
+    assert created.status_code == 201, created.text
+    assert created.json()["theme"] == "light" and created.json()["theme_user_choice"] is False
+    tenant_id = created.json()["id"]
+    edited = client.put(f"/api/platform/tenants/{tenant_id}", json={"theme": "dim", "theme_user_choice": True}, headers=headers).json()
+    assert edited["theme"] == "dim" and edited["theme_user_choice"] is True
+    assert client.put(f"/api/platform/tenants/{tenant_id}", json={"name": "Daylight"}, headers=headers).json()["theme"] == "dim"
+    assert client.put(f"/api/platform/tenants/{tenant_id}", json={"theme": "neon"}, headers=headers).status_code == 422
+    # the default organization was never given a theme: dark, as before
+    assert client.get("/api/auth/branding").json()["theme"] == "dark"
+    # the organization's users get it with their branding
+    from app.auth import hash_password
+    from app.models.auth import User, UserRole
+    with client.TestSessionLocal() as db:
+        user = User(tenant_id=tenant_id, email="agent@daylight.example", password_hash=hash_password("x-x-x-x-x-x-x"), name="Agent", role=UserRole.agent)
+        db.add(user)
+        db.commit()
+        uid = user.id
+    seen = client.get("/api/auth/branding", headers={"X-Test-User-Id": str(uid)}).json()
+    assert seen["theme"] == "dim" and seen["theme_user_choice"] is True
 
 
 def test_only_the_platform_admin_can_edit_tenants(client):

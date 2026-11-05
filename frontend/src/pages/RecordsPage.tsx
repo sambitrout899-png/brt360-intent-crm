@@ -380,7 +380,7 @@ function RecordDrawer({
   return (
     <>
       <div className="fixed inset-0 z-40 bg-black/50" onClick={onClose} aria-hidden="true" />
-      <aside role="dialog" aria-label={record ? `${type.label} ${record.number}` : `New ${type.label}`} className="fixed inset-y-0 right-0 z-50 flex w-full max-w-2xl flex-col border-l border-slate-800 bg-[#0a101d] shadow-2xl">
+      <aside role="dialog" aria-label={record ? `${type.label} ${record.number}` : `New ${type.label}`} className="fixed inset-y-0 right-0 z-50 flex w-full max-w-2xl flex-col border-l border-slate-800 bg-[var(--app-panel)] shadow-2xl">
         <header className="space-y-3 border-b border-slate-800 px-5 py-4">
           <div className="flex items-start gap-3">
             <div className="min-w-0 flex-1">

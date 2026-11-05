@@ -67,7 +67,8 @@ def create_tenant(payload: TenantCreate, db: Session = Depends(get_db)) -> Tenan
         raise HTTPException(400, f"Email '{payload.admin_email}' is already registered")
 
     tenant = Tenant(name=payload.name, slug=payload.slug, vertical=TenantVertical(payload.vertical),
-                    licensed_modules=validate_modules(payload.licensed_modules))
+                    licensed_modules=validate_modules(payload.licensed_modules),
+                    theme=payload.theme, theme_user_choice=payload.theme_user_choice)
     db.add(tenant)
     db.flush()
     # A new tenant needs its own reference data immediately - the same
@@ -117,6 +118,10 @@ def update_tenant(tenant_id: int, payload: TenantUpdate, db: Session = Depends(g
         tenant.brand_color = payload.brand_color or None
     if payload.logo_data_url is not None:
         tenant.logo_data_url = _check_logo(payload.logo_data_url) if payload.logo_data_url else None
+    if payload.theme is not None:
+        tenant.theme = payload.theme
+    if payload.theme_user_choice is not None:
+        tenant.theme_user_choice = payload.theme_user_choice
     db.commit()
     db.refresh(tenant)
     return tenant

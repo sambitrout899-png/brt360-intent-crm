@@ -5,6 +5,9 @@ import { TENANT_VERTICALS } from "../api/types";
 import type { Tenant } from "../api/types";
 import { BrtLogo } from "../components/shell/BrtBrand";
 import PlatformLicensing from "../components/licensing/PlatformLicensing";
+import ThemePicker, { UserThemeButton } from "../components/ThemePicker";
+import { applyOrganizationTheme } from "../theme";
+import type { AppTheme } from "../theme";
 
 const MAX_LOGO_KB = 512;
 const FIELD = "mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200";
@@ -30,6 +33,8 @@ function TenantEditor({ tenant, onSaved, onCancel }: { tenant: Tenant; onSaved: 
     vertical: tenant.vertical,
     brand_color: tenant.brand_color ?? "",
     logo_data_url: tenant.logo_data_url ?? "",
+    theme: (tenant.theme ?? "dark") as AppTheme,
+    theme_user_choice: !!tenant.theme_user_choice,
   });
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -67,6 +72,8 @@ function TenantEditor({ tenant, onSaved, onCancel }: { tenant: Tenant; onSaved: 
         vertical: form.vertical,
         brand_color: form.brand_color,
         logo_data_url: form.logo_data_url,
+        theme: form.theme,
+        theme_user_choice: form.theme_user_choice,
       });
       onSaved();
     } catch (e) {
@@ -134,7 +141,10 @@ function TenantEditor({ tenant, onSaved, onCancel }: { tenant: Tenant; onSaved: 
         </label>
       </div>
 
-      <div className="rounded-lg border border-slate-800 bg-slate-950 px-4 py-3">
+      <ThemePicker value={form.theme} onChange={(theme) => setForm({ ...form, theme })}
+        userChoice={form.theme_user_choice} onUserChoice={(theme_user_choice) => setForm({ ...form, theme_user_choice })} />
+
+      <div data-theme={form.theme === "system" ? undefined : form.theme} className="rounded-lg border border-slate-800 bg-slate-950 px-4 py-3">
         <p className="mb-2 text-[10px] font-bold uppercase tracking-wide text-slate-500">How users will see it</p>
         <div className="flex items-center gap-3">
           <TenantLogo tenant={preview} />
@@ -160,7 +170,8 @@ function TenantEditor({ tenant, onSaved, onCancel }: { tenant: Tenant; onSaved: 
 }
 
 function emptyForm() {
-  return { licensed_modules: ["telecom_crm"], name: "", slug: "", vertical: TENANT_VERTICALS[2] as string, adminEmail: "", adminPassword: "", adminName: "Admin" };
+  return { licensed_modules: ["telecom_crm"], name: "", slug: "", vertical: TENANT_VERTICALS[2] as string, adminEmail: "", adminPassword: "", adminName: "Admin",
+           theme: "dark" as AppTheme, themeUserChoice: false };
 }
 
 export default function PlatformAdminPage({ onLoggedOut }: { onLoggedOut: () => void }) {
@@ -176,12 +187,14 @@ export default function PlatformAdminPage({ onLoggedOut }: { onLoggedOut: () => 
   }
 
   useEffect(load, []);
+  // the platform administrator belongs to no organization: the classic theme, or their own choice
+  useEffect(() => applyOrganizationTheme("dark", true), []);
 
   async function submit() {
     setError(null);
     const slug = form.slug.trim().toLowerCase();
-    if (!form.name.trim() || !form.slug.trim() || !form.adminEmail.trim() || form.adminPassword.length < 8) {
-      setError("Name, slug, admin email, and an admin password (8+ characters) are all required.");
+    if (!form.name.trim() || !form.slug.trim() || !form.adminEmail.trim() || form.adminPassword.length < 12) {
+      setError("Name, slug, admin email, and an admin password (12+ characters) are all required.");
       return;
     }
     if (!/^[a-z0-9][a-z0-9-]*$/.test(slug) || slug.length > 100) {
@@ -197,6 +210,8 @@ export default function PlatformAdminPage({ onLoggedOut }: { onLoggedOut: () => 
         admin_email: form.adminEmail.trim(),
         admin_password: form.adminPassword,
         admin_name: form.adminName.trim() || "Admin",
+        theme: form.theme,
+        theme_user_choice: form.themeUserChoice,
       });
       setForm(emptyForm());
       load();
@@ -217,15 +232,18 @@ export default function PlatformAdminPage({ onLoggedOut }: { onLoggedOut: () => 
               and first admin account; its logo and company name appear for all of its users.
             </p>
           </div>
+          <div className="flex items-center gap-2">
+          <UserThemeButton />
           <button
             onClick={() => {
               logout();
               onLoggedOut();
             }}
-            className="rounded-lg border border-slate-700 px-3 py-2 text-xs font-bold text-slate-300 hover:border-red-500 hover:text-red-400"
+            className="whitespace-nowrap rounded-lg border border-slate-700 px-3 py-2 text-xs font-bold text-slate-300 hover:border-red-500 hover:text-red-400"
           >
             Log Out
           </button>
+          </div>
         </div>
 
         <div className="inline-flex rounded-xl border border-slate-800 bg-slate-900/60 p-1">
@@ -303,7 +321,7 @@ export default function PlatformAdminPage({ onLoggedOut }: { onLoggedOut: () => 
             </label>
             <label className="text-xs text-slate-400">
               First admin's password
-              <input type="password" value={form.adminPassword} onChange={(e) => setForm((f) => ({ ...f, adminPassword: e.target.value }))} className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200" placeholder="8+ characters" />
+              <input type="password" value={form.adminPassword} onChange={(e) => setForm((f) => ({ ...f, adminPassword: e.target.value }))} className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200" placeholder="12+ characters, not a common password" />
             </label>
             <label className="text-xs text-slate-400">
               First admin's name
@@ -311,6 +329,10 @@ export default function PlatformAdminPage({ onLoggedOut }: { onLoggedOut: () => 
             </label>
           </div>
           <ModuleSelector value={form.licensed_modules} onChange={licensed_modules => setForm({ ...form, licensed_modules })} />
+          <div className="mt-4">
+            <ThemePicker value={form.theme} onChange={(theme) => setForm((f) => ({ ...f, theme }))}
+              userChoice={form.themeUserChoice} onUserChoice={(themeUserChoice) => setForm((f) => ({ ...f, themeUserChoice }))} />
+          </div>
         {error && <p className="mt-3 text-xs text-red-400">{error}</p>}
           <button onClick={submit} className="mt-4 rounded-lg bg-sky-600 px-4 py-2 text-sm font-bold text-white hover:bg-sky-500">
             Create Tenant

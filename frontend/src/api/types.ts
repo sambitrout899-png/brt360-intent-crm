@@ -1,3 +1,4 @@
+import type { AppTheme } from "../theme";
 import type { Conflict, ScratchDraft } from "./conflictTypes";
 
 export const TENANT_VERTICALS = ["b2c", "b2b", "both"] as const;
@@ -32,6 +33,8 @@ export interface Tenant {
   display_name: string | null;
   logo_data_url: string | null;
   brand_color: string | null;
+  theme: AppTheme;
+  theme_user_choice: boolean;
   created_at: string;
 }
 
@@ -42,6 +45,8 @@ export interface TenantUpdate {
   display_name?: string;
   logo_data_url?: string;
   brand_color?: string;
+  theme?: AppTheme;
+  theme_user_choice?: boolean;
 }
 
 export interface Branding {
@@ -49,6 +54,8 @@ export interface Branding {
   display_name: string;
   logo_data_url: string | null;
   brand_color: string | null;
+  theme: AppTheme;
+  theme_user_choice: boolean;
 }
 
 export interface PlanStep {

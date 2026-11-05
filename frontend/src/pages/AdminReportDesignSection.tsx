@@ -243,7 +243,7 @@ export default function AdminReportDesignSection() {
                   return (
                     <button key={s.key} onClick={() => set({ header_style: s.key })}
                       className={`overflow-hidden rounded-lg border text-left ${form.header_style === s.key ? "border-sky-500 ring-1 ring-sky-500" : "border-slate-700 hover:border-slate-500"}`}>
-                      <div className="bg-white">
+                      <div data-keep-white className="bg-white">
                         <div className="px-2 py-2" style={{ background: look.band, borderBottom: `3px solid ${look.edge}` }}>
                           <div className="h-1.5 w-12 rounded" style={{ background: look.text }} />
                           <div className="mt-1 h-1 w-8 rounded opacity-60" style={{ background: look.text }} />

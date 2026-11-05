@@ -94,7 +94,7 @@ export function RecordsDrawer({ entity, filters, drill, title, onClose }: { enti
   const openable = data?.record_type && (ENTITY_TYPES as readonly string[]).includes(data.record_type);
   return (
     <div className="fixed inset-0 z-40 flex justify-end bg-black/50" onClick={onClose}>
-      <div className="flex h-full w-full max-w-5xl flex-col border-l border-slate-800 bg-[#0a101d] shadow-2xl" onClick={(e) => e.stopPropagation()}>
+      <div className="flex h-full w-full max-w-5xl flex-col border-l border-slate-800 bg-[var(--app-panel)] shadow-2xl" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-start gap-3 border-b border-slate-800 p-4">
           <div className="min-w-0 flex-1">
             <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Records behind</p>

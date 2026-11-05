@@ -65,3 +65,14 @@ test("the entire workspace uses the published theme, card, spacing and header se
   assert.equal(workspaceTheme({ ...published, card_style: "outline" })["--account-card-bg"], "transparent");
   assert.notEqual(workspaceTheme({ ...published, density: "comfortable" })["--account-gap"], style["--account-gap"]);
 });
+
+test("the default Midnight look follows the application's theme; Daylight and the dark looks keep their own", () => {
+  const { workspaceAppTheme } = module.exports;
+  const midnight = workspaceTheme(DEFAULT_WORKSPACE_THEME);
+  assert.equal(midnight["--c-bg"], "var(--color-slate-950)");
+  assert.equal(midnight["--c-accent"], "var(--color-sky-400)");
+  assert.equal(workspaceTheme({ ...DEFAULT_WORKSPACE_THEME, accent: "#ec4899" })["--c-accent"], "#ec4899");
+  assert.equal(workspaceAppTheme(DEFAULT_WORKSPACE_THEME), undefined);
+  assert.equal(workspaceAppTheme({ ...DEFAULT_WORKSPACE_THEME, preset: "daylight" }), "light");
+  assert.equal(workspaceAppTheme({ ...DEFAULT_WORKSPACE_THEME, preset: "ocean" }), "dark");
+});

@@ -57,7 +57,7 @@ function StatusPill({ status }: { status: string }) {
 
 function Kpi({ label, value, sub, tone = "text-slate-100" }: { label: string; value: string; sub?: string; tone?: string }) {
   return (
-    <div className="min-w-0 bg-[#0b1120] px-5 py-4 sm:px-6 sm:py-5">
+    <div className="min-w-0 bg-[var(--app-card)] px-5 py-4 sm:px-6 sm:py-5">
       <p className="truncate text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">{label}</p>
       <p className={`mt-2 truncate text-2xl font-semibold leading-none ${tone}`}>{value}</p>
       {sub && <p className="mt-1.5 truncate text-xs text-slate-500">{sub}</p>}

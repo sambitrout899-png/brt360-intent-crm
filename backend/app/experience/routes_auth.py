@@ -200,6 +200,8 @@ def branding(user: User = Depends(get_current_user), db: Session = Depends(get_d
         display_name=tenant.display_name or tenant.name,
         logo_data_url=tenant.logo_data_url,
         brand_color=tenant.brand_color,
+        theme=tenant.theme or "dark",
+        theme_user_choice=bool(tenant.theme_user_choice),
     )
 
 

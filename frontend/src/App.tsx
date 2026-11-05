@@ -32,6 +32,8 @@ import MyWorkPage from "./pages/MyWorkPage";
 import OrdersPage from "./pages/OrdersPage";
 import PipelinePage from "./pages/PipelinePage";
 import PlatformAdminPage from "./pages/PlatformAdminPage";
+import { UserThemeButton } from "./components/ThemePicker";
+import { applyOrganizationTheme } from "./theme";
 import RecordsPage from "./pages/RecordsPage";
 import TicketsPage from "./pages/TicketsPage";
 import { currentUser, getAccessToken, getBranding, getWorkContext, intentCatalog, logout, myAccess, setWorkContext } from "./api/client";
@@ -124,6 +126,7 @@ function CrmApp({ user, onLoggedOut }: { user: CurrentUser; onLoggedOut: () => v
       .then((b) => {
         setBranding(b);
         document.title = `${b.display_name} · Intent CRM | BRT 360`;
+        applyOrganizationTheme(b.theme, b.theme_user_choice); // the organization's theme (Platform Admin sets it)
       })
       .catch(() => setBranding(null));
   }, []);
@@ -220,11 +223,11 @@ function CrmApp({ user, onLoggedOut }: { user: CurrentUser; onLoggedOut: () => v
 
   return (
     <WorkspaceContext.Provider value={workspace}>
-    <div className="flex min-h-screen bg-[#070b14]">
+    <div className="flex min-h-screen bg-[var(--app-bg)]">
       {/* ---------- sidebar: grouped navigation (overlay below lg) ---------- */}
       {navOpen && <div className="fixed inset-0 z-30 bg-black/60 lg:hidden" onClick={() => setNavOpen(false)} aria-hidden="true" />}
       <aside
-        className={`fixed inset-y-0 left-0 z-40 flex flex-col border-r border-slate-800/80 bg-[#0a101d] transition-[width,transform] duration-200 lg:sticky lg:top-0 lg:h-screen lg:translate-x-0 ${
+        className={`fixed inset-y-0 left-0 z-40 flex flex-col border-r border-slate-800/80 bg-[var(--app-panel)] transition-[width,transform] duration-200 lg:sticky lg:top-0 lg:h-screen lg:translate-x-0 ${
           navOpen ? "translate-x-0" : "-translate-x-full"
         } ${collapsed ? "w-[76px]" : "w-64"}`}
       >
@@ -295,7 +298,7 @@ function CrmApp({ user, onLoggedOut }: { user: CurrentUser; onLoggedOut: () => v
 
       {/* ---------- top bar + page ---------- */}
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-20 border-b border-slate-800/80 bg-[#070b14]/85 backdrop-blur-md">
+        <header className="sticky top-0 z-20 border-b border-slate-800/80 bg-[var(--app-bg)]/85 backdrop-blur-md">
           <div className="flex h-16 items-center gap-4 px-4 sm:px-6 lg:px-8">
             <button onClick={() => setNavOpen(true)} className="rounded-lg p-2 text-slate-400 hover:bg-slate-800 hover:text-slate-100 lg:hidden" aria-label="Open the menu">
               <NavIcon name="menu" className="h-5 w-5" />
@@ -357,6 +360,7 @@ function CrmApp({ user, onLoggedOut }: { user: CurrentUser; onLoggedOut: () => v
                   ))}
                 </select>
               )}
+              <UserThemeButton />
               <span className="mx-1 hidden h-8 w-px bg-slate-800 sm:block" />
               <button type="button" onClick={() => setSecurityOpen(true)} className="flex items-center gap-2.5 rounded-lg text-left hover:opacity-90"
                 title={`${user.name} - account security`} aria-label="Account security">

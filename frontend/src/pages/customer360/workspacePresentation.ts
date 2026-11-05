@@ -117,15 +117,35 @@ export function workspaceFrame(view: C360View | null) {
     "data-card-style": view?.theme.card_style ?? "glass",
     "data-header-style": view?.theme.header_style ?? "hero",
     "data-layout-version": view?.version,
+    // the page's own Tailwind colours follow the workspace look (src/themes.css): Midnight follows the
+    // application's theme, Daylight is light, the other looks are dark
+    "data-theme": workspaceAppTheme(view?.theme),
   };
 }
 
-export function workspaceTheme(theme?: C360ThemeTokens): Record<string, string> {
+export function workspaceAppTheme(theme?: C360ThemeTokens): "light" | "dark" | undefined {
   const t = theme ?? DEFAULT_WORKSPACE_THEME;
+  if (t.preset === "midnight") return t.bg === DEFAULT_WORKSPACE_THEME.bg ? undefined : "dark";
+  return t.preset === "daylight" ? "light" : "dark";
+}
+
+/** Midnight - the default look - is drawn from the application's theme, so it is dark, light or dusk with it. */
+const FOLLOW_APP = {
+  bg: "var(--color-slate-950)", surface: "color-mix(in srgb, var(--color-slate-900) 72%, transparent)", solid: "var(--color-slate-900)",
+  border: "var(--color-slate-800)", text: "var(--color-slate-200)", muted: "var(--color-slate-400)",
+  hero: "linear-gradient(135deg, var(--color-slate-900), var(--color-sky-950))",
+};
+
+export function workspaceTheme(theme?: C360ThemeTokens): Record<string, string> {
+  const given = theme ?? DEFAULT_WORKSPACE_THEME;
+  const follow = given.preset === "midnight" && given.bg === DEFAULT_WORKSPACE_THEME.bg && given.surface === DEFAULT_WORKSPACE_THEME.surface;
+  const t = follow
+    ? { ...given, ...FOLLOW_APP, accent: given.accent.toLowerCase() === DEFAULT_WORKSPACE_THEME.accent ? "var(--color-sky-400)" : given.accent }
+    : given;
   return {
     "--c-bg": t.bg, "--c-surface": t.surface, "--c-border": t.border, "--c-text": t.text,
     "--c-muted": t.muted, "--c-accent": t.accent, "--c-hero": t.hero,
-    "--account-card-bg": t.card_style === "outline" ? "transparent" : t.card_style === "solid" ? t.surface.replace(/[\d.]+\)$/, "1)") : t.surface,
+    "--account-card-bg": t.card_style === "outline" ? "transparent" : t.card_style === "solid" ? (follow ? FOLLOW_APP.solid : t.surface.replace(/[\d.]+\)$/, "1)")) : t.surface,
     "--account-gap": t.density === "compact" ? "12px" : "16px",
     "--account-row-padding": t.density === "compact" ? "8px 12px" : "11px 14px",
     "--account-header-padding": t.header_style === "compact" ? "14px 18px" : "20px 24px",
