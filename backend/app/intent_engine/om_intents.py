@@ -51,7 +51,7 @@ LIB: dict[str, dict[str, Any]] = {
     "ship_region": {"label": "Ship-to region", "help": "Decides the tax jurisdiction"},
     "jurisdiction": {"label": "Tax jurisdiction", "help": "Blank = the ship-to region, else where the deal was sold"},
     "payment_method": {"label": "Payment method", "type": "picklist",
-                       "values": ["credit_card", "purchase_order", "bank_transfer", "on_account", "cash", "cheque"]},
+                       "values": ["credit_card", "debit_card", "upi", "net_banking", "wallet", "purchase_order", "bank_transfer", "on_account", "cash", "cheque"]},
     "amount": {"label": "Amount", "type": "money", "help": "Blank = what is due now"},
     "card_last4": {"label": "Card - last 4 digits", "placeholder": "e.g. 4242",
                    "help": "Never the full card number - the card itself is handled by the payment provider"},

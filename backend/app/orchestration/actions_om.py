@@ -192,11 +192,12 @@ def _resume(db: Session, tenant_id: int, e: dict[str, Any]) -> dict[str, Any]:
 
     order = om.order_of(db, tenant_id, e.get("order_id"))
     if abo_service.installed(order):
-        if abo_service.asset_of_order(db, tenant_id, order.id).status.value != "suspended":
+        if not any(a.status.value == "suspended" for a in abo_service.live_assets_of_order(db, tenant_id, order.id)):
             raise ValueError(f"The service of order {order.id} is not suspended - only a suspended service resumes")
-        change = abo_service.live_change(db, tenant_id, order, "resume")
+        changes = abo_service.live_change_all(db, tenant_id, order, "resume")  # every suspended service of the order
         sla_service.complete_clock(db, tenant_id, "suspension_grace", "order", order.id)
-        return {"order_id": order.id, "status": "active", "asset_id": change["asset_id"], "change_order_id": change["order_id"]}
+        return {"order_id": order.id, "status": "active", "asset_id": changes[0]["asset_id"], "change_order_id": changes[0]["order_id"],
+                **({"asset_ids": [c["asset_id"] for c in changes]} if len(changes) > 1 else {})}
     return om.resume(db, tenant_id, order)
 
 

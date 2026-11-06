@@ -264,7 +264,8 @@ LIB: dict[str, dict[str, Any]] = {
 
 OVERRIDES: dict[tuple[str, str], dict[str, Any]] = {
     ("INT-74", "payment_method"): {"values": ["bill_me", "credit_card", "auto_debit"], "default": None},
-    ("INT-85", "payment_method"): {"values": ["credit_card", "eft", "bank_transfer", "cash", "cheque", "reference"], "default": None},
+    ("INT-85", "payment_method"): {"values": ["credit_card", "upi", "net_banking", "wallet", "eft", "bank_transfer", "cash", "cheque", "reference"],
+                                   "default": None},
     ("INT-85", "amount"): {"help": "Blank = the bills chosen, else the whole balance"},
     ("INT-86", "amount"): {"help": "Blank = the whole bill / line (or use a percent)"},
     ("INT-86", "line"): {"label": "Bill line", "placeholder": "Line number or words from it, e.g. city tax"},

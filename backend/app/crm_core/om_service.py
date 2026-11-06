@@ -164,8 +164,8 @@ def order_detail(db: Session, tenant_id: int, order: Order) -> OmOrderDetail:
         db.flush()
     elif order.status in (OrderStatus.cancelled, OrderStatus.terminated, OrderStatus.rejected) and d.om_status not in ("cancelled",):
         d.om_status = "cancelled"
-    elif d.om_status in ("booked", "delivered") and order.status in SERVICE_IN_PLACE:
-        d.om_status = "fulfilled"  # nothing left to ship and the service is live
+    elif d.om_status in ("pending", "booked", "delivered") and order.status in SERVICE_IN_PLACE and not d.hold:
+        d.om_status = "fulfilled"  # nothing left to ship and the service is live (a mobile line is live the moment it is activated)
     return d
 
 
@@ -195,6 +195,9 @@ def lines(db: Session, tenant_id: int, ctx_type: str, rec: Any, include_deleted:
         if ctx_type == "quote":
             unit_net = _r(rec.total_price / qty) if len(core_items) == 1 else _r(item.unit_price * (1 - (rec.requested_discount_pct or 0) / 100))
             list_price = item.unit_price
+        elif len(core_items) > 1 and item.net_unit_price is not None:  # several services, each with its own price
+            unit_net = _r(item.net_unit_price)
+            list_price = _r(item.unit_price if item.unit_price is not None else item.net_unit_price)
         else:
             unit_net = _r((rec.monthly_price or 0) / qty) if len(core_items) == 1 else 0.0
             list_price = unit_net
@@ -644,16 +647,20 @@ def credit_out(c: OmCreditCheck) -> dict[str, Any]:
             "checked_at": c.created_at}
 
 
+PAYMENT_METHODS = ("credit_card", "debit_card", "upi", "net_banking", "wallet", "purchase_order", "bank_transfer", "cash", "cheque", "on_account")
+
+
 def add_payment(db: Session, tenant_id: int, order: Order, method: str, amount: Any = None, card_last4: str = "", card_brand: str = "",
                 po_number: str = "", payment_terms: str = "", reference: str = "") -> dict[str, Any]:
     d = order_detail(db, tenant_id, order)
     if d.om_status in ("cancelled", "fulfilled"):
         raise ValueError(f"Order {d.order_number} is {d.om_status} - no new payment")
     method = str(method or "").strip().lower().replace(" ", "_")
-    method = {"card": "credit_card", "creditcard": "credit_card", "po": "purchase_order", "bank": "bank_transfer", "transfer": "bank_transfer",
-              "account": "on_account", "on_account": "on_account", "check": "cheque"}.get(method, method)
-    if method not in ("credit_card", "purchase_order", "bank_transfer", "cash", "cheque", "on_account"):
-        raise ValueError("Payment method: credit_card, purchase_order, bank_transfer, cash, cheque or on_account")
+    method = {"card": "credit_card", "creditcard": "credit_card", "debit": "debit_card", "debitcard": "debit_card", "po": "purchase_order",
+              "bank": "bank_transfer", "transfer": "bank_transfer", "account": "on_account", "on_account": "on_account", "check": "cheque",
+              "netbanking": "net_banking", "wallet_app": "wallet", "e_wallet": "wallet"}.get(method, method)
+    if method not in PAYMENT_METHODS:
+        raise ValueError("Payment method: " + ", ".join(PAYMENT_METHODS))
     for value in (card_last4, reference, po_number):
         if value and CARD_NUMBER.search(str(value)):
             raise ValueError("Never enter a full card number - only the last 4 digits; the card itself is taken by the payment provider")
@@ -664,7 +671,9 @@ def add_payment(db: Session, tenant_id: int, order: Order, method: str, amount: 
     pay = OmPayment(tenant_id=tenant_id, context_type="order", context_id=order.id, party_id=order.party_id, method=method, amount=amt,
                     reference=str(reference or "")[:100])
     credit = None
-    if method == "credit_card":
+    if method in ("upi", "net_banking", "wallet"):  # instant payments: confirmed by the provider's reference
+        pay.status, pay.auth_code = "authorized", f"{method.upper()}-{order.id:04d}"
+    elif method in ("credit_card", "debit_card"):
         last4 = re.sub(r"\D", "", str(card_last4 or ""))
         if len(last4) != 4:
             raise ValueError("Give the card's last 4 digits")

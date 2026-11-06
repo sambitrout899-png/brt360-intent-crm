@@ -42,6 +42,14 @@ def operation_of(raw, values=None) -> str:
 
 def asset_of_order(db, tenant_id, order_id):
     """The installed service an order made - the live one when it made several."""
+    live = live_assets_of_order(db, tenant_id, order_id)
+    if len(live) > 1:
+        raise ValueError(f"Order {order_id} installed {len(live)} services (assets {', '.join(str(a.id) for a in live)}) - pick the asset")
+    return live[0]
+
+
+def live_assets_of_order(db, tenant_id, order_id):
+    """Every installed service an order made that is still live (a multi-service B2C order makes several)."""
     order = db.get(Order, int(order_id))
     if order is None or order.tenant_id != tenant_id:
         raise ValueError(f"Order {order_id} not found")
@@ -54,9 +62,7 @@ def asset_of_order(db, tenant_id, order_id):
     live = [a for a in assets if a.status != AssetStatus.decommissioned]
     if not live:
         raise ValueError(f"Order {order.id} has no installed service to change" + (" - it is decommissioned" if assets else ""))
-    if len(live) > 1:
-        raise ValueError(f"Order {order.id} installed {len(live)} services (assets {', '.join(str(a.id) for a in live)}) - pick the asset")
-    return live[0]
+    return live
 
 
 def customer_assets(db, tenant_id, party_id):
@@ -749,6 +755,19 @@ def live_change(db, tenant_id, order, operation, values=None):
     return submit(db, tenant_id, None, operation, {**(values or {}), "order_id": order.id, "fulfil_now": True})
 
 
+def live_change_all(db, tenant_id, order, operation, values=None):
+    """Suspend / resume / cancel / terminate act on the whole subscription: every live service the order installed
+    (fibre and its add-on together). One service: as live_change. Returns the changes made."""
+    assets = live_assets_of_order(db, tenant_id, order.id)
+    if len(assets) == 1:
+        return [live_change(db, tenant_id, order, operation, values)]
+    if operation == "resume":
+        assets = [a for a in assets if a.status == AssetStatus.suspended] or assets
+    elif operation == "suspend":
+        assets = [a for a in assets if a.status == AssetStatus.active] or assets
+    return [submit(db, tenant_id, a.id, operation, {**(values or {}), "fulfil_now": True}) for a in assets]
+
+
 def complete(db, order):
     """Called only by fulfillment. Idempotent; optimistic revision check."""
     if order.status == OrderStatus.completed:
@@ -797,8 +816,13 @@ def complete(db, order):
     else:
         if order.order_type != OrderType.new:
             raise ValueError("Change orders must originate from an asset")
+        from app.models.order_mgmt import OmLine
         for item in order.items:
-            assetize(db, order, item)
+            asset = assetize(db, order, item)
+            # the order's line for this service is done, and points at what it installed
+            for line in db.query(OmLine).filter(OmLine.tenant_id == order.tenant_id, OmLine.context_type == "order", OmLine.context_id == order.id,
+                                                OmLine.core_item_id == item.id, OmLine.status == "open"):
+                line.status, line.asset_id = "complete", asset.id if asset is not None else line.asset_id
     for item in order.items:
         item.status = "completed"
     order.status = OrderStatus.completed

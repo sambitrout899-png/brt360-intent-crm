@@ -165,6 +165,106 @@ def test_vanilla_b2c_process_has_no_lead_or_quote_steps(client):
     assert "INT-104" in b2c and not {"INT-46", "INT-17", "INT-05", "INT-38", "INT-18"} & set(b2c)
 
 
+def _follow(client, body, order_id, hops=8):
+    """The guided next steps after an order (approve, install, test, accept), as the result screen offers them."""
+    for _ in range(hops):
+        options = body.get("next_actions") or []
+        if not options:
+            return body
+        nxt = options[0]
+        fill = {"order_id": order_id, "decision": "approve", "document_ref": "ACCEPT.pdf", "signature": "Customer", **(nxt.get("entities") or {})}
+        body = _run(client, nxt["code"], **fill)
+        assert body["status"] == "executed", body
+    return body
+
+
+def _assets(client, party):
+    import json
+
+    from app.models.accounts import ServiceAccount
+    from app.models.fulfillment import Asset
+
+    db = client.TestSessionLocal()
+    try:
+        return sorted((json.loads(a.instance_json or "{}").get("offering_name"), a.status.value, json.loads(a.instance_json or "{}").get("net_unit_price"))
+                      for a in db.query(Asset).join(ServiceAccount, ServiceAccount.id == Asset.service_account_id)
+                      .filter(ServiceAccount.party_id == party, Asset.superseded_by_asset_id.is_(None)))
+    finally:
+        db.close()
+
+
+def test_every_service_of_a_b2c_order_is_installed_billed_and_suspended_together(client):
+    """A fibre plan with an add-on: both installed as services, both priced and billed, the order's lines closed on
+    fulfilment, and suspend / resume act on the whole subscription."""
+    _setup(client)
+    _launch(client, "Mesh Wi-Fi Plus", "B2C", price=199)
+    party = _run(client, "INT-41", name="Two Services")["result"]["party_id"]
+    placed = _run(client, "INT-104", party_id=party, products=["Home Fiber 100", "Mesh Wi-Fi Plus"], order_channel="web",
+                  installation_address="12 MG Road, Bengaluru", payment_method="upi")
+    assert placed["status"] == "executed", placed
+    order = placed["result"]["order_id"]
+    assert placed["result"]["payment"]["status"] == "authorized"  # UPI: an instant payment
+    _follow(client, placed, order)
+    assert _assets(client, party) == [("Home Fiber 100", "active", 500.0), ("Mesh Wi-Fi Plus", "active", 199.0)]
+    view = client.get(f"/api/order-management/orders/{order}").json()
+    assert view["status"] == "completed" and {l["status"] for l in view["lines"] if l["main"]} == {"complete"}
+    billed = _run(client, "INT-84", party_id=party)["result"]["invoice"]["lines"]
+    assert all(any(name in l["description"] for l in billed) for name in ("Home Fiber 100", "Mesh Wi-Fi Plus")), billed
+    assert _run(client, "INT-85", party_id=party, payment_method="upi", reference="UPI-1")["status"] == "executed"
+    assert _run(client, "INT-09", order_id=order, action="suspend")["status"] == "executed"
+    assert {s for _, s, _ in _assets(client, party)} == {"suspended"}
+    assert _run(client, "INT-70", order_id=order)["status"] == "executed"
+    assert {s for _, s, _ in _assets(client, party)} == {"active"}
+
+
+def test_an_asset_change_offers_to_confirm_its_fulfilment(client):
+    _setup(client)
+    _launch(client, "Home Fiber 300", "B2C", price=900)
+    party = _run(client, "INT-41", name="Upgrader")["result"]["party_id"]
+    placed = _run(client, "INT-104", party_id=party, products=["Home Fiber 100"], order_channel="web", installation_address="1 Lake Road")
+    _follow(client, placed, placed["result"]["order_id"])
+    from app.models.accounts import ServiceAccount
+    from app.models.fulfillment import Asset
+
+    db = client.TestSessionLocal()
+    asset_id = db.query(Asset.id).join(ServiceAccount, ServiceAccount.id == Asset.service_account_id).filter(ServiceAccount.party_id == party).scalar()
+    db.close()
+    change = _run(client, "INT-107", asset_id=asset_id, asset_operation="modify", offering_name="Home Fiber 300")
+    assert change["status"] == "executed" and change["next_actions"][0]["code"] == "INT-108"
+    done = _run(client, "INT-108", **{"order_id": change["result"]["order_id"], **change["next_actions"][0]["entities"]})
+    assert done["status"] == "executed" and ("Home Fiber 300", "active", 900.0) in _assets(client, party)
+
+
+def test_a_mobile_plan_on_a_b2c_order_is_activated_not_installed(client):
+    _setup(client)
+    assert client.post("/api/mobile/sample-catalog").status_code == 200
+    party = _run(client, "INT-41", name="Mobile Buyer")["result"]["party_id"]
+    out = _run(client, "INT-104", party_id=party, products=["Postpaid 399"], order_channel="store", installation_address="2 Hill Road")
+    assert out["status"] == "executed", out
+    r = out["result"]
+    assert r["mobile_only"] and r["msisdn"] and r["payment_type"] == "postpaid"
+    from app.models.assurance import WorkOrder
+
+    db = client.TestSessionLocal()
+    assert db.query(WorkOrder).filter(WorkOrder.order_id.in_([o["order_id"] for o in r["orders"]])).count() == 0  # no installation visit
+    db.close()
+    view = client.get(f"/api/order-management/orders/{r['orders'][0]['order_id']}").json()
+    assert view["status"] == "completed" and view["om_status"] == "fulfilled"  # the Order Module sees the activation done
+    codes = [a["code"] for a in out["next_actions"]]
+    assert "INT-25" not in codes and "INT-130" in codes
+    if r["lines"][0]["status"] == "pending":  # no SIM in stock: handing one over is the first step offered
+        assert codes[0] == "INT-137"
+    prepaid = _run(client, "INT-104", party_id=party, products=["Prepaid Smart 28"], order_channel="store", installation_address="2 Hill Road")
+    assert prepaid["status"] == "failed" and "Activate mobile lines" in str(prepaid)
+
+
+def test_indian_identity_documents_are_accepted(client):
+    party = _run(client, "INT-41", name="KYC Person")["result"]["party_id"]
+    for kind in ("aadhaar", "PAN", "driving licence", "voter_id"):
+        assert _run(client, "INT-13", party_id=party, id_number="123412341234", id_type=kind)["status"] == "executed", kind
+    assert "Unsupported identity document type" in str(_run(client, "INT-13", party_id=party, id_number="1", id_type="library card"))
+
+
 def test_b2c_only_prospect_fields_are_hidden_for_b2b(client):
     """The Add prospect form shows the direct-order fields only for a B2C prospect,
     and a B2B prospect never places an order even if such values arrive."""

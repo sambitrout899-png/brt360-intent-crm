@@ -146,6 +146,8 @@ def extract(code: str, text: str, fields: dict[str, Any], loose: dict[str, Any])
 
 
 NEXT: dict[str, list[tuple[str, str]]] = {
+    "INT-107": [("INT-108", "Confirm fulfillment once the change is done in the network"), ("INT-111", "Revise the change order"),
+                ("INT-110", "Cancel the change instead")],
     "INT-110": [("INT-107", "Order another change"), ("INT-113", "See the service's history")],
     "INT-111": [("INT-108", "Confirm fulfillment once orchestration completes"), ("INT-110", "Cancel the change instead")],
     "INT-112": [("INT-108", "Confirm fulfillment of each change order")],

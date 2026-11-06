@@ -1311,6 +1311,13 @@ def outcome(
             candidates = [c for c in candidates if c[0] not in ("INT-46", "INT-04", "INT-17", "INT-05", "INT-38", "INT-18")]
     if code in ("INT-104", "INT-15", "INT-41") and result.get("held"):
         candidates = _B2C_NOT_FEASIBLE
+    if code in ("INT-104", "INT-15", "INT-41") and result.get("mobile_only"):
+        candidates = _NEXT.get("INT-136", [])  # the mobile lines are live - no fulfilment to start
+    if code in ("INT-104", "INT-136") and any(l.get("status") == "pending" for l in result.get("lines") or result.get("mobile_lines") or []):
+        # a line waiting for its SIM (none in stock, or a physical one to hand over): giving the SIM makes it live
+        candidates = [("INT-137", "Hand over the SIM - the line goes live")] + list(candidates)
+        waiting = next(l for l in result.get("lines") or result.get("mobile_lines") or [] if l.get("status") == "pending")
+        merged.setdefault("msisdn", waiting.get("msisdn"))
     if isinstance(result.get("note"), str):
         parts.append(result["note"])
     if map_decides:

@@ -10,6 +10,8 @@ system-of-record view a traditional CRM would call "Customer 360".
 
 from __future__ import annotations
 
+from typing import Any
+
 import json
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -118,9 +120,11 @@ def _quote_configuration(db: Session, quote: Quote) -> dict | None:
     }
 
 
-def _order_configuration(db: Session, order: Order) -> list[dict]:
+def _order_configuration(db: Session, order: Order, designs: dict[str, Any] | None = None) -> list[dict]:
+    """designs: a product's current design, shared by the orders of one listing (a product is designed once, not per order line)."""
     from app.crm_core import product_config_service as product_config
 
+    designs = {} if designs is None else designs
     out = []
     for item in order.items:
         attrs = product_config.order_item_attributes(db, item.id)
@@ -134,8 +138,17 @@ def _order_configuration(db: Session, order: Order) -> list[dict]:
                     "net_unit_price": item.net_unit_price,
                     "pricing_attributes": attrs[0], "technical_attributes": attrs[1],
                     "missing": product_config.missing_technical(db, order.tenant_id, offering.name, attrs[0], attrs[1],
-                                                               _frozen(db, order, offering)) if offering else []})
+                                                               _frozen(db, order, offering) or _design(db, order.tenant_id, offering.name, designs))
+                    if offering else []})
     return out
+
+
+def _design(db: Session, tenant_id: int, offering_name: str, designs: dict[str, Any]) -> dict[str, Any]:
+    if offering_name not in designs:
+        from app.crm_core import product_config_service as product_config
+
+        designs[offering_name] = product_config.schema(db, tenant_id, offering_name)
+    return designs[offering_name]
 
 
 def _quote_out(db: Session, quote: Quote, offering_names: dict[int, str]) -> QuoteOut:
@@ -194,7 +207,8 @@ def _lead_out(lead: Lead) -> LeadOut:
     )
 
 
-def _order_out(db: Session, order: Order, party_name: str, service_account_name: str) -> OrderOut:
+def _order_out(db: Session, order: Order, party_name: str, service_account_name: str, designs: dict[str, Any] | None = None,
+               work_orders: list | None = None) -> OrderOut:
     service_orders = [
         ServiceOrderOut(
             id=so.id,
@@ -204,7 +218,7 @@ def _order_out(db: Session, order: Order, party_name: str, service_account_name:
         )
         for so in order.service_orders
     ]
-    fulfillment_work_orders = (
+    fulfillment_work_orders = work_orders if work_orders is not None else (
         db.query(WorkOrder)
         .filter(WorkOrder.order_id == order.id, WorkOrder.kind != "field_dispatch")
         .order_by(WorkOrder.created_at)
@@ -228,7 +242,7 @@ def _order_out(db: Session, order: Order, party_name: str, service_account_name:
         milestones=[{"code": m.code, "label": m.label, "detail": m.detail, "reached_at": m.reached_at} for m in order.milestones],
         segment=order.profile.segment if order.profile is not None else None,
         discount_approval=_approval_chain_dict(approval_service.get_chain_instance(db, "order", order.id, "discount")),
-        configuration=_order_configuration(db, order),
+        configuration=_order_configuration(db, order, designs),
     )
 
 
@@ -574,12 +588,24 @@ def list_orders(status: str | None = None, db: Session = Depends(get_db), tenant
     query = access_service.apply(db.query(Order).filter(Order.tenant_id == tenant_id), Order, db, access, "order")
     if status:
         query = query.filter(Order.status == status)
-    orders = query.order_by(Order.created_at.desc()).all()
+    from sqlalchemy.orm import selectinload
+
+    from app.models.orders import ServiceOrder
+
+    # what every order shows, read for the whole list at once (not one query per order)
+    orders = query.options(selectinload(Order.items), selectinload(Order.service_orders).selectinload(ServiceOrder.resources),
+                           selectinload(Order.milestones), selectinload(Order.profile)).order_by(Order.created_at.desc()).all()
+    work_orders: dict[int, list] = {}
+    for w in (db.query(WorkOrder).filter(WorkOrder.order_id.in_([o.id for o in orders] or [-1]), WorkOrder.kind != "field_dispatch")
+              .order_by(WorkOrder.created_at)):
+        work_orders.setdefault(w.order_id, []).append(w)
     party_names = {p.id: p.name for p in db.query(Party.id, Party.name).filter(Party.tenant_id == tenant_id).all()}
     service_account_names = {
         sa.id: sa.name for sa in db.query(ServiceAccount.id, ServiceAccount.name).filter(ServiceAccount.tenant_id == tenant_id).all()
     }
-    return [_order_out(db, o, party_names.get(o.party_id, "?"), service_account_names.get(o.service_account_id, "?")) for o in orders]
+    designs: dict[str, Any] = {}  # each product's design, worked out once for the whole list
+    return [_order_out(db, o, party_names.get(o.party_id, "?"), service_account_names.get(o.service_account_id, "?"), designs,
+                       work_orders.get(o.id, [])) for o in orders]
 
 
 @router.get("/orders/{order_id}", response_model=OrderOut)

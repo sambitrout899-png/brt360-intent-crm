@@ -21,6 +21,13 @@ from app.models.sla import SlaClock
 from app.timeutils import utcnow
 
 
+# the identity documents accepted - national ones of the regions served (India: Aadhaar, PAN, voter ID; Gulf: iqama) and international
+ID_TYPES = ("national_id", "passport", "aadhaar", "pan", "driving_licence", "voter_id", "residence_permit", "iqama", "commercial_registration")
+_ID_ALIASES = {"aadhar": "aadhaar", "aadhaar_card": "aadhaar", "pan_card": "pan", "driving_license": "driving_licence", "dl": "driving_licence",
+               "voter_card": "voter_id", "epic": "voter_id", "national_identity": "national_id", "id_card": "national_id",
+               "resident_permit": "residence_permit", "cr": "commercial_registration"}
+
+
 def _stub_check(id_number: str) -> str:
     upper = id_number.upper()
     if "FAIL" in upper:
@@ -38,9 +45,10 @@ def submit_verification(
     party = db.get(Party, party_id)
     if party is None or party.tenant_id != tenant_id:
         raise ValueError("Customer not found in this workspace")
-    id_type = str(id_type).strip().lower().replace(" ", "_")
-    if id_type not in ("national_id", "passport", "iqama", "commercial_registration"):
-        raise ValueError("Unsupported identity document type")
+    id_type = str(id_type).strip().lower().replace(" ", "_").replace("-", "_")
+    id_type = _ID_ALIASES.get(id_type, id_type)
+    if id_type not in ID_TYPES:
+        raise ValueError("Unsupported identity document type - use one of: " + ", ".join(ID_TYPES))
     if is_b2c(party) and id_type == "commercial_registration":
         raise ValueError("Commercial registration is for businesses. Select a personal identity document for this B2C customer.")
     if is_b2c(party) and provider_name.upper() == "WATHQ":

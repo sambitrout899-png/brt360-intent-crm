@@ -828,6 +828,9 @@ def _fulfil(db: Session, tenant_id: int, order, plan: str) -> None:
     orchestration_adapter.submit_order_for_orchestration(order.id)
     network_activation_adapter.activate_connection(order.items[0].id)
     abo_service.complete(db, order)
+    from app.crm_core import om_service
+
+    om_service.order_detail(db, tenant_id, order).om_status = "fulfilled"  # the Order Module sees it done too
 
 
 def on_asset_installed(db: Session, order, item, asset, data: dict[str, Any]) -> None:

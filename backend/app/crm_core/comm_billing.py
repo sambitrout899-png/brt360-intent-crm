@@ -563,7 +563,10 @@ def _apply_credit(db: Session, tenant_id: int, party_id: int) -> None:
 _PAY_METHODS = {"card": "credit_card", "credit card": "credit_card", "credit_card": "credit_card", "debit card": "credit_card",
                 "eft": "eft", "bank": "eft", "direct debit": "eft", "auto_debit": "eft", "bank transfer": "bank_transfer",
                 "transfer": "bank_transfer", "bank_transfer": "bank_transfer", "cash": "cash", "cheque": "cheque", "check": "cheque",
-                "reference": "reference", "post office": "reference", "bank counter": "reference"}
+                "reference": "reference", "post office": "reference", "bank counter": "reference",
+                # instant payments - confirmed by the provider's reference
+                "upi": "upi", "net banking": "net_banking", "netbanking": "net_banking", "net_banking": "net_banking",
+                "wallet": "wallet", "wallet app": "wallet", "wallet_app": "wallet", "debit_card": "credit_card"}
 
 
 def take_payment(db: Session, tenant_id: int, e: dict[str, Any]) -> dict[str, Any]:
@@ -586,7 +589,7 @@ def take_payment(db: Session, tenant_id: int, e: dict[str, Any]) -> dict[str, An
     method = _PAY_METHODS.get(str(e.get("payment_method") or "").strip().lower().replace("_", " "),
                               _PAY_METHODS.get(str(e.get("payment_method") or "").strip().lower()))
     if method is None:
-        raise ValueError("Payment method: credit_card, eft, bank_transfer, cash, cheque or reference")
+        raise ValueError("Payment method: credit_card, eft, bank_transfer, upi, net_banking, wallet, cash, cheque or reference")
     card = cs.last4(e.get("card_last4"), "Card") if e.get("card_last4") not in (None, "") else ""
     bank = cs.last4(e.get("bank_last4"), "Bank account") if e.get("bank_last4") not in (None, "") else ""
     profile = None

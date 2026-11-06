@@ -412,10 +412,10 @@ def _handle_suspension_breach(db: Session, clock: SlaClock, correlation_id: int)
     order = db.get(Order, clock.entity_id)
     if abo_service.installed(order):
         try:
-            asset = abo_service.asset_of_order(db, clock.tenant_id, order.id)
+            suspended = [a for a in abo_service.live_assets_of_order(db, clock.tenant_id, order.id) if a.status.value == "suspended"]
         except ValueError:
-            asset = None
-        if asset is None or asset.status.value != "suspended":
+            suspended = []
+        if not suspended:
             return {"outcome": "skipped", "detail": "The service is no longer suspended - nothing to do."}
         result = _live_lifecycle(db, clock.tenant_id, correlation_id, order, "terminate")
         return {"outcome": "terminated", "detail": f"Suspension grace period lapsed - service of order {order.id} terminated "
@@ -459,22 +459,25 @@ def _live_lifecycle(db: Session, tenant_id: int, correlation_id: int, order: Ord
                 return {"order_id": order.id, "status": OrderStatus.active.value, "retained": True}
             return {"order_id": order.id, "status": OrderStatus.pending_cancellation.value,
                     "retention_window_deadline": window.deadline.isoformat()}
-        abo_service.asset_of_order(db, tenant_id, order.id)  # a service to cancel, before a window opens for it
+        abo_service.live_assets_of_order(db, tenant_id, order.id)  # a service to cancel, before a window opens for it
         clock = sla_service.start_clock(db, tenant_id, "retention_window", "order", order.id)
         if clock is not None:
             event_bus.publish(db, correlation_id, "order.retention_window_opened", {"order_id": order.id, "deadline": clock.deadline.isoformat()})
             return {"order_id": order.id, "status": OrderStatus.pending_cancellation.value, "retention_window_deadline": clock.deadline.isoformat()}
-    change = abo_service.live_change(db, tenant_id, order, operation)
+    changes = abo_service.live_change_all(db, tenant_id, order, operation)  # every service the order installed
+    change = changes[0]
     account = order_adapter.get_or_create_billing_account(db, tenant_id, order.party_id)
     fee = 0.0
     if operation in ("terminate", "disconnect"):
         months_elapsed = max(0, (utcnow() - order.created_at).days // 30)
-        fee = order_service.calculate_early_termination_fee(change["current_monthly"], order.contract_months, months_elapsed)
+        fee = order_service.calculate_early_termination_fee(sum(c["current_monthly"] or 0 for c in changes), order.contract_months, months_elapsed)
         if fee > 0:
             order_adapter.apply_billing_adjustment(db, account.id, change["order_id"], fee, f"Early termination fee ({action})")
     status = {"suspend": "suspended", "terminate": "terminated", "disconnect": "cancelled", "resume": "active"}[operation]
     out = {"order_id": order.id, "status": status, "early_termination_fee": fee, "asset_id": change["asset_id"],
            "asset_status": change.get("asset_status"), "change_order_id": change["order_id"]}
+    if len(changes) > 1:
+        out.update(asset_ids=[c["asset_id"] for c in changes], change_order_ids=[c["order_id"] for c in changes])
     if operation == "suspend" and (clock := sla_service.start_clock(db, tenant_id, "suspension_grace", "order", order.id)) is not None:
         out["suspension_grace_deadline"] = clock.deadline.isoformat()
     if operation in ("terminate", "disconnect", "resume"):

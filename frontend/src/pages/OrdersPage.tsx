@@ -84,8 +84,16 @@ export default function OrdersPage({ onRequestIntent }: { onRequestIntent: (text
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState<StatusFilter>("all");
 
+  // null while the first list is on its way - so an empty page never says "No orders yet" before it knows
+  const [loaded, setLoaded] = useState<true | "error" | null>(null);
+
   function load() {
-    listOrders().then(setOrders);
+    listOrders()
+      .then((o) => {
+        setOrders(o);
+        setLoaded(true);
+      })
+      .catch(() => setLoaded((l) => l ?? "error"));
     listBillingAccounts().then(setBillingAccounts);
     omApi<Record<number, OmInfo>>("/orders").then(setOm).catch(() => setOm({}));
   }
@@ -448,7 +456,11 @@ export default function OrdersPage({ onRequestIntent }: { onRequestIntent: (text
               </article>
             );
           })}
-          {orders.length === 0 && <p className="rounded-2xl border border-dashed border-slate-800 p-10 text-center text-sm text-slate-500">No orders yet.</p>}
+          {orders.length === 0 && (
+            <p className="rounded-2xl border border-dashed border-slate-800 p-10 text-center text-sm text-slate-500">
+              {loaded === null ? "Loading orders…" : loaded === "error" ? "Couldn't load the orders - try Refresh." : "No orders yet."}
+            </p>
+          )}
           {orders.length > 0 && shown.length === 0 && <p className="rounded-2xl border border-dashed border-slate-800 p-10 text-center text-sm text-slate-500">No orders match.</p>}
         </div>
       )}

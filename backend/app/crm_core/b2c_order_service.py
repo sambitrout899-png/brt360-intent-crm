@@ -220,22 +220,51 @@ def place_order(db: Session, tenant_id: int, entities: dict[str, Any], execution
     others = [(n, q) for n, q in wanted if (n, q) not in services]
     if not services:
         raise ValueError("Add at least one service from the catalog (equipment such as a router can come with it)")
+    # mobile plans are activated by the mobile activation (number and SIM from inventory, live at once - no installation visit)
+    from app.crm_core import comm_mobile
+
+    plans = [(n, q) for n, q in services if comm_mobile.product_kind(db, tenant_id, comm_mobile.offering_of(db, tenant_id, n)) == "plan"]
+    for n, _ in plans:
+        prof = comm_mobile.plan_of(db, tenant_id, n, party=party)
+        if prof["payment_type"] == "prepaid" and prof["price"] > 0 and not entities.get("initial_recharge"):
+            raise ValueError(f"{n} is a prepaid plan - sell it with “Activate mobile lines”, which takes the first recharge "
+                             f"(at least {prof['price']:,.2f})")
+    mobile = [comm_mobile.activate(db, tenant_id, {**entities, "party_id": party.id, "offering_name": n, "quantity": q,
+                                                   "order_channel": entities.get("order_channel") or "store"}) for n, q in plans]
+    services = [s for s in services if s not in plans]
+    if not services:  # only mobile plans: done
+        lines = [l for m in mobile for l in m["lines"]]
+        first = mobile[0]
+        return {"order_placed": True, "mobile_only": True, "party_id": party.id, "order_id": first["orders"][0]["order_id"] if first["orders"] else None,
+                "orders": [o for m in mobile for o in m["orders"]], "lines": lines, "msisdn": first.get("msisdn"),
+                "payment_type": first.get("payment_type"), "plan": first.get("plan"), "feasibility": "passed",
+                "note": "Mobile line(s) active: " + "; ".join(m["summary"] for m in mobile if m.get("summary")),
+                **({"esim_activation_codes": {k: v for m in mobile for k, v in (m.get("esim_activation_codes") or {}).items()}}
+                   if any(m.get("esim_activation_codes") for m in mobile) else {})}
     services = check_products(db, tenant_id, party, services)  # sold to B2C, and the customer is eligible
 
-    main_name, main_qty = services[0]
-    offering = pm.offering_of(db, tenant_id, main_name)
+    # every catalog service is an item of the order - each is installed as its own service (asset) and billed;
+    # anything else (equipment such as a router) is an order line that ships with it
     price_list = product_config.price_list_for(db, tenant_id, party)
-    base, _ = product_config.base_price(db, tenant_id, price_list, offering, main_qty)
+    priced = []
+    for name, qty in services:
+        off = pm.offering_of(db, tenant_id, name)
+        unit, _ = product_config.base_price(db, tenant_id, price_list, off, qty)
+        priced.append((off, qty, round(float(unit or 0), 2)))
+    offering = priced[0][0]
     billing_account = order_adapter.get_or_create_billing_account(db, tenant_id, party.id)
     service_account = account_service.get_or_create_service_account(db, tenant_id, billing_account.id, f"{offering.name} Service")
     order = order_adapter.create_order(db, tenant_id=tenant_id, party_id=party.id, service_account_id=service_account.id, quote_id=None,
-                                       order_type=OrderType.new, monthly_price=round(base * main_qty, 2))
-    order_adapter.add_order_item(db, order.id, offering.id, main_qty)
+                                       order_type=OrderType.new, monthly_price=round(sum(unit * qty for _, qty, unit in priced), 2))
+    for off, qty, unit in priced:
+        item = order_adapter.add_order_item(db, order.id, off.id, qty)
+        if len(priced) > 1:  # each service carries its own price (one service: the order's price is its price)
+            item.unit_price = item.net_unit_price = unit
     profile = process_service.order_profile(order, create=True)
     profile.segment = "B2C"
     d = om.order_detail(db, tenant_id, order)
     d.channel, d.channel_reference, d.installation_address = channel, str(entities.get("channel_reference") or "")[:100] or None, address or None
-    for name, qty in services[1:] + others:
+    for name, qty in others:
         om.add_line(db, tenant_id, "order", order, name, qty)
     if others:
         d.ship_to_address = d.ship_to_address or address[:400]
@@ -248,6 +277,9 @@ def place_order(db: Session, tenant_id: int, entities: dict[str, Any], execution
     out: dict[str, Any] = {"order_id": order.id, "order_number": d.order_number, "party_id": party.id, "channel": channel,
                            "channel_label": CHANNELS[channel], "feasibility": feas["outcome"], "checks": feas["checks"],
                            "service_account_id": service_account.id}
+    if mobile:  # a mixed order: its mobile plans are live already, the rest goes through fulfilment
+        out["mobile_lines"] = [l for m in mobile for l in m["lines"]]
+        out["mobile_orders"] = [o for m in mobile for o in m["orders"]]
     if feas["outcome"] != "passed":
         why = "; ".join(feas["reasons"])[:200]
         om.hold(db, tenant_id, order, "hold", ("Not feasible: " if feas["outcome"] == "failed" else "Waiting for feasibility: ") + why)
