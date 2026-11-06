@@ -25,6 +25,8 @@ from typing import Any, Iterator
 from sqlalchemy import event, inspect
 from sqlalchemy.orm import Session
 
+from app import outbound_guard
+
 # Bookkeeping rows - reported through what they mean, never as raw rows.
 _BOOKKEEPING = {
     "intent_execution_log", "domain_events", "entity_record_meta", "entity_state_history",
@@ -54,7 +56,8 @@ def capture(db: Session) -> Iterator[list[tuple[str, Any, dict]]]:
 
     event.listen(db, "after_flush", after_flush)
     try:
-        yield rows
+        with outbound_guard.simulation():  # undoing the database is one thing; nothing may reach another system
+            yield rows
     finally:
         event.remove(db, "after_flush", after_flush)
 

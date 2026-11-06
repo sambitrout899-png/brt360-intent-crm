@@ -1,5 +1,6 @@
 import FlowExpressionBuilder from "./FlowExpressionBuilder";
-import { useId, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { hubApi, type HubOperation } from "../api/client";
 import type { FlowCatalog, FlowFieldCatalog, FlowFieldDef, FlowIssue, FlowNode } from "../api/types";
 
 const INPUT = "mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200";
@@ -264,7 +265,31 @@ const KEY_LABELS: Record<string, string> = {
   approver: "Who approves",
   subject: "What they're asked",
   expire_days: "Expires after (days) - then it goes down 'expired'",
+  payload: "What to send",
+  expire_minutes: "Wait for the reply (minutes) - then it goes down 'expired'",
 };
+
+/** Which Integration Hub operation a Call external API step makes. */
+function HubOperationPicker({ value, waits, onChange }: { value: string; waits: boolean; onChange: (v: string) => void }) {
+  const [operations, setOperations] = useState<HubOperation[] | null>(null);
+  useEffect(() => {
+    hubApi<HubOperation[]>("/operations").then(setOperations).catch(() => setOperations([]));
+  }, []);
+  const usable = (operations ?? []).filter((o) => !waits || o.pattern === "request_reply");
+  const chosen = usable.find((o) => o.code === value);
+  const how = !chosen ? "" : chosen.mode === "async" ? (chosen.pattern === "request_only" ? "Queued with this flow; retried; nothing comes back to the flow." : "Queued with this flow; the reply comes back to it.")
+    : chosen.pattern === "request_only" ? "Called during the flow; holds it until accepted." : "Called during the flow; holds it for the answer: {{steps.<this step>.output.reply.*}}.";
+  return (
+    <>
+      <select value={value} onChange={(e) => onChange(e.target.value)} className={INPUT}>
+        <option value="">{operations === null ? "Loading…" : usable.length ? "Choose an operation…" : "None yet - add one in Admin → Integration Hub → Outbound"}</option>
+        {value && !chosen && operations !== null && <option value={value}>{value} (not found)</option>}
+        {usable.map((o) => <option key={o.id} value={o.code}>{o.code} - {o.name}</option>)}
+      </select>
+      {how && <span className="mt-1 block text-[11px] text-slate-500">{how}{waits ? " Then {{reply.*}} holds it." : ""}</span>}
+    </>
+  );
+}
 
 /** A Catch errors step's filter: error codes and categories, kept as "A, B, validation". */
 function CodePicker({ value, options, onChange }: { value: string; options: FlowCatalog["error_codes"]; onChange: (v: string) => void }) {
@@ -329,7 +354,12 @@ export default function NodeConfigFields({
       case "entity":
         return <Select value={value} onChange={(v) => set(key, v)} options={recordEntities.map((e) => ({ value: e.name, label: e.label }))} />;
       case "operation":
+        if (node.type === "call_api" || node.type === "call_api_wait") return <HubOperationPicker value={value} waits={node.type === "call_api_wait"} onChange={(v) => set(key, v)} />;
         return <Select value={value} onChange={(v) => set(key, v)} options={["read", "insert", "update", "upsert", "delete"].map((v) => ({ value: v, label: v }))} />;
+      case "expire_minutes":
+        return <input type="number" min={1} value={value} onChange={(e) => set(key, e.target.value.replace(/\D/g, ""))} placeholder="blank = a day" className={INPUT} />;
+      case "payload":
+        return <FlowExpressionBuilder key={`${node.id}-${key}`} value={config[key]} catalog={catalog} onChange={(v) => onConfig({ ...config, [key]: v as unknown as string })} />;
       case "match":
       case "values":
         return <FlowExpressionBuilder key={`${node.id}-${key}`} value={config[key]} catalog={catalog} targets={recordEntities.find((e) => e.name === config.entity)?.fields.filter((f) => key === "match" || f.writable).map((f) => f.name)} onChange={(v) => onConfig({ ...config, [key]: v as unknown as string })} />;

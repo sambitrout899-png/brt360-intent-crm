@@ -321,3 +321,4 @@ from app.models import notifications  # noqa: F401
 from app.models import function_map  # noqa: F401
 from app.models import change_control  # noqa: F401
 from app.models import use_cases  # noqa: F401
+from app.models import integration_hub  # noqa: F401

@@ -46,7 +46,9 @@ PREFIXES: dict[str, str] = {
     "product_specifications": "PSP", "work_orders": "WOR", "trouble_tickets": "TKT", "assets": "AST", "proposals": "PRP",
     "price_lists": "PRL", "price_list_items": "PLI", "positions": "POS", "departments": "DEP", "approval_chain_templates": "APR",
     "approval_chain_instances": "APQ", "flow_definitions": "FLW", "intent_execution_logs": "IEX", "domain_events": "EVT",
-    "bim_jobs": "BIJ", "bim_interfaces": "BIF", "page_layouts": "PGL", "validation_rules": "VRL",
+    "bim_jobs": "BIJ", "bim_interfaces": "BIF", "bim_external_refs": "BXR", "page_layouts": "PGL", "validation_rules": "VRL",
+    # integration hub
+    "hub_clients": "HCL", "hub_connections": "HCN", "hub_operations": "HOP", "hub_services": "HSV", "hub_subscriptions": "HSB", "hub_messages": "HMS",
     # field service
     "fs_service_regions": "SRG", "fs_engineers": "FSE", "fs_activity_templates": "ATP", "fs_entitlements": "ENT",
     "fs_warranties": "WTY", "fs_asset_warranties": "AWT", "fs_request_details": "SRQ", "fs_activities": "ACT",
@@ -185,6 +187,12 @@ def reserve(connection, count: int) -> range:
 
 def mint(connection, table: str, count: int = 1) -> list[str]:
     return [code_for(n, table) for n in reserve(connection, count)]
+
+
+def allocate(connection, table: str) -> str:
+    """One code for a record about to be saved, from this process's block - without holding the register's row
+    for the rest of the caller's transaction, as mint does."""
+    return code_for(_numbers(connection.engine, connection, 1)[0], table)
 
 
 # Numbers for records being saved come from a block this process holds. On

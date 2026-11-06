@@ -44,7 +44,7 @@ MODULES: tuple[Module, ...] = (
     # scope, ids, metrics, events out, licensing, the capability registry.
     Module("chassis", (
         "config", "db", "auth", "tenancy", "rls", "observability", "timeutils", "brt_id",
-        "capabilities", "boundaries", "licensing", "service", "ratelimit", "services", "documents", "report_design", "experience.routes_report_design", "password_policy", "secret_box", "",
+        "capabilities", "boundaries", "licensing", "service", "ratelimit", "services", "documents", "report_design", "experience.routes_report_design", "password_policy", "secret_box", "outbound_guard", "",
         "data_intelligence.event_bus", "data_intelligence", "models.auth", "models.tenant",
         "schemas", "experience", "orchestration", "intent_engine", "crm_core", "integration",
         "experience.routes_modules", "crm_core.subscription_service", "models.subscriptions",
@@ -83,7 +83,10 @@ MODULES: tuple[Module, ...] = (
         "schemas.catalog", "orchestration.actions", "orchestration.actions_config",
         "orchestration.actions_configurator", "integration.tmf620_adapter", "services.product",
     ), uses=("metadata", "audit", "ai")),
-    Module("bim", ("crm_core.bim_service", "models.bim", "experience.routes_bim", "services.bim"), uses=("product", "metadata", "ai")),
+    # BRT Integration Manager: loads and the Integration Hub. A published service runs through the intent pipeline, and a
+    # reply can continue a waiting flow - so it uses them; they reach it only through the capability registry.
+    Module("bim", ("crm_core.bim_service", "models.bim", "experience.routes_bim", "services.bim", "hub", "hub.*", "models.integration_hub",
+                   "experience.routes_hub", "experience.routes_gateway"), uses=("product", "metadata", "ai", "intent", "flow", "identity", "audit", "crm")),
     Module("training", (
         "crm_core.training_*", "models.training", "experience.routes_training*", "schemas.training", "services.training*",
     ), uses=("identity", "notification", "metadata", "ai")),

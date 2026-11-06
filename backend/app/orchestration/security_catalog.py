@@ -400,6 +400,8 @@ PUBLIC_BY_DESIGN = {
     "/api/assessments/{token}/qr": "QR code of the assessment link (capability token)",
     "/api/p/": "Participant self-service links for training - unguessable capability tokens or codes",
     "/api/health": "Liveness check (no data)",
+    "/api/gateway/oauth/token": "OAuth2 token endpoint for integration clients - exchanges a client's key for a short-lived token, rate limited",
+    "/api/gateway/callback/": "An external system's reply to an async request - needs the single-use random token it was sent, stored only as a hash",
 }
 
 

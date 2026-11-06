@@ -1,8 +1,9 @@
 """BIM - BRT Integration Manager (crm_core/bim_service.py).
 
 Batch loads (CSV / JSON files) and the EAI API both require each record's
-BRT_ID - reserve them first (POST /api/bim/brt-ids). Administrators only:
-an integration signs in as an administrator account of its organization.
+BRT_ID - reserve them first (POST /api/bim/brt-ids), or give the interface a
+key field and BRT 360 issues them. Administrators only: another system calls
+the gateway instead, with a key of its own (experience/routes_gateway.py).
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ from sqlalchemy.orm import Session
 from app.auth import get_current_user, require_roles
 from app.crm_core import bim_service
 from app.db import get_db
+from app.hub import mapping
 from app.models.auth import User, UserRole
 from app.models.bim import BimInterface, BimJob
 from app.tenancy import get_current_tenant_id
@@ -147,6 +149,39 @@ def job(job_id: int, db: Session = Depends(get_db), tenant_id: int = Depends(get
     return bim_service.job_out(row)
 
 
+def _own_job(db: Session, tenant_id: int, job_id: int) -> BimJob:
+    row = db.get(BimJob, job_id)
+    if row is None or row.tenant_id != tenant_id:
+        raise HTTPException(404, "Job not found")
+    return row
+
+
+@router.get("/jobs/{job_id}/errors.csv", response_class=PlainTextResponse)
+def job_errors(job_id: int, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id)):
+    """The refused rows and why, as a file to fix and load again."""
+    return PlainTextResponse(bim_service.errors_csv(_own_job(db, tenant_id, job_id)), media_type="text/csv",
+                             headers={"Content-Disposition": f'attachment; filename="bim-job-{job_id}-errors.csv"'})
+
+
+class ReprocessIn(BaseModel):
+    rows: list[dict[str, Any]] | None = None  # corrected rows; blank: the refused rows as they were
+    dry_run: bool = False
+
+
+@router.post("/jobs/{job_id}/reprocess")
+def reprocess_job(job_id: int, payload: ReprocessIn, db: Session = Depends(get_db), tenant_id: int = Depends(get_current_tenant_id),
+                  user: User = Depends(get_current_user)) -> dict[str, Any]:
+    """Loads the refused rows again, after the data, the mapping or the record they depend on has been fixed."""
+    job = _own_job(db, tenant_id, job_id)
+    try:
+        fresh, results = bim_service.reprocess(db, tenant_id, job, payload.rows, payload.dry_run, user.id)
+    except ValueError as exc:
+        db.rollback()
+        raise _bad(exc)
+    db.commit()
+    return {**bim_service.job_out(fresh), "results": results[:2000]}
+
+
 # ---------------------------------------------------------------- interfaces
 
 
@@ -155,9 +190,27 @@ class InterfaceIn(BaseModel):
     name: str = Field(min_length=1, max_length=150)
     entity: str
     mode: str = "upsert"
-    mapping: dict[str, str] = {}
+    mapping: Any = {}  # {source: target}, or a list of rules with transforms (hub/mapping.py)
     description: str = ""
     is_active: bool = True
+    ignore_unmapped: bool = False
+    source_system: str = Field(default="", max_length=60)
+    key_field: str = Field(default="", max_length=200)
+    ack_operation_id: int | None = None
+    pull_operation_id: int | None = None
+    pull_every_minutes: int = Field(default=0, ge=0, le=525600)
+    pull_records_path: str = Field(default="", max_length=200)
+
+
+def _operation_id(db: Session, tenant_id: int, operation_id: int | None, what: str) -> int | None:
+    from app.models.integration_hub import HubOperation
+
+    if operation_id is None:
+        return None
+    op = db.get(HubOperation, operation_id)
+    if op is None or op.tenant_id != tenant_id:
+        raise HTTPException(400, f"{what}: no such operation")
+    return op.id
 
 
 def _save_interface(db: Session, tenant_id: int, row: BimInterface, payload: InterfaceIn) -> dict[str, Any]:
@@ -171,9 +224,20 @@ def _save_interface(db: Session, tenant_id: int, row: BimInterface, payload: Int
         raise _bad(exc)
     if payload.mode not in ("upsert", "insert"):
         raise HTTPException(400, "mode is upsert or insert")
+    try:
+        rules = mapping.valid_mapping(payload.mapping or {})
+    except ValueError as exc:
+        raise _bad(exc)
+    if payload.pull_every_minutes and not payload.pull_operation_id:
+        raise HTTPException(400, "A scheduled pull needs the operation that fetches the records")
     row.code, row.name, row.entity, row.mode = code, payload.name, payload.entity, payload.mode
-    row.mapping_json = json.dumps({str(k).strip(): str(v).strip() for k, v in payload.mapping.items() if str(k).strip() and str(v).strip()})
+    row.mapping_json = json.dumps(rules)
     row.description, row.is_active = payload.description, payload.is_active
+    row.ignore_unmapped, row.key_field = payload.ignore_unmapped, payload.key_field.strip()
+    row.source_system = re.sub(r"[^A-Za-z0-9_-]", "_", payload.source_system.strip()).upper()
+    row.ack_operation_id = _operation_id(db, tenant_id, payload.ack_operation_id, "Acknowledgement")
+    row.pull_operation_id = _operation_id(db, tenant_id, payload.pull_operation_id, "Scheduled pull")
+    row.pull_every_minutes, row.pull_records_path = payload.pull_every_minutes, payload.pull_records_path.strip()
     db.commit()
     return bim_service.interface_out(row)
 

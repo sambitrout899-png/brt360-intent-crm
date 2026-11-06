@@ -38,6 +38,7 @@ from app.timeutils import utcnow
 log = logging.getLogger(__name__)
 
 MAX_STATE_FLOW_CASCADE = 3  # as for an intent (routes_intent.MAX_STATE_FLOW_CASCADE)
+DEFAULT_REPLY_MINUTES = 1440  # a Call API and wait for reply step that doesn't say
 
 
 # ---------------------------------------------------------------- pausing
@@ -55,6 +56,11 @@ def pause(db: Session, tenant_id: int, execution_id: int, flow: FlowDefinition, 
     if node["type"] == "wait":
         run.wait_kind = "timer"
         run.resume_at = now + dt.timedelta(minutes=flow_engine.wait_minutes(config) or 0)
+    elif node["type"] == "call_api_wait":
+        run.wait_kind = "reply"
+        minutes = str(config.get("expire_minutes") or "").strip()
+        run.resume_at = now + dt.timedelta(minutes=int(minutes) if minutes.isdigit() else DEFAULT_REPLY_MINUTES)
+        run.subject = f"Reply from {config.get('operation')}"[:300]
     else:
         run.wait_kind = "approval"
         approver = str(config.get("approver") or "").strip()
@@ -71,6 +77,10 @@ def pause(db: Session, tenant_id: int, execution_id: int, flow: FlowDefinition, 
     db.add(run)
     db.flush()
     entry.update(run_id=run.id, waiting=describe(db, run))
+    if run.wait_kind == "reply":  # the request goes in the same transaction: both exist, or neither
+        from app import capabilities
+
+        entry["request"] = capabilities.service("hub.flow_wait")(db, tenant_id, execution_id, flow.id, run.id, config)
     run.state_json = json.dumps({"ctx": ctx, "trace": trace, "caught": caught, "touched": touched}, default=str)
     return run
 
@@ -79,6 +89,8 @@ def describe(db: Session, run: FlowRun) -> dict[str, Any]:
     """What the run waits for, for people: {"kind", "until"} or {"kind", "approver", "expires"}."""
     if run.wait_kind == "timer":
         return {"kind": "timer", "until": run.resume_at.isoformat() if run.resume_at else None}
+    if run.wait_kind == "reply":
+        return {"kind": "reply", "subject": run.subject, "expires": run.resume_at.isoformat() if run.resume_at else None}
     if run.approver_user_id:
         user = db.get(User, run.approver_user_id)
         approver = user.name if user else f"user {run.approver_user_id}"
@@ -134,6 +146,18 @@ def resume(db: Session, run: FlowRun, branch: str) -> dict[str, Any]:
     return summary
 
 
+def reply_arrived(db: Session, run: FlowRun, branch: str, output: dict[str, Any]) -> dict[str, Any]:
+    """An external system answered a Call API and wait for reply step (hub/worker.py): {{reply.*}} and
+    {{steps.<id>.output.*}} hold it for the steps after. branch: replied | failed. The caller commits."""
+    state = json.loads(run.state_json or "{}")
+    ctx = state.setdefault("ctx", {})
+    ctx["reply"] = output.get("reply") if branch == "replied" else {"error": output.get("error")}
+    steps = ctx.setdefault("steps", {})
+    steps[run.node_id] = {**steps.get(run.node_id, {}), "output": output}
+    run.state_json = json.dumps(state, default=str)
+    return resume(db, run, branch)
+
+
 def _follow_up(db: Session, run: FlowRun, summary: dict[str, Any], ctx: dict[str, Any]) -> None:
     """What an intent does after its flows (routes_intent's lifecycle hook):
     state history and assignment rules for the records the rest of the run
@@ -177,7 +201,7 @@ def run_due(session_factory, now: dt.datetime | None = None, limit: int = 100) -
                 rls.scope(db, run.tenant_id)
                 if run.wait_kind == "approval":
                     run.decision, run.decided_at = "expired", now
-                resume(db, run, "expired" if run.wait_kind == "approval" else "")
+                resume(db, run, "expired" if run.wait_kind in ("approval", "reply") else "")
                 db.commit()
                 done += 1
             except Exception:  # noqa: BLE001 - one run's trouble never stops the others

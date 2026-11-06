@@ -90,7 +90,7 @@ class FlowRun(Base):
     entity_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="waiting")
     node_id: Mapped[str] = mapped_column(String(60))  # the step it waits at
-    wait_kind: Mapped[str] = mapped_column(String(20))  # timer | approval
+    wait_kind: Mapped[str] = mapped_column(String(20))  # timer | approval | reply (an external system's)
     # timer: when it continues; approval: when it expires (None = never)
     resume_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
     approver_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)

@@ -37,6 +37,7 @@ CODES: dict[str, tuple[str, str]] = {
     "INVALID": ("validation", "A step's values were not accepted"),
     "NOT_ALLOWED": ("validation", "The step isn't allowed - module, state model or permission"),
     "SYSTEM": ("system", "An unexpected technical error"),
+    "INTEGRATION_FAILED": ("system", "A call to an external system failed - it refused, was unreachable or didn't answer in time"),
     "LOOP_LIMIT": ("system", "The flow ran too many steps - it probably loops"),
     "REJECTED": ("business", "A Reject step turned the request down"),
 }

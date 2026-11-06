@@ -6,6 +6,13 @@ class Settings(BaseSettings):
     training_public_origin: str = ""
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
+    # Integration Hub (app/hub/). The address other systems reach this platform at - for the WSDL, OpenAPI and {{reply_url}};
+    # blank: TRAINING_PUBLIC_ORIGIN. Outbound calls never reach private addresses, so a tenant can't get at this server's own
+    # database or containers; a platform with on-premise systems to call lists those networks here (10.20.0.0/16,192.168.5.10/32).
+    integration_public_origin: str = ""
+    integration_allow_private_cidrs: str = ""
+    integration_log_days: int = 30  # how long messages are kept; the dead-letter queue three times this. 0: for ever
+
     database_url: str = "sqlite:///./brt360.db"
     openai_api_key: str | None = None
     openai_model: str = "gpt-4o-mini"

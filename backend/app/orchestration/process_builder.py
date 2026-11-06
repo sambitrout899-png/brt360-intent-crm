@@ -45,6 +45,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app import outbound_guard
 from app.crm_core import approval_service, lifecycle_service
 from app.models.lifecycle import AssignmentRule, Position
 
@@ -1402,7 +1403,8 @@ def _checks(db: Session, tenant_id: int, blueprint: dict[str, Any], made: list[d
                     record_service.update_fields(db, tenant_id, flow.entity_type, sample,
                                                  {journey["field"]: journey["previous"]}, enforce_editable=False)
                 log = audit.start_execution(db, tenant_id, f"[process builder test run] {flow.name}", channel="agent")
-                run = flow_engine.run_flow(db, tenant_id, log.id, flow, ctx)
+                with outbound_guard.simulation():
+                    run = flow_engine.run_flow(db, tenant_id, log.id, flow, ctx)
                 steps = len((run or {}).get("trace") or (run or {}).get("steps") or [])
                 on = f" on {RECORD_WORDS.get(flow.entity_type or '', flow.entity_type)} #{sample.id}" if sample is not None else ""
                 checks.append({"component": c["id"], "ok": True, "message": f"Live - test run{on} passed{f' ({steps} steps)' if steps else ''}, nothing kept",

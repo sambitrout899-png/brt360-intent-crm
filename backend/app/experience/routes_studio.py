@@ -831,8 +831,11 @@ def simulate_flow(
     if flow.timing == "error":  # what the failed intent would hand over - editable as trigger inputs
         ctx["error"] = payload.result.get("error") if isinstance(payload.result.get("error"), dict) else {
             "code": "ACTION_FAILED", "category": "business", "message": "Simulated failure of the intent", "intent": flow.trigger_intent_type}
+    from app import outbound_guard
+
     try:
-        run = flow_engine.run_flow(db, tenant_id, log.id, flow, ctx)
+        with outbound_guard.simulation():  # a Call external API step reports what it would do; nothing goes out
+            run = flow_engine.run_flow(db, tenant_id, log.id, flow, ctx)
         return FlowSimulateOut(ok=True, error=None, run=run)
     except Exception as exc:  # noqa: BLE001 - surface any flow failure as the simulation result, with the trace up to it
         err = flow_errors.classify(exc, flow)

@@ -89,7 +89,23 @@ def _bulk_orders() -> None:
     bulk_orders.run_due(SessionLocal)
 
 
+def _integration() -> None:
+    # Integration Hub: reply deadlines, scheduled pulls, log retention. Sending has its own loop, every few seconds.
+    from app.hub import worker
+
+    worker.housekeeping(SessionLocal)
+
+
+def start_integration_worker() -> None:
+    """The process that runs the jobs also sends the integration queue - on its own thread, so a slow
+    partner system holds up neither the other jobs nor a queued call's wait for the next minute."""
+    from app.hub import worker
+
+    worker.start_loop(SessionLocal)
+
+
 JOBS = (
+    ("Integration Hub", _integration),
     ("Licensing", _licensing),
     ("Bulk orders", _bulk_orders),
     ("Mobile subscribers", _mobile),
@@ -125,6 +141,7 @@ def run_jobs_once(service: str | None = None) -> None:
 
 
 async def run_forever() -> None:
+    start_integration_worker()
     while True:
         await asyncio.to_thread(run_jobs_once)
         await asyncio.sleep(INTERVAL_SECONDS)
@@ -167,6 +184,8 @@ if __name__ == "__main__":
     if claim() is None:
         raise SystemExit("Another process already runs the scheduler - not starting a second one")
     log.info("Scheduler running every %s s: %s", INTERVAL_SECONDS, ", ".join(name for name, _ in jobs_for(service)) or "no jobs")
+    if not service:  # the main worker; a split service's worker runs only that service's jobs
+        start_integration_worker()
     while True:
         run_jobs_once(service)
         time.sleep(INTERVAL_SECONDS)

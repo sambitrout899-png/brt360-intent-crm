@@ -5,7 +5,12 @@ The rules every load follows:
 - Every record carries a BRT_ID that BRT 360 issued for that entity
   (brt_id.issued: right prefix, BRT 360's check character, and a number
   the register actually handed out). Loaders get them in advance from
-  reserve_ids - no BRT_ID, no load.
+  reserve_ids - or the interface names the source's own id (key_field):
+  BRT 360 issues the BRT_ID the first time it sees that id and uses the same
+  one ever after, so a source system never has to store our ids. A reference
+  can use the source's ids too (party_external_id).
+- Mappings can transform, not only rename (hub/mapping.py).
+- The rows a load refused are kept, encrypted, to fix and reprocess.
 - A known BRT_ID updates that record (interface mode "upsert") or is
   refused ("insert"); a BRT_ID of another tenant's record is refused.
 - References are by BRT_ID too (a lead's party_brt_id), and may point at
@@ -34,9 +39,10 @@ from sqlalchemy.orm import Session
 
 from app import brt_id
 from app.crm_core import custom_field_service, page_service, process_service
-from app.db import cached
+from app.db import cached, forget
+from app.hub import mapping
 from app.models.auth import User
-from app.models.bim import BimInterface, BimJob
+from app.models.bim import BimExternalRef, BimInterface, BimJob
 from app.models.catalog import OfferingStatus, ProductOffering
 from app.models.crm import Lead, LeadStatus, Opportunity, OpportunityStage, Party
 from app.models.pages import LeadProduct
@@ -171,12 +177,79 @@ def parse(content: str, fmt: str) -> list[dict[str, Any]]:
     return [{(k or "").strip(): v for k, v in row.items() if k} for row in reader]
 
 
-def _mapped(row: dict[str, Any], mapping: dict[str, str]) -> dict[str, Any]:
-    out: dict[str, Any] = {}
-    for k, v in row.items():
-        target = mapping.get(k) or mapping.get(str(k).strip()) or str(k).strip()
-        out[target.strip().lower().replace(" ", "_")] = v
-    return out
+def records_in(answer: Any, path: str = "") -> list[dict[str, Any]]:
+    """The records in another system's answer: at `path`, else the list it obviously holds."""
+    found = mapping.dig(answer, path) if path else answer
+    if isinstance(found, list):
+        return [r for r in found if isinstance(r, dict)]
+    if not isinstance(found, dict):
+        return []
+    if not path:
+        for key in ("records", "items", "data", "results", "rows", "record", "item"):
+            inner = found.get(key)
+            if isinstance(inner, list):
+                return [r for r in inner if isinstance(r, dict)]
+            if isinstance(inner, dict) and key in ("record", "item"):
+                return [inner]
+        lists = [v for v in found.values() if isinstance(v, list) and v and all(isinstance(r, dict) for r in v)]
+        if lists:
+            return lists[0]
+    return [found]
+
+
+# ---------------------------------------------------------------- the source system's own ids
+
+
+def _ref_of(db: Session, tenant_id: int, system: str, entity: str, external_id: str) -> str | None:
+    row = db.query(BimExternalRef.record_brt_id).filter(BimExternalRef.tenant_id == tenant_id, BimExternalRef.system == system,
+                                                        BimExternalRef.entity == entity, BimExternalRef.external_id == external_id).first()
+    return row[0] if row else None
+
+
+def external_ref(db: Session, tenant_id: int, system: str, entity: str, external_id: str) -> str | None:
+    return _ref_of(db, tenant_id, str(system).strip().upper(), entity, str(external_id).strip())
+
+
+def _entity_of(model: Any) -> str | None:
+    return next((key for key, spec in ENTITIES.items() if spec.model is model), None)
+
+
+def _apply_external_keys(db: Session, tenant_id: int, system: str, key_field: str, entity: str, spec: Spec, raw: dict[str, Any], row: dict[str, Any]) -> tuple[str, str] | None:
+    """Fills the row's BRT_ID from the source's own id (issuing one the first time) and its references from the source's
+    ids. Runs outside the row's savepoint - a number once given is never given again, even if the row is then refused.
+    Returns (external id, BRT_ID) when this id has no link yet: the caller saves it with the record."""
+    for ref, (model, _attr) in spec.refs.items():
+        column = ref.removesuffix("_brt_id") + "_external_id"
+        wanted = _str(row.pop(column, None))
+        if wanted is not None and _str(row.get(ref)) is None:
+            target = _ref_of(db, tenant_id, system, _entity_of(model) or "", wanted)
+            if target is None:
+                raise ValueError(f"{column} {wanted}: {system} has not loaded that record yet")
+            row[ref] = target
+    if not key_field:
+        return None
+    external = _str(mapping.dig(raw, key_field))
+    row.pop(key_field.strip().lower().replace(" ", "_"), None)
+    if external is None:
+        raise ValueError(f"{key_field} is missing - it is this system's id for the record")
+    if len(external) > 200:
+        raise ValueError(f"{key_field} is longer than 200 characters")
+    known = _ref_of(db, tenant_id, system, entity, external)
+    given = _str(row.get("brt_id"))
+    if known is not None:
+        if given is not None and given.upper() != known:
+            raise ValueError(f"{key_field} {external} is already {known}, not {given.upper()}")
+        row["brt_id"] = known
+        return None
+    code = given.upper() if given else _issue(db, spec.table)
+    row["brt_id"] = code
+    return external, code
+
+
+def _issue(db: Session, table: str) -> str:
+    code = brt_id.allocate(db.connection(), table)
+    forget(db, ("brt_id_top",))  # the top of the register moved: this code must count as issued
+    return code
 
 
 def _find(db: Session, model, code: str):
@@ -342,29 +415,51 @@ def run(db: Session, tenant_id: int, entity: str, rows: list[dict[str, Any]], ch
         job: BimJob | None = None) -> tuple[BimJob, list[dict[str, Any]]]:
     """Loads the rows (into `job`, or a new one). Each row on its own: a bad row is reported and skipped."""
     spec = spec_of(entity)
-    mapping = json.loads(interface.mapping_json or "{}") if interface else {}
+    # read once: the session lets go of everything it holds as a large load goes on (below)
+    rules = mapping.load_mapping(interface.mapping_json) if interface else {}
     mode = interface.mode if interface else "upsert"
+    keep_unmapped = not (interface and interface.ignore_unmapped)
+    key_field = (interface.key_field or "").strip() if interface else ""
+    system = ((interface.source_system or interface.code) if interface else "").strip().upper()
+    ack_operation_id = interface.ack_operation_id if interface else None
+    interface_code = interface.code if interface else None
     if job is None:
         job = new_job(db, tenant_id, entity, rows, channel, interface, file_name, dry_run)
     job.status = "running"
     results: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
+    refused_rows: list[dict[str, Any]] = []
     counts = {"inserted": 0, "updated": 0, "failed": 0}
     outer = db.begin_nested() if dry_run else None
     for n, raw in enumerate(rows, start=1):
-        row = _mapped(raw, mapping)
-        savepoint = db.begin_nested()
+        row: dict[str, Any] = {}
+        new_ref = None
+        problems: list[str] = []
+        status = ""
         try:
-            status, problems = load_row(db, tenant_id, spec, row, mode, apply_pages, actor_id)
-        except Exception as exc:  # noqa: BLE001 - one bad row never stops the load
-            status, problems = "failed", [f"could not be loaded: {exc}"]
+            row = mapping.apply(raw, rules, keep_unmapped)
+            new_ref = _apply_external_keys(db, tenant_id, system, key_field, entity, spec, raw, row)
+        except ValueError as exc:
+            status, problems = "failed", [str(exc)]
+        savepoint = db.begin_nested()
+        if status != "failed":
+            try:
+                status, problems = load_row(db, tenant_id, spec, row, mode, apply_pages, actor_id)
+                if status != "failed" and new_ref is not None:
+                    db.add(BimExternalRef(tenant_id=tenant_id, system=system, entity=entity, external_id=new_ref[0], record_brt_id=new_ref[1]))
+                    db.flush()  # the rows after this one may refer to it
+            except Exception as exc:  # noqa: BLE001 - one bad row never stops the load
+                status, problems = "failed", [f"could not be loaded: {exc}"]
         if status == "failed":
             savepoint.rollback()
             errors.append({"row": n, "brt_id": _str(row.get("brt_id")), "errors": problems})
+            if len(refused_rows) < 1000:
+                refused_rows.append(raw)
         else:
             savepoint.commit()
         counts[status] += 1
-        results.append({"row": n, "brt_id": _str(row.get("brt_id")), "status": status, "errors": problems})
+        results.append({"row": n, "brt_id": _str(row.get("brt_id")), "status": status, "errors": problems,
+                        **({"external_id": _str(mapping.dig(raw, key_field))} if key_field else {})})
         if n % RELEASE_EVERY == 0:
             # The session keeps every row it saved, and each flush looks through all of them -
             # a 10,000-row load slowed down row by row. Saved rows are let go (still in the
@@ -380,10 +475,110 @@ def run(db: Session, tenant_id: int, entity: str, rows: list[dict[str, Any]], ch
         outer.rollback()  # a dry run keeps only the job's report
     job.inserted, job.updated, job.failed = counts["inserted"], counts["updated"], counts["failed"]
     job.errors_json = json.dumps(errors[:1000])
+    job.failed_rows_json = json.dumps(refused_rows, default=str) if refused_rows and not dry_run else ""
     job.status = "completed" if not errors else ("failed" if len(errors) == len(rows) else "completed_with_errors")
     job.finished_at = utcnow()
     db.flush()
+    if ack_operation_id and not dry_run:
+        _acknowledge(db, tenant_id, ack_operation_id, job, interface_code)
     return job, results
+
+
+def _acknowledge(db: Session, tenant_id: int, operation_id: int, job: BimJob, interface_code: str | None) -> None:
+    """Tells the source how its load went - queued with the load, so it goes out only if the load is kept."""
+    from app.hub import outbound
+    from app.models.integration_hub import HubConnection, HubOperation
+
+    op = db.get(HubOperation, operation_id)
+    conn = db.get(HubConnection, op.connection_id) if op else None
+    if op is None or conn is None or not op.is_active or not conn.is_active:
+        return
+    msg = outbound.enqueue(db, tenant_id, op, conn, {"interface": interface_code, "job": job.brt_id, "status": job.status, "total": job.total,
+                                                     "inserted": job.inserted, "updated": job.updated, "failed": job.failed,
+                                                     "errors": json.loads(job.errors_json or "[]")[:100]},
+                           kind="ack", source=f"bim:{interface_code or job.id}"[:100])
+    msg.mode = "async"
+
+
+def reprocess(db: Session, tenant_id: int, job: BimJob, rows: list[dict[str, Any]] | None = None, dry_run: bool = False,
+              actor_id: int | None = None) -> tuple[BimJob, list[dict[str, Any]]]:
+    """Loads a job's refused rows again - as they were (the interface or the target data has been fixed), or as corrected."""
+    if rows is None:
+        rows = failed_rows(job)
+    if not rows:
+        raise ValueError("This load has no refused rows to reprocess")
+    interface = db.get(BimInterface, job.interface_id) if job.interface_id else None
+    fresh, results = run(db, tenant_id, job.entity, rows, job.channel, interface, job.file_name, dry_run, True, actor_id)
+    fresh.parent_job_id = job.id
+    if not dry_run:
+        job.failed_rows_json = ""  # they live on the new job now, if still refused
+    db.flush()
+    return fresh, results
+
+
+def failed_rows(job: BimJob) -> list[dict[str, Any]]:
+    try:
+        rows = json.loads(job.failed_rows_json or "[]")
+    except ValueError:
+        return []
+    return rows if isinstance(rows, list) else []
+
+
+def errors_csv(job: BimJob) -> str:
+    """The refused rows with why, as a file to fix and load again."""
+    rows = failed_rows(job)
+    reasons = {e.get("row"): e for e in json.loads(job.errors_json or "[]")}
+    columns: list[str] = []
+    for row in rows:
+        columns += [k for k in row if k not in columns]
+    out = io.StringIO()
+    writer = csv.writer(out)
+    writer.writerow(["_row", "_errors", *columns])
+    for (number, entry), row in zip(sorted(reasons.items()), rows):
+        cells = [row.get(c) for c in columns]
+        writer.writerow([number, "; ".join(entry.get("errors") or []), *[_csv_safe(json.dumps(c, default=str) if isinstance(c, (dict, list)) else c) for c in cells]])
+    return out.getvalue()
+
+
+def _csv_safe(value: Any) -> Any:
+    """A value starting with = + - @ would run as a formula when the file is opened in Excel."""
+    return f"'{value}" if isinstance(value, str) and value[:1] in ("=", "+", "-", "@", "\t", "\r") else value
+
+
+def changes(db: Session, tenant_id: int, interface: BimInterface, since: str = "", limit: int = 100) -> dict[str, Any]:
+    """The change feed: records of the interface's entity created or changed since the cursor, oldest first."""
+    from sqlalchemy import and_, func, or_
+
+    spec = spec_of(interface.entity)
+    model = spec.model
+    stamp = func.coalesce(model.sys_updated_at, model.sys_created_at)
+    query = db.query(model).filter(model.tenant_id == tenant_id, stamp.isnot(None))
+    if since:
+        when, _, last_id = since.partition("|")
+        try:
+            moment = dt.datetime.fromisoformat(when.replace("Z", "+00:00")).replace(tzinfo=None)
+            after = int(last_id or 0)
+        except ValueError as exc:
+            raise ValueError("since is the next_cursor of an earlier answer, or a date and time") from exc
+        query = query.filter(or_(stamp > moment, and_(stamp == moment, model.id > after)))
+    rows = query.order_by(stamp, model.id).limit(limit + 1).all()
+    more = len(rows) > limit
+    rows = rows[:limit]
+    system = (interface.source_system or interface.code).strip().upper()
+    refs = {r.record_brt_id: r.external_id for r in db.query(BimExternalRef).filter(
+        BimExternalRef.tenant_id == tenant_id, BimExternalRef.system == system, BimExternalRef.entity == interface.entity,
+        BimExternalRef.record_brt_id.in_([r.brt_id for r in rows] or [""]))}
+    records = []
+    for row in rows:
+        record = record_by_brt_id(db, tenant_id, row.brt_id) or {"brt_id": row.brt_id}
+        if row.brt_id in refs:
+            record["external_id"] = refs[row.brt_id]
+        records.append(record)
+    cursor = since
+    if rows:
+        last = rows[-1]
+        cursor = f"{(last.sys_updated_at or last.sys_created_at).isoformat()}|{last.id}"
+    return {"entity": interface.entity, "records": records, "next_cursor": cursor, "has_more": more}
 
 
 SYNC_ROWS = 1000  # loads up to this size answer at once; larger ones run in the background (load_in_background)
@@ -428,13 +623,16 @@ def _job_out(job: BimJob) -> dict[str, Any]:
         "id": job.id, "brt_id": job.brt_id, "entity": job.entity, "channel": job.channel, "file_name": job.file_name,
         "status": job.status, "dry_run": job.dry_run, "total": job.total, "inserted": job.inserted, "updated": job.updated,
         "failed": job.failed, "errors": json.loads(job.errors_json or "[]"), "started_at": job.started_at, "finished_at": job.finished_at,
-        "interface_id": job.interface_id, "started_by": job.sys_created_by,
+        "interface_id": job.interface_id, "started_by": job.sys_created_by, "can_reprocess": bool(job.failed_rows_json), "parent_job_id": job.parent_job_id,
     }
 
 
 def interface_out(row: BimInterface) -> dict[str, Any]:
     return {"id": row.id, "brt_id": row.brt_id, "code": row.code, "name": row.name, "entity": row.entity, "mode": row.mode,
-            "mapping": json.loads(row.mapping_json or "{}"), "description": row.description, "is_active": row.is_active}
+            "mapping": json.loads(row.mapping_json or "{}"), "description": row.description, "is_active": row.is_active,
+            "ignore_unmapped": bool(row.ignore_unmapped), "source_system": row.source_system or "", "key_field": row.key_field or "",
+            "ack_operation_id": row.ack_operation_id, "pull_operation_id": row.pull_operation_id, "pull_every_minutes": row.pull_every_minutes or 0,
+            "pull_records_path": row.pull_records_path or "", "pull_last_at": row.pull_last_at, "pull_cursor": row.pull_cursor or ""}
 
 
 def record_by_brt_id(db: Session, tenant_id: int, code: str) -> dict[str, Any] | None:

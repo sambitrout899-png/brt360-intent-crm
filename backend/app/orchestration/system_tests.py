@@ -30,6 +30,7 @@ from typing import Any, Callable
 
 from sqlalchemy.orm import Session, sessionmaker
 
+from app import outbound_guard
 from app.models.system_tests import SystemTestCase, SystemTestResult, SystemTestRun, SystemTestSuite
 from app.timeutils import utcnow
 
@@ -637,7 +638,8 @@ def _step(db: Session, tenant_id: int, user, access, step: dict[str, Any], saved
         entry["request"] = {"flow": flow.name, "record": ctx.get("entity_id")}
         log = audit.start_execution(db, tenant_id, f"[system test] flow {flow.name}", channel="agent")
         try:
-            out = flow_engine.run_flow(db, tenant_id, log.id, flow, ctx)
+            with outbound_guard.simulation():
+                out = flow_engine.run_flow(db, tenant_id, log.id, flow, ctx)
             entry["response"] = {"ok": True, "outcome": out.get("outcome"), "trace": [
                 {"step": t.get("label"), "status": t.get("status")} for t in out.get("trace", [])][:30]}
             return {"ok": True}

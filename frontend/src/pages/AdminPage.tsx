@@ -80,6 +80,7 @@ import AdminRecordTypesSection from "./AdminRecordTypesSection";
 import SystemTestsPanel from "../components/SystemTestsPanel";
 import SecurityTestsPanel from "../components/SecurityTestsPanel";
 import AdminBimSection from "./AdminBimSection";
+import AdminIntegrationHub from "./AdminIntegrationHub";
 import AdminOrderMgmtSection from "./AdminOrderMgmtSection";
 import AdminFulfillmentSection from "./AdminFulfillmentSection";
 import AdminCommsSection from "./AdminCommsSection";
@@ -88,7 +89,7 @@ import AdminLicensesSection from "./AdminLicensesSection";
 import AttributeLibrary from "./AdminAttributeLibrary";
 import AdminReportDesignSection from "./AdminReportDesignSection";
 
-type Section = "releases" | "functionmap" | "conflicts" | "org" | "access" | "intents" | "pages" | "bim" | "productmodel" | "lifecycle" | "assignment" | "customfields" | "recordtypes" | "flows" | "approvals" | "broadcasts" | "roles" | "pricelists" | "productconfig" | "sla" | "attributes" | "identity" | "ponr" | "feasibility" | "orchestration" | "ai" | "users" | "tests" | "ordermgmt" | "fulfillment" | "comms" | "quotedocs" | "licenses" | "reportdesign";
+type Section = "releases" | "functionmap" | "conflicts" | "org" | "access" | "intents" | "pages" | "bim" | "integrationhub" | "productmodel" | "lifecycle" | "assignment" | "customfields" | "recordtypes" | "flows" | "approvals" | "broadcasts" | "roles" | "pricelists" | "productconfig" | "sla" | "attributes" | "identity" | "ponr" | "feasibility" | "orchestration" | "ai" | "users" | "tests" | "ordermgmt" | "fulfillment" | "comms" | "quotedocs" | "licenses" | "reportdesign";
 
 const CLOCK_STATUS_STYLES: Record<string, string> = {
   running: "bg-sky-500/15 text-sky-400 border-sky-500/30",
@@ -1286,7 +1287,8 @@ const NAV: NavGroup[] = [
       { id: "pages", label: "Page Designer", icon: "🖼️", hint: "B2B/B2C pages, mandatory fields and rules", wide: "xl" },
       { id: "customfields", label: "Custom Fields", icon: "➕", hint: "Extra fields on records" },
       { id: "recordtypes", label: "Record Types", icon: "🗃️", hint: "Record types of your own (Site Survey, Contract ...) and their fields", wide: "lg" },
-      { id: "bim", label: "Integration (BIM)", icon: "🔌", hint: "BRT_IDs, batch loads and EAI interfaces", wide: "lg" },
+      { id: "integrationhub", label: "Integration Hub", icon: "🔗", hint: "API keys, published REST and SOAP services, calls to other systems, webhooks and the message log", wide: "xl" },
+      { id: "bim", label: "Integration (BIM)", icon: "🔌", hint: "Bulk data: batch loads and EAI interfaces with source keys, mappings, pulls and reprocessing", wide: "lg" },
     ],
   },
   {
@@ -1467,6 +1469,7 @@ export default function AdminPage({ onAccessChanged }: { onAccessChanged?: () =>
           )}
           {section === "pages" && <AdminPageDesignerSection />}
           {section === "bim" && <AdminBimSection />}
+          {section === "integrationhub" && <AdminIntegrationHub />}
       {section === "ordermgmt" && <AdminOrderMgmtSection />}
       {section === "fulfillment" && <AdminFulfillmentSection />}
       {section === "comms" && <AdminCommsSection />}

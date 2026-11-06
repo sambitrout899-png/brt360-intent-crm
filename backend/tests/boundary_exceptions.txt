@@ -15,8 +15,6 @@ app.crm_core.audit_chain -> intent
 app.crm_core.audit_chain -> training
 app.crm_core.audit_service -> intent
 app.crm_core.b2c_order_service -> flow
-app.crm_core.bim_service -> crm
-app.crm_core.bim_service -> flow
 app.crm_core.custom_record_service -> flow
 app.crm_core.customer_overview -> flow
 app.crm_core.customer_overview -> telecom

@@ -64,8 +64,13 @@ NODE_TYPES: dict[str, dict[str, Any]] = {
     "wait": {"label": "Wait", "outputs": [""], "config": ["amount", "unit"]},
     "wait_approval": {"label": "Wait for approval", "outputs": ["approved", "rejected", "expired"],
                       "config": ["approver", "subject", "message", "expire_days"]},
+    # An operation of the Integration Hub (app/hub/), run the way it is set up: a synchronous one answers here
+    # ({{steps.<id>.output.reply.*}}), an asynchronous one is queued with this flow's transaction.
+    "call_api": {"label": "Call external API", "outputs": ["", "error"], "config": ["operation", "payload", "retries"]},
+    # Durable: sends the request, pauses the run, and goes on when the reply comes - hours later if need be.
+    "call_api_wait": {"label": "Call API and wait for reply", "outputs": ["replied", "failed", "expired"], "config": ["operation", "payload", "expire_minutes"]},
 }
-WAIT_TYPES = {"wait", "wait_approval"}
+WAIT_TYPES = {"wait", "wait_approval", "call_api_wait"}
 WAIT_UNITS = {"minutes": 1, "hours": 60, "days": 1440}
 MAX_WAIT_DAYS = 365
 
@@ -76,7 +81,7 @@ def can_wait(flow: FlowDefinition) -> bool:
     on its error, or as a Page Designer validation."""
     return flow.trigger_type in ("state_enter", "custom_intent") or (flow.trigger_type == "intent" and flow.timing == "after")
 # steps that write - each runs under a savepoint, so a failure undoes only that step
-_WRITES = {"record", "set_field", "transition", "assign", "notify", "action"}
+_WRITES = {"record", "set_field", "transition", "assign", "notify", "action", "call_api"}
 MAX_RETRIES = 3
 
 # How a record finds the records an action needs: (flow record type, id wanted) -> lookup.
@@ -190,6 +195,18 @@ def validate_graph(graph: dict[str, Any], flow: FlowDefinition | None = None) ->
             days = str(config.get("expire_days") or "").strip()
             if days and not (days.isdigit() and 1 <= int(days) <= MAX_WAIT_DAYS):
                 errors.append(f"Wait for approval '{name}': expires after 1 to {MAX_WAIT_DAYS} days, or blank for never")
+        if node_type in ("call_api", "call_api_wait"):
+            if not str(config.get("operation") or "").strip():
+                errors.append(f"'{name}' needs an integration operation")
+            if isinstance(config.get("payload"), str) and config["payload"].strip() and "{{" not in config["payload"]:
+                try:
+                    json.loads(config["payload"])
+                except ValueError:
+                    errors.append(f"'{name}': the payload must be valid JSON")
+        if node_type == "call_api_wait":
+            minutes = str(config.get("expire_minutes") or "").strip()
+            if minutes and not (minutes.isdigit() and 1 <= int(minutes) <= MAX_WAIT_DAYS * 1440):
+                errors.append(f"'{name}': the reply is waited for from 1 minute to {MAX_WAIT_DAYS} days")
         if node_type == "catch":
             wanted = [c.strip() for c in str(config.get("codes") or "").split(",") if c.strip()] if not isinstance(config.get("codes"), list) \
                 else [str(c).strip() for c in config["codes"] if str(c).strip()]
@@ -228,8 +245,9 @@ _TEMPLATE = re.compile(r"\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}")
 def _lookup(ctx: dict[str, Any], path: str, default=None) -> Any:
     path = path.strip()
     # "error": the failure being handled - set on an error path or after a Catch errors step;
-    # "approval": the answer to a Wait for approval step (flow_runs.resume) - decision, note, by
-    if path.split(".")[0] in ("steps", "entities", "result", "record", "customer", "parent", "trigger", "flow", "error", "approval"):
+    # "approval": the answer to a Wait for approval step (flow_runs.resume) - decision, note, by;
+    # "reply": what an external system answered a Call API and wait for reply step (flow_runs.reply_arrived)
+    if path.split(".")[0] in ("steps", "entities", "result", "record", "customer", "parent", "trigger", "flow", "error", "approval", "reply"):
         value = ctx
         for part in path.split("."):
             if isinstance(value, dict):
@@ -719,6 +737,10 @@ def run_flow(db: Session, tenant_id: int, execution_id: int, flow: FlowDefinitio
             ctx["result"] = {**(ctx.get("result") or {}), **done["output"]}
             touched.extend(t for t in done["touched"] if t not in touched)
             refresh_record()
+        elif node_type == "call_api":
+            from app import capabilities
+
+            entry["output"] = capabilities.service("hub.flow_call")(db, tenant_id, execution_id, flow.id, entry["input"])
         elif node_type == "catch":
             # the error being handled is this step's output too: {{steps.<id>.output.message}}
             entry["output"] = dict(ctx.get("error") or {})

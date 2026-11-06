@@ -53,6 +53,8 @@ const NODE_COLORS: Record<string, string> = {
   throw: "#dc2626",
   wait: "#eab308",
   wait_approval: "#d946ef",
+  call_api: "#06b6d4",
+  call_api_wait: "#0891b2",
 };
 
 // how a step ended on the last simulation - painted on the canvas

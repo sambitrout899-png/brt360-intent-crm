@@ -5,6 +5,7 @@ const NODE_LABELS: Record<string, string> = {
   set_field: "Set Field", transition: "Change State", assign: "Assign",
   notify: "Notify", reject: "Reject", action: "Run an action",
   wait: "Wait", wait_approval: "Wait for approval",
+  call_api: "Call external API", call_api_wait: "Call API and wait for reply",
 };
 
 /** Older generated flows may omit presentation metadata. Preserve their logic. */

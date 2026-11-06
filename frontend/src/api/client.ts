@@ -1,4 +1,5 @@
 import { rememberIntentLabels } from "../intentLabels";
+import type { MappingRule } from "../pages/integrationMapping";
 import type { AppAccent, AppTheme } from "../theme";
 import type {
   C360Connector,
@@ -1776,6 +1777,8 @@ export interface BimJob {
   finished_at: string | null;
   interface_id: number | null;
   results?: BimRowResult[];
+  can_reprocess?: boolean;
+  parent_job_id?: number | null;
 }
 
 export interface BimInterface {
@@ -1785,9 +1788,180 @@ export interface BimInterface {
   name: string;
   entity: string;
   mode: "upsert" | "insert";
-  mapping: Record<string, string>;
+  mapping: Record<string, string> | MappingRule[];
   description: string;
   is_active: boolean;
+  ignore_unmapped: boolean;
+  source_system: string;
+  key_field: string;
+  ack_operation_id: number | null;
+  pull_operation_id: number | null;
+  pull_every_minutes: number;
+  pull_records_path: string;
+  pull_last_at?: string | null;
+  pull_cursor?: string;
+}
+
+export function bimReprocess(jobId: number, body: { rows?: Record<string, unknown>[]; dry_run?: boolean } = {}): Promise<BimJob> {
+  return request<BimJob>(`/api/bim/jobs/${jobId}/reprocess`, { method: "POST", body: JSON.stringify(body) });
+}
+
+// ---------------------------------------------------------------- Integration Hub
+
+export function hubApi<T>(path: string, init?: RequestInit): Promise<T> {
+  return request<T>(`/api/integration${path}`, init);
+}
+
+export interface HubOverview {
+  last_24h: { in?: Record<string, number>; out?: Record<string, number> };
+  dead_letters: number;
+  in_queue: number;
+  awaiting_reply: number;
+  avg_latency_ms: number | null;
+  tripped_connections: { code: string; name: string; until: string }[];
+  totals: { clients: number; connections: number; operations: number; services: number; subscriptions: number };
+}
+
+export interface HubClient {
+  id: number;
+  code: string;
+  name: string;
+  key_id: string;
+  run_as_user_id: number;
+  allowed_services: string[];
+  ip_allowlist: string;
+  rate_per_minute: number;
+  expires_at: string | null;
+  is_active: boolean;
+  last_used_at: string | null;
+  rotating_until: string | null;
+}
+
+export interface HubField {
+  name: string;
+  type?: string;
+  required?: boolean;
+  description?: string;
+}
+
+export interface HubPublished {
+  code: string;
+  name: string;
+  description: string;
+  target_type: string;
+  target: string;
+  mode: string;
+  fields: HubField[];
+  from_interface: boolean;
+}
+
+export interface HubService {
+  id: number;
+  code: string;
+  name: string;
+  description: string;
+  target_type: string;
+  target: string;
+  mode: string;
+  fields: HubField[];
+  input_mapping: unknown;
+  output_mapping: unknown;
+  callback_operation_id: number | null;
+  is_active: boolean;
+}
+
+export interface HubConnection {
+  id: number;
+  code: string;
+  name: string;
+  base_url: string;
+  auth_type: string;
+  auth_header: string;
+  username: string;
+  has_secret: boolean;
+  secret_hint: string;
+  token_url: string;
+  oauth_scope: string;
+  headers: Record<string, string>;
+  timeout_seconds: number;
+  is_active: boolean;
+  failure_count: number;
+  circuit_open_until: string | null;
+}
+
+export interface HubOperation {
+  id: number;
+  connection_id: number;
+  connection: string | null;
+  code: string;
+  name: string;
+  description: string;
+  protocol: string;
+  method: string;
+  path: string;
+  headers: Record<string, string>;
+  body_template: string;
+  soap_action: string;
+  soap_version: string;
+  pattern: string;
+  mode: string;
+  reply_via: string;
+  max_attempts: number;
+  backoff_seconds: number;
+  reply_timeout_minutes: number;
+  reply_mapping: unknown;
+  reply_interface_id: number | null;
+  is_active: boolean;
+}
+
+export interface HubSubscription {
+  id: number;
+  name: string;
+  event_pattern: string;
+  operation_id: number;
+  operation: string | null;
+  is_active: boolean;
+  messages: number;
+}
+
+export interface HubMessage {
+  id: number;
+  correlation_id: string;
+  direction: "in" | "out";
+  kind: string;
+  protocol: string;
+  pattern: string;
+  mode: string;
+  status: string;
+  attempts: number;
+  max_attempts: number;
+  next_attempt_at: string | null;
+  service_code: string | null;
+  source: string;
+  http_method: string;
+  url: string;
+  http_status: number | null;
+  latency_ms: number | null;
+  error: string;
+  created_at: string;
+  finished_at: string | null;
+  reply_deadline: string | null;
+  operation?: string | null;
+  client?: string | null;
+  payload?: string;
+  request_headers?: Record<string, string>;
+  request_body?: string;
+  response_body?: string;
+  reply?: string;
+}
+
+export interface HubTargets {
+  actions: { code: string; label: string }[];
+  users: { id: number; name: string; email: string; role: string }[];
+  interfaces: { id: number; code: string; name: string; entity: string }[];
+  transforms: string[];
+  events: string[];
+  auth_types: string[];
 }
 
 export function bimEntities(): Promise<BimEntity[]> {

@@ -48,6 +48,9 @@ PROVIDERS = (
 SERVICES = {
     # a question answered from the tenant's data, KPIs, predictions and telecom knowledge (Ask anything)
     "answers.answer": "app.analytics.answers:answer",
+    # Flow Studio's Call external API steps (the Integration Hub)
+    "hub.flow_call": "app.hub.outbound:flow_call",
+    "hub.flow_wait": "app.hub.outbound:flow_wait",
 }
 
 
