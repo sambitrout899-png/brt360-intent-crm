@@ -32,11 +32,77 @@ _ENTITY_WORDS: list[tuple[str, str]] = [
     ("proposal", r"proposals?"),
     ("quote", r"quotes?|quotations?|discounts?"),
     ("opportunity", r"opportunit\w+|deals?|pipeline|win\s+rate|sales\s+cycle"),
-    ("lead", r"leads?"),
-    ("asset", r"assets?|circuits?|cpe|devices?"),
-    ("order", r"orders?|mrr|arpu|tcv|contract\s+value|recurring\s+revenue|services?|churn\w*|revenue"),
-    ("party", r"customers?|prospects?|accounts?|clients?|subscribers?"),
+    ("lead", r"leads?|enquir\w+|inquir\w+"),
+    ("asset", r"assets?|circuits?|cpe|devices?|installed\s+(?:base|services?)"),
+    ("order", r"orders?|mrr|arpu|tcv|contract\s+value|recurring\s+revenue|services?|churn\w*|revenue|activations?|connections?"),
+    ("party", r"customers?|prospects?|accounts?|clients?|subscribers?|companies|businesses"),
 ]
+
+# What a status word means for each entity: "prospects", "open tickets", "won deals", "overdue invoices" ...
+# (pattern, filter, the noun to use in an answer). Checked in order; the first hit per group applies.
+STATUS_RULES: dict[str, list[tuple[str, dict[str, Any], str]]] = {
+    "party": [
+        (r"\bprospects?\b", {"field": "profile.account_status", "op": "eq", "value": "prospect"}, "prospects"),
+        (r"\b(?:paying|active|existing|live|current)\s+(?:customers?|accounts?|subscribers?)\b|\baccounts\b",
+         {"field": "profile.account_status", "op": "eq", "value": "account"}, "customers (accounts)"),
+    ],
+    "ticket": [
+        (r"\b(?:open|unresolved|pending|active|outstanding|live)\s+(?:tickets?|faults?|complaints?|incidents?|cases?)\b",
+         {"field": "status", "op": "not_in", "value": ["resolved", "closed", "cancelled"]}, "open tickets"),
+        (r"\b(?:resolved|closed|fixed)\b", {"field": "status", "op": "in", "value": ["resolved", "closed"]}, "resolved tickets"),
+        (r"\b(critical|high|medium|low)(?:[\s-]+(?:severity|priority))?\s+(?:tickets?|faults?|incidents?|complaints?)\b", {"field": "severity", "op": "eq", "value": "\\1"},
+         "\\1 tickets"),
+    ],
+    "order": [
+        (r"\b(?:live|active|running)\s+(?:orders?|services?)\b", {"field": "is_live", "op": "is_true"}, "live orders"),
+        (r"\b(?:open|pending|in[\s-]?progress|in[\s-]?flight|unfulfilled|backlog)\b(?:\s+orders?)?",
+         {"field": "status", "op": "in", "value": ["created", "pending_approval", "activating"]}, "orders in progress"),
+        (r"\b(cancelled|canceled|terminated|rejected|suspended)\b", {"field": "status", "op": "eq", "value": "\\1"}, "\\1 orders"),
+    ],
+    "opportunity": [
+        (r"\bwon\b|\bwins?\b|closed[\s-]won", {"field": "is_won", "op": "is_true"}, "won deals"),
+        (r"\blost\b|closed[\s-]lost", {"field": "stage", "op": "in", "value": ["lost", "feasibility_failed"]}, "lost deals"),
+        (r"\b(?:open|active|live|in\s+play)\b", {"field": "is_closed", "op": "is_false"}, "open deals"),
+    ],
+    "lead": [
+        (r"\bqualified\b", {"field": "status", "op": "eq", "value": "qualified"}, "qualified leads"),
+        (r"\brejected\b|\bdisqualified\b", {"field": "status", "op": "eq", "value": "rejected"}, "rejected leads"),
+        (r"\b(?:pending|new|unqualified|open)\b", {"field": "status", "op": "eq", "value": "pending_qualification"}, "leads awaiting qualification"),
+    ],
+    "invoice": [
+        (r"\boverdue\b|\blate\b|past\s+due", {"field": "status", "op": "eq", "value": "overdue"}, "overdue invoices"),
+        (r"\bunpaid\b|\boutstanding\b|\bopen\b|\bdue\b", {"field": "outstanding", "op": "gt", "value": 0}, "unpaid invoices"),
+        (r"\bpaid\b|\bsettled\b", {"field": "status", "op": "eq", "value": "paid"}, "paid invoices"),
+    ],
+    "work_order": [
+        (r"\b(?:complete|completed|done|finished)\b", {"field": "is_complete", "op": "is_true"}, "completed work orders"),
+        (r"\b(?:open|pending|scheduled|outstanding)\b", {"field": "is_complete", "op": "is_false"}, "open work orders"),
+    ],
+}
+
+# relative dates, most specific first
+_RELATIVE_DATES = (("yesterday", "yesterday"), ("today", "today"), ("this week", "this_week"), ("last week", "last_week"),
+                   ("past week", "last_week"), ("this month", "this_month"), ("last month", "last_month"), ("past month", "last_month"),
+                   ("this quarter", "this_quarter"), ("last quarter", "last_quarter"), ("this year", "this_year"), ("last year", "last_year"),
+                   ("year to date", "this_year"), ("ytd", "this_year"), ("mtd", "this_month"), ("so far this month", "this_month"))
+
+
+def status_filters(entity: str, low: str) -> list[tuple[dict[str, Any], str]]:
+    """The filters the status words of a question imply, with the noun each one makes."""
+    out = []
+    for pattern, flt, noun in STATUS_RULES.get(entity, []):
+        hit = re.search(pattern, low)
+        if hit is None:
+            continue
+        flt = dict(flt)
+        if isinstance(flt.get("value"), str) and "\\1" in flt["value"]:
+            word = hit.group(1).lower().replace("canceled", "cancelled")
+            flt["value"] = word
+            noun = noun.replace("\\1", word)
+        out.append((flt, noun))
+        if entity in ("party", "opportunity", "invoice", "lead", "work_order"):
+            break  # these are one status at a time
+    return out
 # "monthly price", "annual contract value" name a field, not a time grain
 _FIELD_NOUN = r"(?!\s+(?:price|charge|fee|rental|recurring|revenue|bill|plan|spend|cost|contract|value|amount|usage|limit|quota))"
 _GRAIN_WORDS = [("hour", rf"hourly{_FIELD_NOUN}|by\s+hour|per\s+hour"), ("weekday", r"by\s+(?:week)?day\s+of\s+(?:the\s+)?week|by\s+weekday"),
@@ -46,7 +112,8 @@ _GRAIN_WORDS = [("hour", rf"hourly{_FIELD_NOUN}|by\s+hour|per\s+hour"), ("weekda
                 ("month", rf"monthly{_FIELD_NOUN}|per\s+month|by\s+month|each\s+month|over\s+time|trend|month\s+on\s+month")]
 _AGG_WORDS = [("avg", r"\b(?:average|avg|mean|typical)\b"), ("median", r"\bmedian\b"), ("max", r"\b(?:max(?:imum)?|highest|largest|biggest)\b"),
               ("min", r"\b(?:min(?:imum)?|lowest|smallest)\b"), ("count_distinct", r"\b(?:distinct|unique)\b"),
-              ("count", r"\b(?:how\s+many|number\s+of|count(?:s)?\s+of|count)\b"), ("sum", r"\b(?:total|sum|revenue|value|amount|spend)\b")]
+              ("count", r"\b(?:how\s+many|number\s+of|count(?:s)?\s+of|count)\b"),
+              ("sum", r"\b(?:total|sum|revenue|value|amount|spend|how\s+much|billed|collected|owed|worth)\b")]
 _STOP = {"the", "by", "per", "of", "and", "for", "with", "in", "a", "an", "show", "me", "what", "is", "are", "each", "all", "my", "our", "as",
          "chart", "graph", "report", "over", "time", "split", "broken", "down", "across", "top", "number", "how", "many", "total", "average"}
 
@@ -91,6 +158,9 @@ def rules(db: Session, tenant_id: int, text: str) -> dict[str, Any]:
     # the measure
     agg = next((a for a, pat in _AGG_WORDS if re.search(pat, low)), "count")
     head = re.split(r"\b(?:by|per|across|for\s+each|split\s+by|broken\s+down\s+by)\b", low)[0]
+    # dates and question words say nothing about the field ("bill last month" is not "monthly spend")
+    head = re.sub(r"\b(?:" + "|".join(p for p, _ in _RELATIVE_DATES) + r"|(?:in\s+the\s+)?(?:last|past)\s+\d+\s+\w+|how\s+much|how\s+many|did|do|does|we|us|our|"
+                  r"were|was|have|has|had)\b", " ", head)
     numeric = _best_field(m, re.sub(r"\b(?:top\s+\d+|show|me|what|is|the|total|average|sum|of)\b", " ", head), ("number",))
     if re.search(r"\bmrr\b|recurring\s+revenue", low) and "mrr" in m.fields:
         numeric, agg = m.fields["mrr"], "sum" if agg == "count" else agg
@@ -145,15 +215,23 @@ def rules(db: Session, tenant_id: int, text: str) -> dict[str, Any]:
         spec["filters"].append({"field": date_key, "op": "last_n_days", "value": days})
         notes.append(f"Last {rel.group(1)} {rel.group(2)}s")
     else:
-        for phrase, op in (("this month", "this_month"), ("last month", "last_month"), ("this quarter", "this_quarter"),
-                           ("this year", "this_year"), ("last year", "last_year"), ("today", "today")):
-            if phrase in low:
+        for phrase, op in _RELATIVE_DATES:
+            if re.search(rf"\b{phrase}\b", low):
                 spec["filters"].append({"field": date_key, "op": op})
                 notes.append(phrase.capitalize())
                 break
+    # status words: "prospects", "open tickets", "won deals", "overdue invoices"
+    nouns = []
+    for flt, noun in status_filters(entity, low):
+        if flt["field"] in m.fields and flt["field"] not in [d["field"] for d in spec["dimensions"]]:
+            spec["filters"].append(flt)
+            nouns.append(noun)
+            notes.append(f"Only {noun}")
+    spec["noun"] = nouns[0] if nouns else None
+    filtered = {x["field"] for x in spec["filters"]}
     for f in m.fields.values():  # "active orders", "critical tickets": a picklist value said outright
-        if f.values and "." not in f.key and f.key not in [d["field"] for d in spec["dimensions"]]:
-            said = [v for v in f.values if re.search(rf"\b{re.escape(v.lower().replace('_', ' '))}\b", low)]
+        if f.values and "." not in f.key and f.key not in [d["field"] for d in spec["dimensions"]] and f.key not in filtered:
+            said = [v for v in f.values if re.search(rf"\b{re.escape(v.lower().replace('_', ' '))}(?:s|es)?\b", low)]
             if said and len(said) < len(f.values):
                 spec["filters"].append({"field": f.key, "op": "in", "value": said})
                 notes.append(f"{f.label}: {', '.join(said)}")

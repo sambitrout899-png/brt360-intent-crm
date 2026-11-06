@@ -164,6 +164,15 @@ def _bounds(op: str, value: Any) -> tuple[dt.datetime | None, dt.datetime | None
         return today, today + dt.timedelta(days=int(value or 30) + 1)
     if op == "today":
         return today, today + dt.timedelta(days=1)
+    if op == "yesterday":
+        return today - dt.timedelta(days=1), today
+    if op in ("this_week", "last_week"):
+        start = today - dt.timedelta(days=today.weekday())  # weeks start on Monday
+        return (start - dt.timedelta(days=7), start) if op == "last_week" else (start, None)
+    if op == "last_quarter":
+        start = today.replace(month=(today.month - 1) // 3 * 3 + 1, day=1)
+        prev = (start - dt.timedelta(days=1)).replace(day=1)
+        return prev.replace(month=(prev.month - 1) // 3 * 3 + 1), start
     if op in ("this_month", "last_month"):
         start = today.replace(day=1)
         if op == "last_month":
@@ -179,7 +188,8 @@ def _bounds(op: str, value: Any) -> tuple[dt.datetime | None, dt.datetime | None
     raise ValueError(op)
 
 
-RELATIVE = ("last_n_days", "next_n_days", "today", "this_month", "last_month", "this_quarter", "this_year", "last_year")
+RELATIVE = ("last_n_days", "next_n_days", "today", "yesterday", "this_week", "last_week", "this_month", "last_month", "this_quarter",
+            "last_quarter", "this_year", "last_year")
 OPERATORS = ("eq", "neq", "in", "not_in", "gt", "gte", "lt", "lte", "between", "contains", "not_contains", "starts",
              "is_blank", "not_blank", "is_true", "is_false", "before", "after", *RELATIVE)
 
@@ -246,6 +256,13 @@ def _eq(value: Any, target: Any) -> bool:
     return a == b
 
 
+def _is_date_only(col: Any) -> bool:
+    from sqlalchemy import Date, DateTime
+
+    t = getattr(col, "type", None)
+    return isinstance(t, Date) and not isinstance(t, DateTime)
+
+
 def _sql_filter(f: Field, op: str, target: Any) -> Any | None:
     """The same filter in SQL, when it is a plain column a database compares the same way (never enums or computed fields)."""
     col = f.column
@@ -253,6 +270,8 @@ def _sql_filter(f: Field, op: str, target: Any) -> Any | None:
         return None
     if op in RELATIVE and f.kind == "date":
         start, end = _bounds(op, target)
+        if _is_date_only(col):  # a DATE column compares with dates (SQLite keeps both as text: "2026-10-01" < "2026-10-01 00:00:00")
+            start, end = (start.date() if start else None), (end.date() if end else None)
         parts = [col >= start] if start else []
         if end:
             parts.append(col < end)
@@ -314,7 +333,7 @@ def _tenant_column(m: Model) -> Any:
     raise ValueError(f"{m.entity.label} has no tenant column")
 
 
-_NO_VALUE = ("is_blank", "not_blank", "is_true", "is_false", "today", "this_month", "last_month", "this_quarter", "this_year", "last_year")
+_NO_VALUE = ("is_blank", "not_blank", "is_true", "is_false", *(op for op in RELATIVE if op not in ("last_n_days", "next_n_days")))
 
 
 def _complete(f: dict[str, Any]) -> bool:

@@ -44,6 +44,18 @@ PROVIDERS = (
     "app.orchestration.actions_records",
 )
 
+# Named services one module offers the others - looked up here, not imported (module:function).
+SERVICES = {
+    # a question answered from the tenant's data, KPIs, predictions and telecom knowledge (Ask anything)
+    "answers.answer": "app.analytics.answers:answer",
+}
+
+
+def service(name: str) -> Callable[..., Any]:
+    module, _, fn = SERVICES[name].partition(":")
+    return getattr(importlib.import_module(module), fn)
+
+
 _steps: dict[str, StepBuilder] = {}
 _provider_of: dict[str, str] = {}
 

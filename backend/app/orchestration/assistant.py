@@ -72,7 +72,21 @@ def _understand(db: Session, tenant_id: int, user: User, text: str, context: dic
     text = " ".join((text or "").split())
     out: dict[str, Any] = {"request": text}
 
-    # 0. a question ("How can I add a B2C customer?") is answered - with the actions that do it
+    # 0. a question about the business ("How many prospects were created today?", "What is our ARPU?", "Who is at risk of churning?",
+    #    "Tell me about order 59", "What is FTTH?") - answered from the tenant's data, KPIs, predictions and telecom knowledge
+    if not _CAPABILITIES.match(text):
+        from app import capabilities
+
+        answered = capabilities.service("answers.answer")(db, tenant_id, user, text)
+        if answered is not None:
+            out.update(answered)
+            about = answered["insight"].get("about")
+            out["answers"] = _actions_about(db, tenant_id, user, about) if about else []
+            out["label"] = LABELS["answer"]
+            out["journal_id"] = _record(db, tenant_id, user, text, out)
+            return out
+
+    # 0b. a how-to question ("How can I add a B2C customer?") is answered - with the actions that do it
     if _QUESTION.match(text) or text.endswith("?"):
         answer = _answer(db, tenant_id, user, text)
         if answer is not None:
@@ -233,6 +247,19 @@ def _answer(db: Session, tenant_id: int, user: User, text: str) -> dict[str, Any
         for p in picks]}
 
 
+def _actions_about(db: Session, tenant_id: int, user: User, about: str) -> list[dict[str, Any]]:
+    """The user's actions on what an answer was about - "Add a prospect" beside a count of prospects."""
+    from app.intent_engine import intent_registry
+
+    hits = []
+    for e in intent_registry.intents_for_user(db, tenant_id, user):
+        label = (e.get("label") or "").lower()
+        if about in label or (about == "ticket" and ("complaint" in label or "fault" in label)):
+            hits.append({"intent_type": e["code"], "label": e["label"], "description": e.get("description", ""), "icon": e.get("icon"),
+                         "entities": {}, "text": e["label"]})
+    return hits[:3]
+
+
 _STOP = {"the", "and", "for", "with", "this", "that", "into", "from", "your", "their", "our", "new", "all", "any", "one", "make", "get"}
 
 
@@ -289,7 +316,8 @@ def _record(db: Session, tenant_id: int, user: User, text: str, understood: dict
     log = audit.start_execution(db, tenant_id, text[:4000], channel="assistant")
     log.intent_type = JOURNAL
     log.user_id = user.id
-    summary = {"route": understood["route"], "why": understood.get("why"), "memory": understood.get("memory"),
+    summary = {"route": understood["route"], "why": (understood.get("why") or "")[:1000], "memory": understood.get("memory"),
+               "insight": (understood.get("insight") or {}).get("kind"),
                "action": (understood.get("action") or {}).get("intent_type"),
                "steps": [s.get("intent_type") for s in (understood.get("plan") or {}).get("steps", [])],
                "components": [c["kind"] for c in (understood.get("blueprint") or {}).get("components", [])],

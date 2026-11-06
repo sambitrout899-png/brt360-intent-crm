@@ -1,7 +1,8 @@
 import { humanizeCodes } from "../../intentLabels";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { assistIntent } from "../../api/client";
-import type { IntentAssist, IntentContext, IntentDef } from "../../api/types";
+import { assistIntent, assistantUnderstand } from "../../api/client";
+import type { AssistantInsight, IntentAssist, IntentContext, IntentDef } from "../../api/types";
+import InsightAnswer from "./InsightAnswer";
 
 /** "Say it in your own words": live understanding while typing (the same
  * classifier a submission uses), the matched action as a card, and other
@@ -28,6 +29,19 @@ export default function AskBox({
   const [text, setText] = useState(initialText);
   const [lastAssist, setAssist] = useState<IntentAssist | null>(null);
   const [thinking, setThinking] = useState(false);
+  // a question is answered right here (the same analyst as Ask anything): from the data, KPIs, predictions, knowledge
+  const [answer, setAnswer] = useState<{ q: string; insight: AssistantInsight | null } | null>(null);
+  const [answering, setAnswering] = useState(false);
+  const asking = QUESTION.test(text.trim());
+  const answerIt = (q = text) => {
+    if (q.trim().length < 3 || answering) return;
+    setText(q);
+    setAnswering(true);
+    assistantUnderstand(q.trim(), context)
+      .then((out) => setAnswer({ q, insight: out.insight ?? null }))
+      .catch(() => setAnswer({ q, insight: null }))
+      .finally(() => setAnswering(false));
+  };
   const ref = useRef<HTMLTextAreaElement>(null);
   const byCode = new Map(intents.map((i) => [i.code, i]));
 
@@ -75,17 +89,36 @@ export default function AskBox({
             rows={bare ? 3 : 2}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey && match) {
+              if (e.key === "Enter" && !e.shiftKey && asking) {
+                e.preventDefault();
+                answerIt();
+              } else if (e.key === "Enter" && !e.shiftKey && match) {
                 e.preventDefault();
                 onPick(match.code, text);
               }
             }}
-            placeholder="Tell me what you want to do - e.g. “quote Fiber 800 for Acme with 5% off” or “the customer's internet is down”"
+            placeholder="Ask or tell me anything - “how many open tickets?”, “what is our MRR?”, “quote Fiber 800 for Acme with 5% off”"
             className={`w-full resize-none bg-transparent text-slate-100 outline-none focus-visible:outline-none placeholder:text-slate-500 ${compact ? "text-sm" : bare ? "text-[15px] leading-relaxed" : "text-base"}`}
           />
           {thinking && <span title="Checking with the AI" className="mt-2 h-2 w-2 shrink-0 animate-pulse rounded-full bg-sky-400" />}
         </div>
       </div>
+
+      {asking && (!answer || answer.q !== text) && (
+        <button onClick={() => answerIt()} disabled={answering}
+          className="flex w-full items-center gap-3 rounded-xl border border-teal-500/40 bg-teal-500/10 p-3 text-left transition hover:bg-teal-500/20 disabled:opacity-60">
+          <span className="text-2xl">💬</span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-[10px] font-bold uppercase tracking-wide text-teal-300">A question</span>
+            <span className="block text-sm font-semibold text-slate-100">{answering ? "Working it out from your data…" : "Answer it from your data"}</span>
+            <span className="block truncate text-xs text-slate-400">Counts, totals, trends, KPIs, predictions, any record - computed with what you may see</span>
+          </span>
+          <span className="rounded-lg bg-teal-600 px-3 py-1.5 text-xs font-bold text-white">Answer ↵</span>
+        </button>
+      )}
+      {answer && answer.q === text && (answer.insight
+        ? <InsightAnswer insight={answer.insight} onAsk={(q) => answerIt(q)} />
+        : <p className="text-xs text-slate-400">I couldn't answer that from your data - try naming what to count (“open tickets this week”), or pick an action below.</p>)}
 
       {onProcess && PROCESS.test(text) && (
         <button
@@ -148,6 +181,10 @@ export default function AskBox({
 // "set up / automate a ... process", "X needs approval from Y", "whenever X, notify Y" - configuring, not doing
 const PROCESS =
   /\b(?:set\s*up|setup|create|build|design|define|configure|automate|introduce|implement|need|want|require)\b[^.]{0,60}\b(?:process|workflow|approval\s+(?:rule|process|chain|matrix|flow)|automation|journey)\b|\bneeds?\s+(?:\w+\s+){0,4}?approval\s+(?:from|by)\b|\bmust\s+be\s+approved\s+by\b|\b(?:whenever|every\s+time)\b[^.]{0,80}\b(?:notify|assign|alert|email|inform)\b/i;
+
+// a question about the business (not "how do I ..." - that is an action to pick)
+const QUESTION =
+  /^(?!how\s+(?:do|can|should|to)\b)(?:how\s+(?:many|much)|what|what's|which|who|whose|where|when|is|are|was|were|do|does|did|show|list|give\s+me|tell\s+me|top\s+\d+|total|average|any)\b|\?$/i;
 
 const STOP = new Set(["a", "an", "the", "to", "for", "of", "on", "in", "and", "or", "with", "this", "that", "it", "is", "my", "me", "i", "please", "new"]);
 

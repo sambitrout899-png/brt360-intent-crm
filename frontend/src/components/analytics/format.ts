@@ -48,7 +48,11 @@ export function ticks(min: number, max: number, count = 5): number[] {
   const step = [1, 2, 2.5, 5, 10].map((s) => s * mag).find((s) => s >= raw) ?? raw;
   const start = Math.floor(min / step) * step;
   const out: number[] = [];
-  for (let t = start; t <= max + step * 0.5 && out.length < 20; t += step) out.push(Math.round(t * 1e6) / 1e6);
+  // up to the first tick at or past the maximum, so the largest value is never drawn beyond the axis
+  for (let t = start; out.length < 20; t += step) {
+    out.push(Math.round(t * 1e6) / 1e6);
+    if (t >= max - step * 1e-9) break;
+  }
   return out;
 }
 

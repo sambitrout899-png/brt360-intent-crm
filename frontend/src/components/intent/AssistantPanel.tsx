@@ -2,11 +2,15 @@ import { useCallback, useEffect, useState } from "react";
 import { agentAnnotate, assistantJournal, assistantOutcome, assistantUnderstand } from "../../api/client";
 import type { AgentRun, AssistantJournalEntry, AssistantUnderstanding, IntentDef } from "../../api/types";
 import AgentPanel from "./AgentPanel";
+import InsightAnswer from "./InsightAnswer";
 import BuildFromScratch from "./BuildFromScratch";
 import ProcessBuilder from "./ProcessBuilder";
 import ProcessFitReport from "./ProcessFitReport";
 
 const EXAMPLES: [string, string][] = [
+  ["Ask the data", "How many prospects were created this month?"],
+  ["A KPI", "What is our ARPU?"],
+  ["A prediction", "Which customers are at risk of churning?"],
   ["Do one thing", "Add prospect Globex Ltd"],
   ["A chain", 'Create a new Prospect "Globex" with address "5 MG Road" - add a lead for a product "Fiber 500 Bundle" - auto qualify the lead - auto configure with default settings - send it for presales check - auto feasibility pass - generate a quote'],
   ["Set up a process", "Orders need CPMO approval before they become activating. When an order becomes active, show a message box saying the service is live"],
@@ -56,8 +60,11 @@ export default function AssistantPanel({
   }, []);
   useEffect(loadJournal, [loadJournal]);
 
+  // after an answer the next question can be asked straight away (an action or process in progress keeps the box until it's done)
+  const canAsk = !understood || understood.route === "answer";
+
   async function ask(request = text) {
-    if (request.trim().length < 2 || busy || understood) return;
+    if (request.trim().length < 2 || busy || !canAsk) return;
     setBusy(true);
     setError("");
     setUnderstood(null);
@@ -97,7 +104,7 @@ export default function AssistantPanel({
         className="space-y-3"
       >
         <label className="flex items-start gap-2 rounded-lg border border-violet-500/30 bg-violet-500/5 p-3 text-sm text-slate-200">
-          <input type="checkbox" checked={autonomous} disabled={busy || understood !== null}
+          <input type="checkbox" checked={autonomous} disabled={busy || !canAsk}
             onChange={(event) => setAutonomous(event.target.checked)} className="mt-1 accent-violet-500" />
           <span>Autonomous mode
             <span className="block text-xs text-slate-400">Run validated actions and build ready processes automatically. Ask for missing information; keep role permissions and approvals.</span>
@@ -113,7 +120,7 @@ export default function AssistantPanel({
             }
           }}
           rows={3}
-          placeholder="Ask for anything in plain English - do something, a chain of steps, a process or journey to set up, a page or field change…"
+          placeholder="Ask anything in plain English - “How many prospects were created today?”, “What is our ARPU?”, “Who is at risk of churning?” - or do something, a chain of steps, a process to set up…"
           className="w-full resize-y rounded-xl border border-slate-700 bg-slate-950/80 px-4 py-3 text-[15px] leading-relaxed text-slate-100 placeholder:text-slate-600 focus:border-sky-500 focus:outline-none"
         />
         <div className="flex flex-wrap items-center gap-2">
@@ -134,7 +141,7 @@ export default function AssistantPanel({
           ))}
           <button
             type="submit"
-            disabled={text.trim().length < 2 || busy || understood !== null}
+            disabled={text.trim().length < 2 || busy || !canAsk}
             className="ml-auto rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white shadow-lg shadow-sky-950/40 hover:bg-sky-500 disabled:opacity-40"
           >
             {busy ? "Understanding…" : "Go"}
@@ -146,11 +153,14 @@ export default function AssistantPanel({
 
       {understood && tone && (
         <section className="space-y-5">
-          <button type="button" onClick={() => setUnderstood(null)}
-            className="rounded-lg border border-slate-700 px-3 py-2 text-xs text-slate-300">
-            Start another request (stop further automatic steps)
-          </button>
-          <div className="flex flex-wrap items-start gap-3 rounded-xl border border-slate-800 bg-slate-900/50 px-4 py-3">
+          {understood.route !== "answer" && (
+            <button type="button" onClick={() => setUnderstood(null)}
+              className="rounded-lg border border-slate-700 px-3 py-2 text-xs text-slate-300">
+              Start another request (stop further automatic steps)
+            </button>
+          )}
+          {understood.insight && <InsightAnswer insight={understood.insight} onAsk={(q) => { setText(q); ask(q); }} />}
+          {!understood.insight && <div className="flex flex-wrap items-start gap-3 rounded-xl border border-slate-800 bg-slate-900/50 px-4 py-3">
             <span className="text-xl leading-none">{tone.icon}</span>
             <div className="min-w-0 flex-1">
               <p className="text-sm text-slate-200">
@@ -159,7 +169,7 @@ export default function AssistantPanel({
                 {understood.why}
               </p>
             </div>
-          </div>
+          </div>}
 
           {understood.route === "chain" && understood.plan && (
             <AgentPanel
@@ -196,6 +206,9 @@ export default function AssistantPanel({
             />
           )}
           {understood.route === "action" && <p className="text-sm text-slate-400">Opening “{understood.action?.label}” with what I could fill in…</p>}
+          {understood.route === "answer" && understood.insight && (understood.answers ?? []).length > 0 && (
+            <h4 className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Act on it</h4>
+          )}
           {understood.route === "answer" && (understood.answers ?? []).length > 0 && (
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
               {(understood.answers ?? []).map((a, i) => (
@@ -244,7 +257,7 @@ export default function AssistantPanel({
                       {j.outcome ? (
                         <span className={ok ? "text-emerald-400" : "text-amber-400"}> · {ok ? "✓" : "⚠"} {j.outcome.summary || j.outcome.status}</span>
                       ) : (
-                        <span> · not run yet</span>
+                        <span> · {j.route === "answer" ? "answered" : "not run yet"}</span>
                       )}
                     </span>
                   </span>

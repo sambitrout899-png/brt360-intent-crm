@@ -186,7 +186,23 @@ export interface AssistantUnderstanding {
   can_build?: boolean;
   /** a business process described: read against the vanilla processes - only the gaps get built */
   fit?: ProcessFit;
+  /** a question answered from the data, KPIs, predictions or telecom knowledge (backend analytics/answers.py) */
+  insight?: AssistantInsight;
   journal_id: number;
+}
+
+export interface AssistantInsight {
+  kind: "data" | "kpi" | "prediction" | "record" | "mywork" | "knowledge" | "ai" | "hello";
+  title: string;
+  answer: string;
+  value: { label: string; display: string } | null;
+  table: { columns: { key: string; label: string; fmt?: string | null }[]; rows: Record<string, unknown>[] } | null;
+  chart: { kind: "bar" | "line"; labels: string[]; series: { name: string; values: (number | null)[] }[]; fmt?: string | null } | null;
+  records: { type: string; id: number; title: string; subtitle?: string }[] | null;
+  facts: string[];
+  follow_ups: string[];
+  spec: Record<string, unknown> | null;
+  source: string;
 }
 
 /** How a described process fits the vanilla ones (backend: orchestration/process_fit.py). */
